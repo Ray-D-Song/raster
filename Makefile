@@ -1,0 +1,249 @@
+TARGET_linux_x86_64 = x86_64-unknown-linux-musl
+TARGET_linux_arm64 = aarch64-unknown-linux-musl
+TARGET_darwin_x86_64 = x86_64-apple-darwin
+TARGET_darwin_arm64 = aarch64-apple-darwin
+TARGET_windows_x86_64 = x86_64-pc-windows-gnu
+TARGET_windows_arm64 = aarch64-is-not-yet-supported
+RUST_VERSION = nightly
+TOOLCHAIN = +$(RUST_VERSION)
+BUILD_ARG = $(TOOLCHAIN) build -r
+BUILD_DIR = ./target/release
+BUNDLE_DIR = bundle
+
+TS_SOURCES = $(wildcard raster_runtime_core/src/modules/js/*.ts) $(wildcard raster_runtime_core/src/modules/js/@raster_runtime/test/*.ts) $(wildcard raster_runtime_core/src/modules/js/@raster_runtime/*.ts) $(wildcard tests/unit/*.ts)
+STD_JS_FILE = $(BUNDLE_DIR)/js/@raster_runtime/std.js
+
+RELEASE_ARCH_NAME_x64 = x86_64
+RELEASE_ARCH_NAME_arm64 = arm64
+
+RELEASE_TARGETS = arm64 x64
+
+ifeq ($(OS),Windows_NT)
+	DETECTED_OS := windows
+	ARCH = x86_64
+else
+	DETECTED_OS := $(shell uname | tr A-Z a-z)
+	ARCH = $(shell uname -m)
+endif
+
+ifeq ($(ARCH),aarch64)
+	ARCH = arm64
+endif
+
+ZSTD_LIB_CC_ARGS = -s -O3 -flto
+ZSTD_LIB_ARGS = -j lib-nomt UNAME=Linux ZSTD_LIB_COMPRESSION=0 ZSTD_LIB_DICTBUILDER=0 AR="zig ar"
+ifeq ($(DETECTED_OS),windows)
+ZSTD_LIB_CC_x64 = CC="zig cc -target x86_64-windows-gnu $(ZSTD_LIB_CC_ARGS)"
+else
+ZSTD_LIB_CC_arm64 = CC="zig cc -target aarch64-linux-musl $(ZSTD_LIB_CC_ARGS)"
+ZSTD_LIB_CC_x64 = CC="zig cc -target x86_64-linux-musl $(ZSTD_LIB_CC_ARGS)"
+endif
+
+CURRENT_TARGET ?= $(TARGET_$(DETECTED_OS)_$(ARCH))
+
+export CC_aarch64_unknown_linux_musl = $(CURDIR)/linker/cc-aarch64-linux-musl
+export CXX_aarch64_unknown_linux_musl = $(CURDIR)/linker/cxx-aarch64-linux-musl
+export AR_aarch64_unknown_linux_musl = $(CURDIR)/linker/ar
+export CC_x86_64_unknown_linux_musl = $(CURDIR)/linker/cc-x86_64-linux-musl
+export CXX_x86_64_unknown_linux_musl = $(CURDIR)/linker/cxx-x86_64-linux-musl
+export AR_x86_64_unknown_linux_musl = $(CURDIR)/linker/ar
+
+define alias_template
+release${1}: raster_runtime-$(DETECTED_OS)-$(ARCH)${1}.zip
+
+raster_runtime-linux-x86_64${1}.zip: raster_runtime-linux-x64${1}.zip
+raster_runtime-windows-x86_64${1}.zip: raster_runtime-windows-x64${1}.zip
+raster_runtime-darwin-x86_64${1}.zip: raster_runtime-darwin-x64${1}.zip
+endef
+
+$(eval $(call alias_template,))
+
+define release_template
+release-${1}: | raster_runtime-linux-${1}.zip
+
+raster_runtime-container-${1}: | clean-js js
+	cargo $$(BUILD_ARG) --target $$(TARGET_linux_$$(RELEASE_ARCH_NAME_${1})) --features uncompressed
+	mv target/$$(TARGET_linux_$$(RELEASE_ARCH_NAME_${1}))/release/raster_runtime $$@
+
+raster_runtime-linux-${1}.zip: | clean-js js
+	cargo $$(BUILD_ARG) --target $$(TARGET_linux_$$(RELEASE_ARCH_NAME_${1}))
+	@rm -rf $$@
+	zip -j $$@ target/$$(TARGET_linux_$$(RELEASE_ARCH_NAME_${1}))/release/raster_runtime
+
+raster_runtime-darwin-${1}.zip: | clean-js js
+	cargo $$(BUILD_ARG) --target $$(TARGET_darwin_$$(RELEASE_ARCH_NAME_${1}))
+	@rm -rf $$@
+	zip -j $$@ target/$$(TARGET_darwin_$$(RELEASE_ARCH_NAME_${1}))/release/raster_runtime
+
+# raster_runtime-windows-arm64* is automatically generated, but not currently supported.
+raster_runtime-windows-${1}.zip: | clean-js js
+	cargo $$(BUILD_ARG) --target $$(TARGET_windows_$$(RELEASE_ARCH_NAME_${1}))
+	zip -j $$@ target/$$(TARGET_windows_$$(RELEASE_ARCH_NAME_${1}))/release/raster_runtime.exe
+endef
+
+$(foreach target,$(RELEASE_TARGETS),$(eval $(call release_template,$(target))))
+
+build: js
+	cargo $(BUILD_ARG) --target $(CURRENT_TARGET)
+
+ifeq ($(DETECTED_OS),windows)
+stdlib:
+	rustup toolchain install $(RUST_VERSION) --target $(TARGET_windows_x86_64)
+	rustup target add $(TARGET_windows_x86_64)
+	rustup component add rust-src --toolchain $(RUST_VERSION) --target $(TARGET_windows_x86_64)
+else
+stdlib-x64:
+	rustup toolchain install $(RUST_VERSION) --target $(TARGET_linux_x86_64)
+	rustup target add $(TARGET_linux_x86_64)
+	rustup component add rust-src --toolchain $(RUST_VERSION) --target $(TARGET_linux_x86_64)
+
+stdlib-arm64:
+	rustup toolchain install $(RUST_VERSION) --target $(TARGET_linux_arm64)
+	rustup target add $(TARGET_linux_arm64)
+	rustup component add rust-src --toolchain $(RUST_VERSION) --target $(TARGET_linux_arm64)
+
+stdlib: | stdlib-x64 stdlib-arm64
+endif
+
+toolchain:
+	rustup toolchain install $(RUST_VERSION) --target $(CURRENT_TARGET)
+	rustup target add $(CURRENT_TARGET)
+	rustup component add rust-src --toolchain $(RUST_VERSION) --target $(CURRENT_TARGET)
+
+clean-js:
+	rm -rf ./bundle
+
+clean: clean-js
+	rm -rf ./target
+	rm -rf ./lib
+
+js: $(STD_JS_FILE)
+
+bundle/js/%.js: $(TS_SOURCES)
+	node build.mjs
+
+fix:
+	npx pretty-quick
+	cargo fix --allow-dirty
+	cargo clippy --fix --allow-dirty
+	cargo fmt
+
+bloat: js
+	cargo build --profile=flame --target $(CURRENT_TARGET)
+	cargo bloat --profile=flame --crates
+
+run: export _EXIT_ITERATIONS = 1
+run: export JS_MINIFY = 0
+run: export RUST_LOG = raster_runtime=trace
+run:
+	cargo run -vv
+
+run-ssr: js
+	cargo build
+	cd example/functions && yarn build && cd build && ../../../target/debug/raster_runtime
+
+flame:
+	cargo flamegraph --profile flame -- index.mjs
+
+run-cli: export RUST_LOG = raster_runtime=trace
+run-cli: js
+	cargo run
+
+test: export JS_MINIFY = 0
+test: export TEST_SUB_DIR = unit
+test: export RASTER_RUNTIME_ASYNC_HOOKS = 1
+test: js
+	cargo run -- test -d bundle/js/__tests__/$(TEST_SUB_DIR)
+
+init-wpt:
+	cd wpt && \
+	git sparse-checkout init --no-cone && \
+	git sparse-checkout set \
+		/README.md \
+		/console \
+		/docs \
+		/encoding \
+		/FileAPI \
+		/fetch \
+		/hr-time \
+		/streams \
+		/tools \
+		/url \
+		/WebCryptoAPI \
+		/webidl \
+		/wpt \
+		/xhr
+
+update-wpt:
+	( cd wpt && git fetch origin master && git reset --hard FETCH_HEAD && git log -1 --oneline > ../tests/wpt/revision )
+
+test-wpt: export JS_MINIFY = 0
+test-wpt: export TEST_SUB_DIR = wpt
+test-wpt: js
+	npx pretty-quick --pattern "tests/wpt/**/*.{js,ts,json}"
+	cargo run -- test -d bundle/js/__tests__/$(TEST_SUB_DIR) 2> wpt_errors.tmp
+
+tidyup-wpt:
+	sed -E 's/\x1b\[[0-9;]*m//g' wpt_errors.tmp \
+	| sed '1,/^$$/d' \
+	| sed -E '/^ ?[^ ]/s|^.*__tests__/|🧪/|' \
+	> wpt_errors.txt
+
+test-ci: export JS_MINIFY = 0
+test-ci: export RUST_BACKTRACE = 1
+test-ci: export TEST_SUB_DIR = unit
+test-ci: export RASTER_RUNTIME_ASYNC_HOOKS = 1
+test-ci: clean-js | toolchain js
+ifdef CARGO_FEATURES
+	cargo $(TOOLCHAIN) -Z build-std -Z build-std-features test --target $(CURRENT_TARGET) $(CARGO_FEATURES) -- --nocapture --show-output
+	cargo $(TOOLCHAIN) run -r --target $(CURRENT_TARGET) $(CARGO_FEATURES) -- test -d bundle/js/__tests__/$(TEST_SUB_DIR)
+else
+	cargo $(TOOLCHAIN) -Z build-std -Z build-std-features test --target $(CURRENT_TARGET) -- --nocapture --show-output
+	cargo $(TOOLCHAIN) run -r --target $(CURRENT_TARGET) -- test -d bundle/js/__tests__/$(TEST_SUB_DIR)
+endif
+
+libs-arm64: lib/arm64/libzstd.a lib/zstd.h lib/zstd_errors.h
+libs-x64: lib/x64/libzstd.a lib/zstd.h lib/zstd_errors.h
+
+libs: | libs-arm64 libs-x64
+
+lib/zstd.h:
+	cp zstd/lib/zstd.h $@
+
+lib/zstd_errors.h:
+	cp zstd/lib/zstd_errors.h $@
+
+lib/arm64/libzstd.a:
+	mkdir -p $(dir $@)
+	rm -f zstd/lib/-.o
+	cd zstd/lib && make clean && make $(ZSTD_LIB_ARGS) $(ZSTD_LIB_CC_arm64)
+	cp zstd/lib/libzstd.a $@
+
+lib/x64/libzstd.a:
+	mkdir -p $(dir $@)
+	rm -f zstd/lib/-.o
+	cd zstd/lib && make clean && make $(ZSTD_LIB_ARGS) $(ZSTD_LIB_CC_x64)
+	cp zstd/lib/libzstd.a $@
+
+bench:
+	cargo build -r
+	hyperfine -N --warmup=100 "node fixtures/hello.js" "deno run fixtures/hello.js" "bun fixtures/hello.js" "$(BUILD_DIR)/raster_runtime fixtures/hello.js" "qjs fixtures/hello.js"
+
+deploy:
+	cd example/infrastructure && yarn deploy --require-approval never
+
+check:
+	cargo clippy --all-targets --no-default-features --features "macro,uncompressed,crypto-rust,tls-ring" -- -D warnings
+
+test-rs:
+	cargo test --all-targets --no-default-features --features "macro,uncompressed,crypto-rust,tls-ring"
+
+check-crates:
+	cargo metadata --no-deps --format-version 1 --quiet | \
+	jq -r '.packages[] | select(.manifest_path | contains("modules/")) | .name' | \
+	while read crate; do \
+	  echo "Checking crate: $$crate"; \
+	  cargo check -p "$$crate"; \
+	done
+
+.PHONY: libs check check-all check-crates libs-arm64 libs-x64 toolchain clean-js release-linux release-darwin release-windows stdlib stdlib-x64 stdlib-arm64 test test-ci run js run-release build release clean flame deploy
