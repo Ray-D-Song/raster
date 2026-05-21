@@ -19,6 +19,7 @@
 declare module "fs" {
   import * as promises from "fs/promises";
   import { Buffer, BufferEncoding } from "buffer";
+  import { EventEmitter } from "events";
   export { promises };
 
   /**
@@ -131,6 +132,33 @@ declare module "fs" {
      */
     parentPath: string;
   }
+
+  export type WatchEventType = "rename" | "change";
+
+  export interface WatchOptions {
+    encoding?: BufferEncoding | "buffer" | null | undefined;
+    persistent?: boolean | undefined;
+    recursive?: boolean | undefined;
+  }
+
+  export type WatchListener<T extends string | Buffer = string> = (
+    eventType: WatchEventType,
+    filename: T | null
+  ) => void;
+
+  export class FSWatcher extends EventEmitter {
+    close(): void;
+    ref(): this;
+    unref(): this;
+  }
+
+  export function watch(
+    filename: PathLike,
+    options?: WatchOptions | BufferEncoding | null,
+    listener?: WatchListener
+  ): FSWatcher;
+
+  export function watch(filename: PathLike, listener?: WatchListener): FSWatcher;
 
   export interface StatSyncFn extends Function {
     (path: PathLike): Stats;

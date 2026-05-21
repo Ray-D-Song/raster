@@ -14,11 +14,14 @@ path = "src/lib.rs"
 [dependencies]
 either = { version = "1", default-features = false }
 raster_runtime_buffer = { version = "0.8.1-beta", path = "../raster_runtime_buffer" }
+raster_runtime_context = { version = "0.8.1-beta", path = "../../libs/raster_runtime_context" }
 raster_runtime_encoding = { version = "0.8.1-beta", path = "../../libs/raster_runtime_encoding" }
+raster_runtime_events = { version = "0.8.1-beta", path = "../raster_runtime_events" }
 raster_runtime_path = { version = "0.8.1-beta", path = "../raster_runtime_path" }
 raster_runtime_utils = { version = "0.8.1-beta", path = "../../libs/raster_runtime_utils", features = [
   "fs",
 ], default-features = false }
+notify = "8.2"
 rand = { version = "0.10.1", features = [
   "alloc",
   "thread_rng",
@@ -28,6 +31,7 @@ tokio = { version = "1", features = [
   "fs",
   "io-util",
   "rt",
+  "sync",
 ], default-features = false }
 
 [target.'cfg(windows)'.dependencies]

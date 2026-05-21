@@ -11,8 +11,10 @@ mod rename;
 mod rm;
 mod stats;
 mod symlink;
+mod watch;
 mod write_file;
 
+use raster_runtime_events::Emitter;
 use raster_runtime_utils::module::{export_default, ModuleInfo};
 use rquickjs::{
     module::{Declarations, Exports, ModuleDef},
@@ -31,6 +33,7 @@ use self::rename::{rename, rename_sync};
 use self::rm::{rmdir, rmdir_sync, rmfile, rmfile_sync};
 use self::stats::{lstat_fn, lstat_fn_sync, stat_fn, stat_fn_sync, Stats};
 use self::symlink::{symlink, symlink_sync};
+use self::watch::{watch, FSWatcher};
 use self::write_file::{write_file, write_file_sync};
 
 pub const CONSTANT_F_OK: u32 = 0;
@@ -102,6 +105,8 @@ impl ModuleDef for FsModule {
         declare.declare("statSync")?;
         declare.declare("lstatSync")?;
         declare.declare("writeFileSync")?;
+        declare.declare("watch")?;
+        declare.declare("FSWatcher")?;
         declare.declare("constants")?;
         declare.declare("chmodSync")?;
         declare.declare("renameSync")?;
@@ -118,6 +123,10 @@ impl ModuleDef for FsModule {
         Class::<Dirent>::define(&globals)?;
         Class::<FileHandle>::define(&globals)?;
         Class::<Stats>::define(&globals)?;
+        let fs_watcher_ctor = Class::<FSWatcher>::create_constructor(ctx)?
+            .expect("Can't create FSWatcher constructor");
+        globals.set("FSWatcher", fs_watcher_ctor.clone())?;
+        FSWatcher::add_event_emitter_prototype(ctx)?;
 
         export_default(ctx, exports, |default| {
             let promises = Object::new(ctx.clone())?;
@@ -135,6 +144,8 @@ impl ModuleDef for FsModule {
             default.set("statSync", Func::from(stat_fn_sync))?;
             default.set("lstatSync", Func::from(lstat_fn_sync))?;
             default.set("writeFileSync", Func::from(write_file_sync))?;
+            default.set("watch", Func::from(watch))?;
+            default.set("FSWatcher", fs_watcher_ctor)?;
             default.set("chmodSync", Func::from(chmod_sync))?;
             default.set("renameSync", Func::from(rename_sync))?;
             default.set("symlinkSync", Func::from(symlink_sync))?;

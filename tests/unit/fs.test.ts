@@ -23,6 +23,8 @@ const {
   lstatSync,
   symlinkSync,
   writeFileSync,
+  watch,
+  FSWatcher,
   promises,
 } = defaultImport;
 
@@ -39,6 +41,86 @@ const {
   symlink,
   writeFile,
 } = promises;
+
+function waitForWatchEvent(
+  watcher: InstanceType<typeof FSWatcher>,
+  action: () => void | Promise<void>
+): Promise<[string, string | null]> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      watcher.close();
+      reject(new Error("Timed out waiting for fs.watch event"));
+    }, 5000);
+
+    watcher.once("change", (eventType: string, filename: string | null) => {
+      clearTimeout(timeout);
+      resolve([eventType, filename]);
+    });
+
+    Promise.resolve(action()).catch((error) => {
+      clearTimeout(timeout);
+      watcher.close();
+      reject(error);
+    });
+  });
+}
+
+describe("watch", () => {
+  it("should watch file changes", async () => {
+    const dirPath = await mkdtemp(path.join(os.tmpdir(), "watch-"));
+    const filePath = path.join(dirPath, "file.txt");
+    await writeFile(filePath, "before");
+
+    const watcher = watch(filePath);
+    try {
+      const [eventType, filename] = await waitForWatchEvent(watcher, () =>
+        writeFile(filePath, "after")
+      );
+
+      expect(["change", "rename"]).toContain(eventType);
+      expect(filename === null || typeof filename === "string").toBeTruthy();
+    } finally {
+      watcher.close();
+      await rm(dirPath, { recursive: true, force: true });
+    }
+  });
+
+  it("should support listener argument, ref, unref, and close", async () => {
+    const dirPath = await mkdtemp(path.join(os.tmpdir(), "watch-"));
+    const filePath = path.join(dirPath, "file.txt");
+    await writeFile(filePath, "before");
+
+    let eventCount = 0;
+    const watcher = watch(filePath, () => {
+      eventCount++;
+    });
+
+    try {
+      expect(watcher).toBeInstanceOf(FSWatcher);
+      expect(watcher.ref()).toBe(watcher);
+      expect(watcher.unref()).toBe(watcher);
+
+      await waitForWatchEvent(watcher, () => writeFile(filePath, "after"));
+      expect(eventCount).toBeGreaterThan(0);
+
+      let closed = false;
+      watcher.once("close", () => {
+        closed = true;
+      });
+      watcher.close();
+      watcher.close();
+      expect(closed).toBeTruthy();
+    } finally {
+      watcher.close();
+      await rm(dirPath, { recursive: true, force: true });
+    }
+  });
+
+  it("should expose watch from node:fs and fs", () => {
+    expect(defaultImport.watch).toBe(legacyImport.watch);
+    expect(defaultImport.FSWatcher).toBe(legacyImport.FSWatcher);
+  });
+});
 
 describe("readdir", () => {
   it("should read a directory", async () => {
