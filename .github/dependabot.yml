@@ -23,19 +23,6 @@ updates:
         update-types:
           - "minor"
           - "patch"
-      "@aws-sdk":
-        patterns:
-          - "@aws-sdk*"
-        update-types:
-          - "minor"
-          - "patch"
-      aws-cdk:
-        patterns:
-          - "aws-cdk"
-          - "aws-cdk-lib"
-        update-types:
-          - "minor"
-          - "patch"
 
   # Maintain dependencies for Rust
   - package-ecosystem: cargo
