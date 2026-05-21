@@ -18,7 +18,7 @@
   },
   "side-effects": false,
   "devDependencies": {
-    "@jest/types": "30.3.0",
+    "@jest/types": "30.4.1",
     "@types/chai": "5.2.3",
     "@types/jest": "30.0.0",
     "@types/readable-stream": "4.0.23",
