@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "baseUrl": ".",
+    "ignoreDeprecations": "6.0",
+    "paths": {
+      "raster": ["./packages/raster/src/core/index.ts"],
+      "raster/core": ["./packages/raster/src/core/index.ts"],
+      "raster/react": ["./packages/raster/src/react/index.ts"],
+      "raster/component": ["./packages/raster/src/component/index.ts"],
+      "raster/components": ["./packages/raster/src/component/index.ts"],
+      "react-raster": ["./packages/raster/src/react/index.ts"]
+    },
+    "jsx": "react-jsx",
+    "strict": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "allowSyntheticDefaultImports": true,
+    "types": ["react"]
+  }
+}

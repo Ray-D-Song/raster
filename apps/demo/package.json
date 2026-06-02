@@ -1,0 +1,21 @@
+{
+  "name": "@raster/demo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "vite build",
+    "dev": "vite build --watch"
+  },
+  "dependencies": {
+    "raster": "workspace:*",
+    "react": "19.2.6"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.15",
+    "typescript": "6.0.3",
+    "unplugin-raster": "workspace:*",
+    "vite": "8.0.14"
+  }
+}

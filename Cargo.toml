@@ -1,0 +1,27 @@
+[package]
+name = "raster"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0"
+chrono = "0.4"
+futures = "0.3"
+csscolorparser = "0.8"
+gpui = { git = "https://github.com/zed-industries/zed" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "runtime_shaders"] }
+pollster = "0.4"
+regex = "1"
+serde_json = "1.0"
+llrt_core = { package = "raster_runtime_core", path = "deps/raster_runtime/raster_runtime_core", default-features = false, features = ["macro", "base", "console", "compression-rust", "tls-ring", "crypto-rust"] }
+llrt_utils = { package = "raster_runtime_utils", path = "deps/raster_runtime/libs/raster_runtime_utils" }
+gpui-component = "0.5.2"
+gpui-component-assets = "0.5.1"
+tokio = { version = "1", features = ["rt", "time"] }
+
+[dev-dependencies]
+gpui = { git = "https://github.com/zed-industries/zed", features = ["test-support"] }
+
+[patch.crates-io]
+gpui-component = { path = "deps/gpui-component/crates/ui" }
+gpui-component-assets = { path = "deps/gpui-component/crates/assets" }

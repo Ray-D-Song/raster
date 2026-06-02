@@ -1,0 +1,23 @@
+.DS_Store
+/.build
+/*.xcodeproj
+xcuserdata/
+DerivedData/
+.swiftpm/config/registries.json
+.swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
+.netrc
+.vscode
+.shaft
+.history
+.cursor
+
+.reference
+
+*.artifactbundle
+*.zip
+
+# Added by cargo
+
+/target
+node_modules/
+/tmp

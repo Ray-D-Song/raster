@@ -1,0 +1,48 @@
+{
+  "name": "unplugin-raster",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./vite": "./src/vite.ts",
+    "./esbuild": "./src/esbuild.ts",
+    "./rolldown": "./src/rolldown.ts",
+    "./rollup": "./src/rollup.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test --experimental-strip-types test/*.test.mjs"
+  },
+  "dependencies": {
+    "unplugin": "3.0.0"
+  },
+  "peerDependencies": {
+    "esbuild": ">=0.28.0 <1",
+    "rolldown": "^1.0.0",
+    "rollup": "^4.0.0",
+    "vite": "^8.0.0"
+  },
+  "peerDependenciesMeta": {
+    "esbuild": {
+      "optional": true
+    },
+    "rolldown": {
+      "optional": true
+    },
+    "rollup": {
+      "optional": true
+    },
+    "vite": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "25.9.1",
+    "esbuild": "0.28.0",
+    "rolldown": "1.0.2",
+    "rollup": "4.60.4",
+    "typescript": "6.0.3",
+    "vite": "8.0.14"
+  }
+}
