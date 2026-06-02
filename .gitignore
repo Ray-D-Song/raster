@@ -21,3 +21,5 @@ DerivedData/
 /target
 node_modules/
 /tmp
+
+src/runtime/js/generated/
