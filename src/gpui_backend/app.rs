@@ -112,7 +112,7 @@ pub fn start(
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
-                    title: Some(SharedString::from("Raster demo")),
+                    title: Some(SharedString::from("Raster template")),
                     appears_transparent: false,
                     traffic_light_position: None,
                 }),

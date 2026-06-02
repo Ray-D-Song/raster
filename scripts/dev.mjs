@@ -67,9 +67,9 @@ try {
   rmSync(debugLogPath, { force: true });
 
   await runOnce("pnpm", ["run", "build:runtime"]);
-  await runOnce("pnpm", ["run", "build:demo"]);
+  await runOnce("pnpm", ["run", "build:template"]);
 
-  start("pnpm", ["--dir", "apps/demo", "dev"]);
+  start("pnpm", ["--dir", "apps/template", "dev"]);
   start("cargo", ["run", "--release", "--", "--dev", "--log-file", debugLogPath]);
 } catch (error) {
   console.error(error);

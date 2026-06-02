@@ -4,7 +4,7 @@ import { defineConfig } from "vite";
 export default defineConfig({
   plugins: [
     raster({
-      outfile: "../../target/raster/demo/app.js",
+      outfile: "../../target/raster/template/app.js",
       minify: false,
       sourcemap: true,
     }),

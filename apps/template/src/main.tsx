@@ -24,7 +24,6 @@ const App = () => {
 const root = createRoot({
   width: 800,
   height: 600,
-  perfdetect: true,
 });
 
 root.render(<App />);
