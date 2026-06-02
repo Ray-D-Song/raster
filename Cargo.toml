@@ -13,8 +13,8 @@ gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["fo
 pollster = "0.4"
 regex = "1"
 serde_json = "1.0"
-llrt_core = { package = "raster_runtime_core", path = "deps/raster_runtime/raster_runtime_core", default-features = false, features = ["macro", "base", "console", "compression-rust", "tls-ring", "crypto-rust"] }
-llrt_utils = { package = "raster_runtime_utils", path = "deps/raster_runtime/libs/raster_runtime_utils" }
+llrt_core = { package = "raster_runtime_core", path = "deps/raster-runtime/raster_runtime_core", default-features = false, features = ["macro", "base", "console", "compression-rust", "tls-ring", "crypto-rust"] }
+llrt_utils = { package = "raster_runtime_utils", path = "deps/raster-runtime/libs/raster_runtime_utils" }
 gpui-component = "0.5.2"
 gpui-component-assets = "0.5.1"
 tokio = { version = "1", features = ["rt", "time"] }
