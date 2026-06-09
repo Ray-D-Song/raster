@@ -65,18 +65,18 @@ rquickjs = { version = "0.11", git = "https://github.com/DelSkayn/rquickjs", def
 
 # optional
 raster_runtime_json = { version = "0.8.1-beta", path = "../../libs/raster_runtime_json", optional = true }
-aes = { version = "0.9.0", optional = true }
-aes-gcm = { version = "0.11.0-rc.3", features = [
+aes = { version = "0.9.1", optional = true }
+aes-gcm = { version = "0.11.0-rc.4", features = [
   "alloc",
 ], default-features = false, optional = true }
-aes-kw = { version = "0.3.0", features = [
+aes-kw = { version = "0.3.1", features = [
   "oid",
 ], default-features = false, optional = true }
-cbc = { version = "0.2.0", features = ["alloc"], optional = true }
+cbc = { version = "0.2.1", features = ["alloc"], optional = true }
 const-oid = { version = "0.10", features = [
   "db",
 ], default-features = false, optional = true }
-ctr = { version = "0.10.0", default-features = false, optional = true }
+ctr = { version = "0.10.1", default-features = false, optional = true }
 der = { version = "0.8", features = [
   "derive",
   "alloc",
@@ -87,7 +87,7 @@ ed25519-dalek = { version = "3.0.0-pre.7", features = [
   "pkcs8",
   "rand_core",
 ], default-features = false, optional = true }
-elliptic-curve = { version = "0.14.0-rc.30", features = [
+elliptic-curve = { version = "0.14.0-rc.33", features = [
   "alloc",
   "sec1",
 ], default-features = false, optional = true }
@@ -98,17 +98,17 @@ rsa = { version = "0.10.0-rc.18", features = [
   "sha2",
   "encoding",
 ], default-features = false, optional = true }
-p256 = { version = "0.14.0-rc.9", features = [
+p256 = { version = "0.14.0-rc.10", features = [
   "ecdh",
   "ecdsa",
   "pkcs8",
 ], default-features = false, optional = true }
-p384 = { version = "0.14.0-rc.9", features = [
+p384 = { version = "0.14.0-rc.10", features = [
   "ecdh",
   "ecdsa",
   "pkcs8",
 ], default-features = false, optional = true }
-p521 = { version = "0.14.0-rc.9", features = [
+p521 = { version = "0.14.0-rc.10", features = [
   "ecdh",
   "ecdsa",
   "pkcs8",
