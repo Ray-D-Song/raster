@@ -5,7 +5,7 @@ import {
   ConcurrentRoot,
   DefaultEventPriority,
   NoEventPriority,
-} from "react-reconciler/constants";
+} from "react-reconciler/constants.js";
 
 import {
   appendInitialFabricChild,

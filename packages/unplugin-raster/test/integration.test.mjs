@@ -123,7 +123,7 @@ async function writeRasterApp(root, options = {}) {
   await writeFile(
     path.join(root, "src/main.ts"),
     `
-import { createRoot } from "raster/react";
+import { createRoot } from "raster-js/react";
 import { jsx } from "react/jsx-runtime";
 import { label } from "./lazy.ts";
 ${options.extraEntry ?? ""}

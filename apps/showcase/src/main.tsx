@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { createRoot } from "raster/react";
-import { Button, Text, View } from "raster/components";
+import { createRoot } from "raster-js/react";
+import { Button, Text, View } from "raster-js/components";
 
 const App = () => {
   const [count, setCount] = useState(0);

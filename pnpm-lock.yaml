@@ -23,6 +23,9 @@ importers:
 
   apps/showcase:
     dependencies:
+      raster-js:
+        specifier: 0.1.0-alpha.1
+        version: 0.1.0-alpha.1
       react:
         specifier: 19.2.6
         version: 19.2.6
@@ -34,8 +37,8 @@ importers:
         specifier: 6.0.3
         version: 6.0.3
       unplugin-raster:
-        specifier: ^0.1.0-alpha.1
-        version: 0.1.0-alpha.1(esbuild@0.28.0)(rolldown@1.0.2)(rollup@4.60.4)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.0))
+        specifier: ^0.1.0-alpha.2
+        version: 0.1.0-alpha.2(esbuild@0.28.0)(rolldown@1.0.2)(rollup@4.60.4)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.0))
       vite:
         specifier: 8.0.14
         version: 8.0.14(@types/node@25.9.1)(esbuild@0.28.0)
@@ -1864,6 +1867,9 @@ packages:
   radix3@1.1.2:
     resolution: {integrity: sha512-b484I/7b8rDEdSDKckSSBA8knMpcdsXudlE/LNL639wFoHKwLbEkQFZHWEYwDC0wa0FKUcCY+GAF73Z7wxNVFA==}
 
+  raster-js@0.1.0-alpha.1:
+    resolution: {integrity: sha512-qh3jZCcgAJ+EzGtuehN2/SJ9qTwjRD+UxKbF1jdtBe+ySUQ1tzA5wQ8YP5o3waxHK4UNkTRoDQLJNFfvIwjlpA==}
+
   react-reconciler@0.33.0:
     resolution: {integrity: sha512-KetWRytFv1epdpJc3J4G75I4WrplZE5jOL7Yq0p34+OVOKF4Se7WrdIdVC45XsSSmUTlht2FM/fM1FZb1mfQeA==}
     engines: {node: '>=0.10.0'}
@@ -2109,8 +2115,8 @@ packages:
   unist-util-visit@5.1.0:
     resolution: {integrity: sha512-m+vIdyeCOpdr/QeQCu2EzxX/ohgS8KbnPDgFni4dQsfSCtpz8UqDyY5GjRru8PDKuYn7Fq19j1CQ+nJSsGKOzg==}
 
-  unplugin-raster@0.1.0-alpha.1:
-    resolution: {integrity: sha512-yzXYbyGiqSrkAlOH9qDD/TYDCVObhve2V+OVXAsd11o9O8nizoydy4dacZ/MWvodmb0ypkhCBO5GLqAEMRTmpQ==}
+  unplugin-raster@0.1.0-alpha.2:
+    resolution: {integrity: sha512-E/BXNLljUEFPm5j/iGy5rxAhj/yOMPQss/saEjQFmpkyzThTEc2XAzh9Ibm6BZbDB4h0pCGV2VrS/MisdzOlKw==}
     peerDependencies:
       esbuild: '>=0.28.0 <1'
       rolldown: ^1.0.0
@@ -4364,6 +4370,11 @@ snapshots:
 
   radix3@1.1.2: {}
 
+  raster-js@0.1.0-alpha.1:
+    dependencies:
+      react: 19.2.6
+      react-reconciler: 0.33.0(react@19.2.6)
+
   react-reconciler@0.33.0(react@19.2.6):
     dependencies:
       react: 19.2.6
@@ -4772,7 +4783,7 @@ snapshots:
       unist-util-is: 6.0.1
       unist-util-visit-parents: 6.0.2
 
-  unplugin-raster@0.1.0-alpha.1(esbuild@0.28.0)(rolldown@1.0.2)(rollup@4.60.4)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.0)):
+  unplugin-raster@0.1.0-alpha.2(esbuild@0.28.0)(rolldown@1.0.2)(rollup@4.60.4)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.0)):
     dependencies:
       unplugin: 3.0.0
     optionalDependencies:

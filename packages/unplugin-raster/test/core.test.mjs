@@ -76,7 +76,7 @@ test("rejects Rollup-like bundles with unexpected remaining imports", () => {
           "app.js": {
             type: "chunk",
             fileName: "app.js",
-            imports: ["react", "raster/internal"],
+            imports: ["react", "raster-js/internal"],
           },
         },
         options

@@ -7,11 +7,11 @@
     "baseUrl": ".",
     "ignoreDeprecations": "6.0",
     "paths": {
-      "raster": ["./packages/raster/src/core/index.ts"],
-      "raster/core": ["./packages/raster/src/core/index.ts"],
-      "raster/react": ["./packages/raster/src/react/index.ts"],
-      "raster/component": ["./packages/raster/src/component/index.ts"],
-      "raster/components": ["./packages/raster/src/component/index.ts"],
+      "raster-js": ["./packages/raster/src/core/index.ts"],
+      "raster-js/core": ["./packages/raster/src/core/index.ts"],
+      "raster-js/react": ["./packages/raster/src/react/index.ts"],
+      "raster-js/component": ["./packages/raster/src/component/index.ts"],
+      "raster-js/components": ["./packages/raster/src/component/index.ts"],
       "react-raster": ["./packages/raster/src/react/index.ts"]
     },
     "jsx": "react-jsx",
