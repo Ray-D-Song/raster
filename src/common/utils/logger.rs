@@ -135,6 +135,13 @@ impl Logger {
             return;
         }
 
+        #[cfg(target_os = "android")]
+        match level {
+            LogLevel::Info => log::info!("{message}"),
+            LogLevel::Warn => log::warn!("{message}"),
+            LogLevel::Error => log::error!("{message}"),
+        }
+
         let line = format!("[{level}] {message}\n");
         if let Err(error) = self.write_line(&line) {
             eprintln!("failed to write log message: {error}");

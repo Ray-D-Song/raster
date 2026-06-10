@@ -1,10 +1,8 @@
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
-use gpui::{
-    Anchor, AnyElement, AppContext, Context, Entity, Hsla, IntoElement, Subscription, Window,
-};
+use gpui::{AnyElement, AppContext, Context, Entity, Hsla, IntoElement, Subscription, Window};
 use gpui_component::{
-    Colorize, Sizable, Size,
+    Anchor, Colorize, Sizable, Size,
     color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
 };
 

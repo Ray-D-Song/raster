@@ -4,3 +4,6 @@
 [submodule "deps/gpui-component"]
 	path = deps/gpui-component
 	url = https://github.com/Ray-D-Song/raster-gpui-component.git
+[submodule "deps/gpui-mobile"]
+	path = deps/gpui-mobile
+	url = https://github.com/Ray-D-Song/raster-gpui-mobile.git

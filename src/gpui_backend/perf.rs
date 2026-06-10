@@ -86,7 +86,6 @@ pub fn decorate_refresh(content: AnyElement, highlight: Option<PerfHighlight>) -
             offset: point(px(0.0), px(0.0)),
             blur_radius: px(0.0),
             spread_radius: px(2.0),
-            inset: false,
         }])
         .child(content)
         .into_any_element()

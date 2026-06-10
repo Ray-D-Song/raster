@@ -23,3 +23,8 @@ node_modules/
 /tmp
 
 src/runtime/js/generated/
+
+# Gradle/Android generated state
+.gradle/
+**/.gradle/
+**/build/

@@ -99,7 +99,7 @@ pub(in crate::gpui_backend) fn render_virtual_list_from_node(
     }
     .track_scroll(state.scroll_handle())
     .with_sizing_behavior(ListSizingBehavior::Auto)
-    .flex_shrink(0.0);
+    .flex_shrink_0();
 
     Some(apply_style(list, &widget.style).into_any_element())
 }

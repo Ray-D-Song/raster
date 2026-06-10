@@ -11,4 +11,7 @@ pub mod perf;
 pub mod render_model;
 pub mod retained_tree;
 
-pub use app::{DevReloadConfig, start};
+pub use app::{DevReloadConfig, open_raster_window};
+
+#[cfg(not(target_os = "android"))]
+pub use app::start_desktop;

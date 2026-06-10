@@ -3,25 +3,40 @@ name = "raster"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "raster"
+crate-type = ["rlib", "cdylib"]
+
 [dependencies]
 anyhow = "1.0"
 chrono = "0.4"
 futures = "0.3"
 csscolorparser = "0.8"
-gpui = { git = "https://github.com/zed-industries/zed" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "runtime_shaders"] }
+gpui = { git = "https://github.com/zed-industries/zed", rev = "5688167d224b5eca54875d49afb8bfd73a07915a" }
 pollster = "0.4"
 regex = "1"
 serde_json = "1.0"
-llrt_core = { package = "raster_runtime_core", path = "deps/raster-runtime/raster_runtime_core", default-features = false, features = ["macro", "base", "console", "compression-rust", "tls-ring", "crypto-rust"] }
 llrt_utils = { package = "raster_runtime_utils", path = "deps/raster-runtime/libs/raster_runtime_utils" }
 gpui-component = "0.5.2"
 gpui-component-assets = "0.5.1"
 tokio = { version = "1", features = ["rt", "time"] }
+log = "0.4"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "5688167d224b5eca54875d49afb8bfd73a07915a", features = ["font-kit", "runtime_shaders"] }
+llrt_core = { package = "raster_runtime_core", path = "deps/raster-runtime/raster_runtime_core", default-features = false, features = ["macro", "base", "console", "compression-rust", "tls-ring", "crypto-rust"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+android-activity = { version = "0.6", features = ["native-activity"] }
+android_logger = "0.15"
+gpui-mobile = { path = "deps/gpui-mobile", default-features = false }
+llrt_core = { package = "raster_runtime_core", path = "deps/raster-runtime/raster_runtime_core", default-features = false, features = ["macro", "bindgen", "base", "console", "compression-rust", "tls-ring", "crypto-rust"] }
+ndk = { version = "0.9", features = ["nativewindow"] }
 
 [dev-dependencies]
-gpui = { git = "https://github.com/zed-industries/zed", features = ["test-support"] }
+gpui = { git = "https://github.com/zed-industries/zed", rev = "5688167d224b5eca54875d49afb8bfd73a07915a", features = ["test-support"] }
 
 [patch.crates-io]
 gpui-component = { path = "deps/gpui-component/crates/ui" }
 gpui-component-assets = { path = "deps/gpui-component/crates/assets" }
+async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }

@@ -1,12 +1,10 @@
-mod common;
-mod config;
-mod gpui_backend;
-mod js_runtime;
-
 use std::path::PathBuf;
 
-use common::utils::logger::{self, LogLevel, LoggerConfig};
-use config::{APP_BUNDLE_PATH, DEFAULT_ROOT_HEIGHT, DEFAULT_ROOT_WIDTH};
+use raster::{
+    app::{RasterRunOptions, path_bundle, run_desktop_raster_app},
+    common::utils::logger::{self, LogLevel, LoggerConfig},
+    config::{APP_BUNDLE_PATH, DEFAULT_ROOT_HEIGHT, DEFAULT_ROOT_WIDTH},
+};
 
 fn main() -> anyhow::Result<()> {
     let options = parse_args()?;
@@ -16,28 +14,12 @@ fn main() -> anyhow::Result<()> {
         file_path: options.log_file.clone(),
     })?;
     logger::info("logger initialized");
-    let js_runtime = pollster::block_on(js_runtime::start())?;
-    if options.dev_mode {
-        pollster::block_on(js_runtime.enable_dev_reload())?;
-    }
-    pollster::block_on(js_runtime.eval_app_bundle_path(&options.bundle_path))?;
-    if options.dev_mode {
-        pollster::block_on(js_runtime.install_dev_bundle_watcher(&options.bundle_path))?;
-    }
-    let native_binding = js_runtime.native_binding();
-    let runtime_commands = js_runtime.runtime_command_sender();
-    js_runtime.spawn_command_loop();
-
-    let dev_reload = options.dev_mode.then_some(gpui_backend::DevReloadConfig {
-        demo_bundle_path: options.bundle_path.clone(),
-    });
-    gpui_backend::start(
-        DEFAULT_ROOT_WIDTH,
-        DEFAULT_ROOT_HEIGHT,
-        dev_reload,
-        native_binding,
-        runtime_commands,
-    );
+    run_desktop_raster_app(RasterRunOptions {
+        width: DEFAULT_ROOT_WIDTH,
+        height: DEFAULT_ROOT_HEIGHT,
+        bundle: path_bundle(&options.bundle_path),
+        dev_mode: options.dev_mode,
+    })?;
     Ok(())
 }
 

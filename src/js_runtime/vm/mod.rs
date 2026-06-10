@@ -133,22 +133,23 @@ impl JsRuntime {
     }
 
     pub async fn eval_app_bundle_path(&self, path: &std::path::Path) -> anyhow::Result<()> {
-        self.eval_app_bundle_path_named(path, &path.display().to_string())
-            .await
-    }
-
-    async fn eval_app_bundle_path_named(
-        &self,
-        path: &std::path::Path,
-        name: &str,
-    ) -> anyhow::Result<()> {
         let source = std::fs::read_to_string(path).map_err(|error| {
             anyhow::anyhow!("failed to read app bundle {}: {error}", path.display())
         })?;
+        self.eval_app_bundle_source(&path.display().to_string(), source)
+            .await
+    }
+
+    pub async fn eval_app_bundle_source(
+        &self,
+        name: impl Into<String>,
+        source: String,
+    ) -> anyhow::Result<()> {
+        let name = name.into();
         self.vm
             .ctx
             .with(|ctx| {
-                Module::evaluate(ctx.clone(), name.to_owned(), source)
+                Module::evaluate(ctx.clone(), name, source)
                     .and_then(|module| module.finish::<()>())
                     .catch(&ctx)
                     .map_err(|error| anyhow::anyhow!("failed to evaluate app bundle: {error:?}"))
@@ -244,7 +245,10 @@ impl JsRuntime {
             .await?;
         let generation = self.reload_generation.fetch_add(1, Ordering::SeqCst) + 1;
         let name = format!("{}?reload={generation}", path.display());
-        self.eval_app_bundle_path_named(path, &name).await?;
+        let source = std::fs::read_to_string(path).map_err(|error| {
+            anyhow::anyhow!("failed to read app bundle {}: {error}", path.display())
+        })?;
+        self.eval_app_bundle_source(name, source).await?;
         logger::info(format!(
             "js_runtime reload app bundle success: {}",
             path.display()

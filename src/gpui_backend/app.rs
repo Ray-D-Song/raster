@@ -13,11 +13,13 @@ use std::{
 
 use futures::{StreamExt, channel::mpsc};
 use gpui::{
-    AnyElement, App, Bounds, Context, Empty, Entity, IntoElement, Render, SharedString,
-    StatefulInteractiveElement, TitlebarOptions, WeakEntity, Window, WindowBounds, WindowOptions,
-    div, prelude::*, px, size,
+    AnyElement, App, Context, Empty, Entity, IntoElement, Render, WeakEntity, Window,
+    WindowOptions, div, prelude::*,
 };
+#[cfg(not(target_os = "android"))]
+use gpui::{Bounds, SharedString, TitlebarOptions, WindowBounds, px, size};
 use gpui_component::ActiveTheme;
+#[cfg(not(target_os = "android"))]
 use gpui_component_assets::Assets;
 
 use crate::{
@@ -87,7 +89,8 @@ pub struct DevReloadConfig {
     pub demo_bundle_path: std::path::PathBuf,
 }
 
-pub fn start(
+#[cfg(not(target_os = "android"))]
+pub fn start_desktop(
     width: u32,
     height: u32,
     dev_reload: Option<DevReloadConfig>,
@@ -98,9 +101,6 @@ pub fn start(
     gpui_platform::application()
         .with_assets(Assets)
         .run(move |cx: &mut App| {
-            gpui_component::init(cx);
-            apply_raster_default_theme(cx);
-
             if let Some(config) = &dev_reload {
                 logger::info(format!(
                     "gpui_backend dev bundle path: {}",
@@ -124,22 +124,33 @@ pub fn start(
                 ..WindowOptions::default()
             };
 
-            cx.on_window_closed(|cx, _| {
-                if cx.windows().is_empty() {
-                    cx.quit();
-                }
-            })
-            .detach();
-
-            cx.open_window(options, |window, cx| {
-                let raster_root =
-                    cx.new(|cx| RasterRootView::new(native_binding, runtime_commands, cx));
-                cx.new(|cx| gpui_component::Root::new(raster_root, window, cx))
-            })
-            .expect("failed to open Raster GPUI window");
+            open_raster_window(cx, options, native_binding, runtime_commands);
             cx.activate(true);
             logger::info("gpui_backend initialize success");
         });
+}
+
+pub fn open_raster_window(
+    cx: &mut App,
+    options: WindowOptions,
+    native_binding: NativeBindingState,
+    runtime_commands: ChannelSender<RuntimeCommand>,
+) {
+    gpui_component::init(cx);
+    apply_raster_default_theme(cx);
+
+    cx.on_window_closed(|cx, _| {
+        if cx.windows().is_empty() {
+            cx.quit();
+        }
+    })
+    .detach();
+
+    cx.open_window(options, |window, cx| {
+        let raster_root = cx.new(|cx| RasterRootView::new(native_binding, runtime_commands, cx));
+        cx.new(|cx| gpui_component::Root::new(raster_root, window, cx))
+    })
+    .expect("failed to open Raster GPUI window");
 }
 
 pub(in crate::gpui_backend) struct RasterRootView {
