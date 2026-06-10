@@ -1,5 +1,6 @@
 ```bash
-npx create-raster-app my-app
+raster create my-app
 
-npx create-raster-app --platform=ios,android,windows,osx
+raster add android
+raster add android,ios,win,osx,linux
 ```

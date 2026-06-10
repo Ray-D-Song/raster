@@ -1,0 +1,16 @@
+{
+  "name": "@raster/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "raster": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "templates"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
