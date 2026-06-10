@@ -1,16 +1,35 @@
 {
   "name": "unplugin-raster",
-  "version": "0.1.0",
-  "private": true,
+  "version": "0.1.0-alpha.1",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./vite": "./src/vite.ts",
-    "./esbuild": "./src/esbuild.ts",
-    "./rolldown": "./src/rolldown.ts",
-    "./rollup": "./src/rollup.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./vite": {
+      "types": "./dist/vite.d.ts",
+      "default": "./dist/vite.js"
+    },
+    "./esbuild": {
+      "types": "./dist/esbuild.d.ts",
+      "default": "./dist/esbuild.js"
+    },
+    "./rolldown": {
+      "types": "./dist/rolldown.d.ts",
+      "default": "./dist/rolldown.js"
+    },
+    "./rollup": {
+      "types": "./dist/rollup.d.ts",
+      "default": "./dist/rollup.js"
+    }
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "node --test --experimental-strip-types test/*.test.mjs"
   },
@@ -44,5 +63,8 @@
     "rollup": "4.60.4",
     "typescript": "6.0.3",
     "vite": "8.0.14"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
