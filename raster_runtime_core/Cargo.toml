@@ -75,10 +75,7 @@ raster_runtime_encoding = { path = "../libs/raster_runtime_encoding" }
 raster_runtime_hooking = { path = "../libs/raster_runtime_hooking" }
 raster_runtime_json = { path = "../libs/raster_runtime_json" }
 raster_runtime_logging = { path = "../libs/raster_runtime_logging" }
-raster_runtime_modules = { path = "../raster_runtime_modules", default-features = false, features = [
-  "base",
-  "console",
-] }
+raster_runtime_modules = { path = "../raster_runtime_modules", default-features = false }
 raster_runtime_numbers = { path = "../libs/raster_runtime_numbers" }
 raster_runtime_utils = { path = "../libs/raster_runtime_utils", features = ["all"] }
 once_cell = { version = "1", features = ["std"], default-features = false }
