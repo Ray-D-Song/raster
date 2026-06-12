@@ -21,7 +21,7 @@
 // versions and internal Raster dependencies before packing or publishing.
 
 import { constants } from "node:fs";
-import { access, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -37,11 +37,31 @@ const jsTargets = [
 ];
 
 const binaryTargets = [
-  target("raster-bin-darwin-arm64", "packages/raster-bin-darwin-arm64", "bin", ["darwin-arm64"]),
-  target("raster-bin-darwin-x64", "packages/raster-bin-darwin-x64", "bin", ["darwin-x64"]),
-  target("raster-bin-linux-arm64", "packages/raster-bin-linux-arm64", "bin", ["linux-arm64"]),
-  target("raster-bin-linux-x64", "packages/raster-bin-linux-x64", "bin", ["linux-x64"]),
-  target("raster-bin-win32-x64", "packages/raster-bin-win32-x64", "bin", ["win32-x64"]),
+  target("raster-bin-darwin-arm64", "packages/raster-bin-darwin-arm64", "bin", ["darwin-arm64"], {
+    os: "darwin",
+    cpu: "arm64",
+    binary: "bin/raster",
+  }),
+  target("raster-bin-darwin-x64", "packages/raster-bin-darwin-x64", "bin", ["darwin-x64"], {
+    os: "darwin",
+    cpu: "x64",
+    binary: "bin/raster",
+  }),
+  target("raster-bin-linux-arm64", "packages/raster-bin-linux-arm64", "bin", ["linux-arm64"], {
+    os: "linux",
+    cpu: "arm64",
+    binary: "bin/raster",
+  }),
+  target("raster-bin-linux-x64", "packages/raster-bin-linux-x64", "bin", ["linux-x64"], {
+    os: "linux",
+    cpu: "x64",
+    binary: "bin/raster",
+  }),
+  target("raster-bin-win32-x64", "packages/raster-bin-win32-x64", "bin", ["win32-x64"], {
+    os: "win32",
+    cpu: "x64",
+    binary: "bin/raster.exe",
+  }),
 ];
 
 const allTargets = [...binaryTargets, ...jsTargets];
@@ -55,6 +75,7 @@ async function main(argv) {
   const tag = version.includes("alpha") ? "alpha" : "latest";
   const publishTargets = resolvePublishTargets(args);
 
+  await ensureBinaryPackageManifests(version);
   await syncVersions(version);
   await run("pnpm", ["install", "--lockfile-only", "--link-workspace-packages=true"]);
   await buildJsTargets(publishTargets.filter((item) => item.kind === "js"));
@@ -91,8 +112,8 @@ async function main(argv) {
   console.log(`Published ${publishTargets.length} package(s) at ${version} with tag ${tag}.`);
 }
 
-function target(name, packageDir, kind, aliases = []) {
-  return { name, packageDir, kind, aliases: [name, ...aliases] };
+function target(name, packageDir, kind, aliases = [], metadata = {}) {
+  return { name, packageDir, kind, aliases: [name, ...aliases], ...metadata };
 }
 
 function buildTargetAliases(targets) {
@@ -270,6 +291,27 @@ async function syncVersions(version) {
     packageJson.dependencies["raster-js"] = version;
     packageJson.devDependencies["unplugin-raster"] = version;
     await writeJson(packagePath, packageJson);
+  }
+}
+
+async function ensureBinaryPackageManifests(version) {
+  for (const binaryTarget of binaryTargets) {
+    const packageDir = path.join(rootDir, binaryTarget.packageDir);
+    await mkdir(packageDir, { recursive: true });
+    await writeJson(path.join(packageDir, "package.json"), {
+      name: binaryTarget.name,
+      version,
+      bin: {
+        raster: binaryTarget.binary,
+      },
+      os: [binaryTarget.os],
+      cpu: [binaryTarget.cpu],
+      libc: ["any"],
+      files: ["bin"],
+      publishConfig: {
+        access: "public",
+      },
+    });
   }
 }
 

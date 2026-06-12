@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 
-import { access, chmod, copyFile, mkdir, rm, writeFile } from "node:fs/promises";
+import { access, chmod, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const rootDir = path.resolve(path.dirname(__filename), "..");
+const configPath = path.join(rootDir, "config.json");
 
 const platforms = [
   {
@@ -15,6 +16,8 @@ const platforms = [
     packageDir: "packages/raster-bin-darwin-arm64",
     packageBinary: "bin/raster",
     cargoBinary: "raster",
+    os: "darwin",
+    cpu: "arm64",
     tools: [],
   },
   {
@@ -23,6 +26,8 @@ const platforms = [
     packageDir: "packages/raster-bin-darwin-x64",
     packageBinary: "bin/raster",
     cargoBinary: "raster",
+    os: "darwin",
+    cpu: "x64",
     tools: [],
   },
   {
@@ -31,6 +36,8 @@ const platforms = [
     packageDir: "packages/raster-bin-linux-arm64",
     packageBinary: "bin/raster",
     cargoBinary: "raster",
+    os: "linux",
+    cpu: "arm64",
     linker: "aarch64-linux-gnu-gcc",
     cc: "aarch64-linux-gnu-gcc",
     cxx: "aarch64-linux-gnu-g++",
@@ -85,6 +92,8 @@ const platforms = [
     packageDir: "packages/raster-bin-linux-x64",
     packageBinary: "bin/raster",
     cargoBinary: "raster",
+    os: "linux",
+    cpu: "x64",
     linker: "x86_64-linux-gnu-gcc",
     cc: "x86_64-linux-gnu-gcc",
     cxx: "x86_64-linux-gnu-g++",
@@ -139,6 +148,8 @@ const platforms = [
     packageDir: "packages/raster-bin-win32-x64",
     packageBinary: "bin/raster.exe",
     cargoBinary: "raster.exe",
+    os: "win32",
+    cpu: "x64",
     linker: "x86_64-w64-mingw32-gcc",
     cc: "x86_64-w64-mingw32-gcc",
     cxx: "x86_64-w64-mingw32-g++",
@@ -392,6 +403,7 @@ async function buildPlatform(platform, args) {
     throw new Error(`Cargo build did not produce expected binary: ${source}`);
   });
 
+  await writeBinaryPackageManifest(platform);
   await mkdir(path.dirname(destination), { recursive: true });
   await rm(destination, { force: true });
   await copyFile(source, destination);
@@ -399,6 +411,40 @@ async function buildPlatform(platform, args) {
     await chmod(destination, 0o755);
   }
   console.log(`Copied ${source} -> ${destination}`);
+}
+
+async function writeBinaryPackageManifest(platform) {
+  const packageDir = path.join(rootDir, platform.packageDir);
+  const packagePath = path.join(packageDir, "package.json");
+  const version = await readReleaseVersion();
+  await mkdir(packageDir, { recursive: true });
+  await writeJson(packagePath, {
+    name: `raster-bin-${platform.id}`,
+    version,
+    bin: {
+      raster: platform.packageBinary,
+    },
+    os: [platform.os],
+    cpu: [platform.cpu],
+    libc: ["any"],
+    files: ["bin"],
+    publishConfig: {
+      access: "public",
+    },
+  });
+}
+
+async function readReleaseVersion() {
+  const config = JSON.parse(await readFile(configPath, "utf8"));
+  const version = config.version;
+  if (typeof version !== "string" || version.trim() === "") {
+    throw new Error("config.json must define a non-empty string version");
+  }
+  return version;
+}
+
+async function writeJson(filePath, value) {
+  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 async function targetBuildEnv(platform) {
