@@ -34,9 +34,11 @@ const PLATFORM_ALIASES = new Map([
   ["linux", "linux"],
 ]);
 
-const IMPLEMENTED_PLATFORMS = new Set(["android"]);
+const IMPLEMENTED_PLATFORMS = new Set(["android", "ios"]);
 const ANDROID_TODO_SCRIPT =
   "node -e \"throw new Error('Raster Android build/run is not implemented in the CLI yet')\"";
+const IOS_TODO_SCRIPT =
+  "node -e \"throw new Error('Raster iOS build/run is not implemented in the CLI yet')\"";
 
 class CliError extends Error {
   constructor(message) {
@@ -221,6 +223,9 @@ function updatePlatformScripts(packageJson, platforms) {
     if (platform === "android") {
       packageJson.scripts.android = ANDROID_TODO_SCRIPT;
       packageJson.scripts["build:android"] = ANDROID_TODO_SCRIPT;
+    } else if (platform === "ios") {
+      packageJson.scripts.ios = IOS_TODO_SCRIPT;
+      packageJson.scripts["build:ios"] = IOS_TODO_SCRIPT;
     }
   }
 }

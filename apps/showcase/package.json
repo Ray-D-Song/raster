@@ -6,7 +6,9 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "build": "vite build",
-    "dev": "vite build --watch"
+    "dev": "vite build --watch",
+    "android": "node -e \"throw new Error('Raster Android build/run is not implemented in the CLI yet')\"",
+    "build:android": "node -e \"throw new Error('Raster Android build/run is not implemented in the CLI yet')\""
   },
   "dependencies": {
     "raster-js": "0.1.0-alpha.4",
