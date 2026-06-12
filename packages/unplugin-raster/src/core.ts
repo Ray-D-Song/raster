@@ -66,11 +66,6 @@ export type EsbuildLikeBuildResult = {
 export const HOST_EXTERNALS = [
   "react",
   "react/jsx-runtime",
-  "raster-js",
-  "raster-js/core",
-  "raster-js/react",
-  "raster-js/component",
-  "raster-js/components",
   "react-raster",
 ] as const;
 

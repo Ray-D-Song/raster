@@ -1,5 +1,5 @@
 use llrt_core::{
-    Ctx, Function, Object, Result, Symbol, Value,
+    Ctx, Function, Object, Result, Value,
     module::{Declarations, Exports, ModuleDef},
 };
 use llrt_utils::module::ModuleInfo;
@@ -32,6 +32,56 @@ const RASTER_COMPONENT_EXPORTS: &[&str] = &[
     "TabBar",
     "VirtualList",
 ];
+
+const REACT_EXPORTS: &[&str] = &[
+    "Activity",
+    "Children",
+    "Component",
+    "Fragment",
+    "Profiler",
+    "PureComponent",
+    "StrictMode",
+    "Suspense",
+    "__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE",
+    "__COMPILER_RUNTIME",
+    "act",
+    "cache",
+    "cacheSignal",
+    "captureOwnerStack",
+    "cloneElement",
+    "createContext",
+    "createElement",
+    "createRef",
+    "default",
+    "forwardRef",
+    "isValidElement",
+    "lazy",
+    "memo",
+    "startTransition",
+    "unstable_useCacheRefresh",
+    "use",
+    "useActionState",
+    "useCallback",
+    "useContext",
+    "useDebugValue",
+    "useDeferredValue",
+    "useEffect",
+    "useEffectEvent",
+    "useId",
+    "useImperativeHandle",
+    "useInsertionEffect",
+    "useLayoutEffect",
+    "useMemo",
+    "useOptimistic",
+    "useReducer",
+    "useRef",
+    "useState",
+    "useSyncExternalStore",
+    "useTransition",
+    "version",
+];
+
+const REACT_JSX_RUNTIME_EXPORTS: &[&str] = &["Fragment", "jsx", "jsxs"];
 
 pub fn install_runtime_bundle<'js>(ctx: Ctx<'js>) -> Result<()> {
     ctx.eval::<(), _>(include_str!("../runtime/js/generated/runtime_bundle.js"))?;
@@ -134,23 +184,15 @@ pub struct ReactModule;
 
 impl ModuleDef for ReactModule {
     fn declare(declare: &Declarations) -> Result<()> {
-        declare.declare("Activity")?;
-        declare.declare("Component")?;
-        declare.declare("Suspense")?;
-        declare.declare("useEffect")?;
-        declare.declare("useRef")?;
-        declare.declare("useState")?;
+        for name in REACT_EXPORTS {
+            declare.declare(*name)?;
+        }
         Ok(())
     }
 
     fn evaluate<'js>(ctx: &Ctx<'js>, exports: &Exports<'js>) -> Result<()> {
         let bundle = runtime_bundle(ctx)?;
-        exports.export("Activity", bundle.get::<_, Symbol<'js>>("Activity")?)?;
-        exports.export("Component", bundle.get::<_, Function<'js>>("Component")?)?;
-        exports.export("Suspense", bundle.get::<_, Symbol<'js>>("Suspense")?)?;
-        exports.export("useEffect", bundle.get::<_, Function<'js>>("useEffect")?)?;
-        exports.export("useRef", bundle.get::<_, Function<'js>>("useRef")?)?;
-        exports.export("useState", bundle.get::<_, Function<'js>>("useState")?)?;
+        export_bundle_values(&bundle, exports, REACT_EXPORTS)?;
         Ok(())
     }
 }
@@ -168,17 +210,15 @@ pub struct ReactJsxRuntimeModule;
 
 impl ModuleDef for ReactJsxRuntimeModule {
     fn declare(declare: &Declarations) -> Result<()> {
-        declare.declare("jsx")?;
-        declare.declare("jsxs")?;
-        declare.declare("Fragment")?;
+        for name in REACT_JSX_RUNTIME_EXPORTS {
+            declare.declare(*name)?;
+        }
         Ok(())
     }
 
     fn evaluate<'js>(ctx: &Ctx<'js>, exports: &Exports<'js>) -> Result<()> {
         let bundle = runtime_bundle(ctx)?;
-        exports.export("jsx", bundle.get::<_, Function<'js>>("jsx")?)?;
-        exports.export("jsxs", bundle.get::<_, Function<'js>>("jsxs")?)?;
-        exports.export("Fragment", bundle.get::<_, Symbol<'js>>("Fragment")?)?;
+        export_bundle_values(&bundle, exports, REACT_JSX_RUNTIME_EXPORTS)?;
         Ok(())
     }
 }

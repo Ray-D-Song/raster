@@ -24,7 +24,7 @@ importers:
   apps/showcase:
     dependencies:
       raster-js:
-        specifier: 0.1.0-alpha.3
+        specifier: 0.1.0-alpha.4
         version: link:../../packages/raster
       react:
         specifier: 19.2.6
@@ -37,7 +37,7 @@ importers:
         specifier: 6.0.3
         version: 6.0.3
       unplugin-raster:
-        specifier: 0.1.0-alpha.3
+        specifier: 0.1.0-alpha.4
         version: link:../../packages/unplugin-raster
       vite:
         specifier: 8.0.14
@@ -115,19 +115,19 @@ importers:
         version: 8.0.14(@types/node@25.9.1)(esbuild@0.28.0)
     optionalDependencies:
       raster-bin-darwin-arm64:
-        specifier: 0.1.0-alpha.3
+        specifier: 0.1.0-alpha.4
         version: link:../raster-bin-darwin-arm64
       raster-bin-darwin-x64:
-        specifier: 0.1.0-alpha.3
+        specifier: 0.1.0-alpha.4
         version: link:../raster-bin-darwin-x64
       raster-bin-linux-arm64:
-        specifier: 0.1.0-alpha.3
+        specifier: 0.1.0-alpha.4
         version: link:../raster-bin-linux-arm64
       raster-bin-linux-x64:
-        specifier: 0.1.0-alpha.3
+        specifier: 0.1.0-alpha.4
         version: link:../raster-bin-linux-x64
       raster-bin-win32-x64:
-        specifier: 0.1.0-alpha.3
+        specifier: 0.1.0-alpha.4
         version: link:../raster-bin-win32-x64
 
 packages:

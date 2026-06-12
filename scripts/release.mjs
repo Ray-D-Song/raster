@@ -1,5 +1,25 @@
 #!/usr/bin/env node
 
+// Usage examples:
+//   node scripts/release.mjs
+//   node scripts/release.mjs js
+//   node scripts/release.mjs bin --exclude win32-x64
+//   node scripts/release.mjs bin --include darwin-arm64,linux-x64
+//   node scripts/release.mjs all --dry-run
+//   node scripts/release.mjs all --exclude win32-x64 --otp 123456
+//
+// Domains:
+//   js   Publish raster-js, unplugin-raster, and raster-cli. This is the default.
+//   bin  Publish only raster-bin-* platform packages.
+//   all  Publish raster-bin-* packages first, then JS packages.
+//
+// Target aliases:
+//   JS: raster/raster-js, plugin/unplugin-raster, cli/raster-cli
+//   Bin: darwin-arm64, darwin-x64, linux-arm64, linux-x64, win32-x64
+//
+// The release version always comes from config.json. This script rewrites package
+// versions and internal Raster dependencies before packing or publishing.
+
 import { constants } from "node:fs";
 import { access, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -37,6 +57,7 @@ async function main(argv) {
 
   await syncVersions(version);
   await run("pnpm", ["install", "--lockfile-only", "--link-workspace-packages=true"]);
+  await buildJsTargets(publishTargets.filter((item) => item.kind === "js"));
   await validateBinaryTargets(publishTargets.filter((item) => item.kind === "bin"));
 
   for (const publishTarget of publishTargets) {
@@ -277,6 +298,18 @@ async function validateBinaryTargets(targets) {
         throw new Error(`${packageJson.name} binary artifact is not executable: ${binaryPath}`);
       }
     }
+  }
+}
+
+async function buildJsTargets(targets) {
+  for (const jsTarget of targets) {
+    const packageJson = await readJson(path.join(rootDir, jsTarget.packageDir, "package.json"));
+    if (typeof packageJson.scripts?.build !== "string") {
+      continue;
+    }
+    await run("npm", ["run", "build"], {
+      cwd: path.join(rootDir, jsTarget.packageDir),
+    });
   }
 }
 
