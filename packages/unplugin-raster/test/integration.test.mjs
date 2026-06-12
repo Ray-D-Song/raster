@@ -12,6 +12,8 @@ import esbuildRaster from "../src/esbuild.ts";
 import rolldownRaster from "../src/rolldown.ts";
 import viteRaster from "../src/vite.ts";
 
+process.env.RASTER_UNPLUGIN_SKIP_BINARY = "1";
+
 test("Vite builds a single Raster app bundle", async () => {
   await withFixture(async (root) => {
     await writeRasterApp(root);

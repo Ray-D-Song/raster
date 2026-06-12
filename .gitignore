@@ -34,3 +34,5 @@ src/runtime/js/generated/
 dist
 
 target/
+
+raster-bin-*

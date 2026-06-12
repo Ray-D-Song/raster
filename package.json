@@ -5,7 +5,6 @@
   "type": "module",
   "packageManager": "pnpm@10.33.0",
   "scripts": {
-    "dev": "node scripts/dev.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test:plugin": "pnpm --dir packages/unplugin-raster test",
     "build:runtime": "pnpm --dir packages/raster build:runtime",
@@ -13,7 +12,16 @@
     "docs:dev": "pnpm --dir docs dev",
     "docs:build": "pnpm --dir docs build",
     "docs:preview": "pnpm --dir docs preview",
-    "build": "pnpm run typecheck && pnpm run build:runtime && pnpm run build:template"
+    "build": "pnpm run typecheck && pnpm run build:runtime && pnpm run build:template",
+    "build:platforms": "node scripts/build-all-platform.mjs",
+    "release": "pnpm run release:js",
+    "release:js": "node scripts/release.mjs js",
+    "release:bin": "node scripts/release.mjs bin",
+    "release:all": "node scripts/release.mjs all",
+    "release:js:dry-run": "node scripts/release.mjs js --dry-run",
+    "release:bin:dry-run": "node scripts/release.mjs bin --dry-run",
+    "release:all:dry-run": "node scripts/release.mjs all --dry-run",
+    "release:dry-run": "pnpm run release:js:dry-run"
   },
   "devDependencies": {
     "@types/react": "19.2.15",

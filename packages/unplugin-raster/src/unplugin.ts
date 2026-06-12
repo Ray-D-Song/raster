@@ -1,5 +1,6 @@
 import { createUnplugin } from "unplugin";
 
+import { buildRasterExecutable, startRasterDev } from "./binary.ts";
 import {
   mergeRollupExternal,
   normalizeRasterOptions,
@@ -11,12 +12,16 @@ import {
 
 export const rasterUnplugin = createUnplugin<RasterPluginOptions>((rawOptions = {}) => {
   let options = normalizeRasterOptions(rawOptions);
+  let viteWatchMode = false;
+  let esbuildWatchMode = false;
+  let bundleValidated = false;
 
   return {
     name: "unplugin-raster",
     vite: {
       config(config) {
         options = normalizeRasterOptions(rawOptions);
+        bundleValidated = false;
         const output = splitOutfile(options.outfile);
 
         return {
@@ -38,13 +43,28 @@ export const rasterUnplugin = createUnplugin<RasterPluginOptions>((rawOptions = 
           },
         };
       },
+      configResolved(config) {
+        viteWatchMode = Boolean(config.build.watch);
+      },
       generateBundle(outputOptions, bundle) {
         validateRollupBundle(outputOptions, bundle, options);
+        bundleValidated = true;
       },
+    },
+    closeBundle(this: { meta?: { watchMode?: boolean } }) {
+      if (!bundleValidated) {
+        return;
+      }
+      if (viteWatchMode || this.meta?.watchMode || options.watch) {
+        startRasterDev(options);
+        return;
+      }
+      return buildRasterExecutable(options);
     },
     rollup: {
       options(inputOptions) {
         options = normalizeRasterOptions(rawOptions);
+        bundleValidated = false;
         return {
           ...inputOptions,
           input: options.entry,
@@ -61,11 +81,13 @@ export const rasterUnplugin = createUnplugin<RasterPluginOptions>((rawOptions = 
       },
       generateBundle(outputOptions, bundle) {
         validateRollupBundle(outputOptions, bundle, options);
+        bundleValidated = true;
       },
     },
     rolldown: {
       options(inputOptions) {
         options = normalizeRasterOptions(rawOptions);
+        bundleValidated = false;
         return {
           ...inputOptions,
           input: options.entry,
@@ -83,11 +105,13 @@ export const rasterUnplugin = createUnplugin<RasterPluginOptions>((rawOptions = 
       },
       generateBundle(outputOptions, bundle) {
         validateRollupBundle(outputOptions, bundle, options);
+        bundleValidated = true;
       },
     },
     esbuild: {
       config(buildOptions) {
         options = normalizeRasterOptions(rawOptions);
+        esbuildWatchMode = options.watch || Boolean((buildOptions as { watch?: unknown }).watch);
         buildOptions.entryPoints = [options.entry];
         buildOptions.outfile = options.outfile;
         buildOptions.bundle = true;
@@ -103,8 +127,13 @@ export const rasterUnplugin = createUnplugin<RasterPluginOptions>((rawOptions = 
         buildOptions.metafile = true;
       },
       setup(build) {
-        build.onEnd((result) => {
+        build.onEnd(async (result) => {
           validateEsbuildMetafile(result, options);
+          if (esbuildWatchMode) {
+            startRasterDev(options);
+            return;
+          }
+          await buildRasterExecutable(options);
         });
       },
     },

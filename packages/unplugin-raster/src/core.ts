@@ -3,6 +3,8 @@ import path from "node:path";
 export type RasterPluginOptions = {
   entry?: string;
   outfile?: string;
+  out?: string;
+  watch?: boolean;
   target?: string;
   sourcemap?: boolean;
   minify?: boolean;
@@ -12,6 +14,8 @@ export type RasterPluginOptions = {
 export type NormalizedRasterPluginOptions = {
   entry: string;
   outfile: string;
+  out: string;
+  watch: boolean;
   target: string;
   sourcemap: boolean;
   minify: boolean;
@@ -73,6 +77,8 @@ export const HOST_EXTERNALS = [
 export const DEFAULT_RASTER_PLUGIN_OPTIONS = {
   entry: "src/main.tsx",
   outfile: "dist/raster/app.js",
+  out: "dist/raster/app",
+  watch: false,
   target: "es2022",
   sourcemap: false,
   minify: true,
@@ -99,12 +105,15 @@ export function normalizeRasterOptions(
     "target",
     DEFAULT_RASTER_PLUGIN_OPTIONS.target
   );
+  const out = nonEmptyString(options.out, "out", DEFAULT_RASTER_PLUGIN_OPTIONS.out);
   const userExternal = uniqueStrings(options.external ?? [], "external");
   const hostExternal = [...HOST_EXTERNALS];
 
   return {
     entry,
     outfile,
+    out,
+    watch: options.watch ?? DEFAULT_RASTER_PLUGIN_OPTIONS.watch,
     target,
     sourcemap: options.sourcemap ?? DEFAULT_RASTER_PLUGIN_OPTIONS.sourcemap,
     minify: options.minify ?? DEFAULT_RASTER_PLUGIN_OPTIONS.minify,
