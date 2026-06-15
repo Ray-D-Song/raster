@@ -38,53 +38,7 @@ const platforms = [
     cargoBinary: "raster",
     os: "linux",
     cpu: "arm64",
-    linker: "aarch64-linux-gnu-gcc",
-    cc: "aarch64-linux-gnu-gcc",
-    cxx: "aarch64-linux-gnu-g++",
-    ar: "aarch64-linux-gnu-ar",
-    ranlib: "aarch64-linux-gnu-ranlib",
-    cmakeSystemName: "Linux",
-    cmakeSystemProcessor: "aarch64",
-    rustcLinkArgs: [
-      "-C",
-      "link-arg=-Wl,-Bstatic",
-      "-C",
-      "link-arg=-lz-ng",
-      "-C",
-      "link-arg=-Wl,-Bdynamic",
-    ],
-    tools: [
-      {
-        command: "aarch64-linux-gnu-gcc",
-        install: {
-          darwin: brewFormula("messense/macos-cross-toolchains/aarch64-unknown-linux-gnu"),
-        },
-      },
-      {
-        command: "aarch64-linux-gnu-g++",
-        install: {
-          darwin: brewFormula("messense/macos-cross-toolchains/aarch64-unknown-linux-gnu"),
-        },
-      },
-      {
-        command: "aarch64-linux-gnu-ar",
-        install: {
-          darwin: brewFormula("messense/macos-cross-toolchains/aarch64-unknown-linux-gnu"),
-        },
-      },
-      {
-        command: "aarch64-linux-gnu-ranlib",
-        install: {
-          darwin: brewFormula("messense/macos-cross-toolchains/aarch64-unknown-linux-gnu"),
-        },
-      },
-      {
-        command: "cmake",
-        install: {
-          darwin: brewFormula("cmake"),
-        },
-      },
-    ],
+    tools: [],
   },
   {
     id: "linux-x64",
@@ -94,101 +48,17 @@ const platforms = [
     cargoBinary: "raster",
     os: "linux",
     cpu: "x64",
-    linker: "x86_64-linux-gnu-gcc",
-    cc: "x86_64-linux-gnu-gcc",
-    cxx: "x86_64-linux-gnu-g++",
-    ar: "x86_64-linux-gnu-ar",
-    ranlib: "x86_64-linux-gnu-ranlib",
-    cmakeSystemName: "Linux",
-    cmakeSystemProcessor: "x86_64",
-    rustcLinkArgs: [
-      "-C",
-      "link-arg=-Wl,-Bstatic",
-      "-C",
-      "link-arg=-lz-ng",
-      "-C",
-      "link-arg=-Wl,-Bdynamic",
-    ],
-    tools: [
-      {
-        command: "x86_64-linux-gnu-gcc",
-        install: {
-          darwin: brewFormula("messense/macos-cross-toolchains/x86_64-unknown-linux-gnu"),
-        },
-      },
-      {
-        command: "x86_64-linux-gnu-g++",
-        install: {
-          darwin: brewFormula("messense/macos-cross-toolchains/x86_64-unknown-linux-gnu"),
-        },
-      },
-      {
-        command: "x86_64-linux-gnu-ar",
-        install: {
-          darwin: brewFormula("messense/macos-cross-toolchains/x86_64-unknown-linux-gnu"),
-        },
-      },
-      {
-        command: "x86_64-linux-gnu-ranlib",
-        install: {
-          darwin: brewFormula("messense/macos-cross-toolchains/x86_64-unknown-linux-gnu"),
-        },
-      },
-      {
-        command: "cmake",
-        install: {
-          darwin: brewFormula("cmake"),
-        },
-      },
-    ],
+    tools: [],
   },
   {
     id: "win32-x64",
-    rustTarget: "x86_64-pc-windows-gnu",
+    rustTarget: "x86_64-pc-windows-msvc",
     packageDir: "packages/raster-bin-win32-x64",
     packageBinary: "bin/raster.exe",
     cargoBinary: "raster.exe",
     os: "win32",
     cpu: "x64",
-    linker: "x86_64-w64-mingw32-gcc",
-    cc: "x86_64-w64-mingw32-gcc",
-    cxx: "x86_64-w64-mingw32-g++",
-    ar: "x86_64-w64-mingw32-ar",
-    ranlib: "x86_64-w64-mingw32-ranlib",
-    cmakeSystemName: "Windows",
-    cmakeSystemProcessor: "x86_64",
-    tools: [
-      {
-        command: "x86_64-w64-mingw32-gcc",
-        install: {
-          darwin: brewFormula("mingw-w64"),
-        },
-      },
-      {
-        command: "x86_64-w64-mingw32-g++",
-        install: {
-          darwin: brewFormula("mingw-w64"),
-        },
-      },
-      {
-        command: "x86_64-w64-mingw32-ar",
-        install: {
-          darwin: brewFormula("mingw-w64"),
-        },
-      },
-      {
-        command: "x86_64-w64-mingw32-ranlib",
-        install: {
-          darwin: brewFormula("mingw-w64"),
-        },
-      },
-      {
-        command: "cmake",
-        install: {
-          darwin: brewFormula("cmake"),
-        },
-      },
-    ],
+    tools: [],
   },
   {
     id: "android-arm64",
@@ -232,7 +102,7 @@ async function main(argv) {
 
   const selected = args.platforms.length > 0
     ? platforms.filter((platform) => args.platforms.includes(platform.id))
-    : platforms;
+    : defaultHostPlatforms();
   const missing = args.platforms.filter(
     (id) => !platforms.some((platform) => platform.id === id),
   );
@@ -240,10 +110,13 @@ async function main(argv) {
     throw new Error(`Unknown platform(s): ${missing.join(", ")}`);
   }
 
+  for (const platform of selected) {
+    validatePlatformHost(platform);
+  }
+
   await run("pnpm", ["--dir", "packages/raster", "run", "build:runtime"]);
 
   for (const platform of selected) {
-    validatePlatformHost(platform);
     await ensureRustTargets([platform]);
     await ensurePlatformTools([platform]);
     await buildPlatform(platform, args);
@@ -297,14 +170,40 @@ function splitPlatforms(value) {
 }
 
 function validatePlatformHost(platform) {
-  if (platform.id === "win32-x64" && process.platform !== "win32") {
+  if (platform.id === "android-arm64") {
+    if (process.platform !== "linux" && process.platform !== "darwin") {
+      throw new Error("android-arm64 can only be built from Linux or macOS hosts");
+    }
+    return;
+  }
+
+  if (platform.os !== process.platform || platform.cpu !== normalizedHostArch()) {
     throw new Error([
-      "win32-x64 cannot be built from this host yet.",
-      "The current GPUI Windows backend compiles release HLSL shaders in gpui_windows/build.rs behind cfg(target_os = \"windows\").",
-      "When cross-compiling from macOS/Linux, that build script does not generate OUT_DIR/shaders_bytes.rs, so the build fails later in directx_renderer.rs.",
-      "Build win32-x64 on a Windows host with the Windows SDK fxc.exe available, or patch/fork gpui_windows to support cross-host shader generation.",
+      `${platform.id} must be built on a matching native host.`,
+      `Current host is ${process.platform}-${normalizedHostArch()}.`,
+      "CI release builds use native matrix runners; local builds default to the current host platform.",
     ].join(" "));
   }
+}
+
+function defaultHostPlatforms() {
+  const os = process.platform;
+  const cpu = normalizedHostArch();
+  const platform = platforms.find((item) => item.os === os && item.cpu === cpu);
+  if (!platform) {
+    throw new Error(`No default Raster binary platform for current host: ${os}-${cpu}`);
+  }
+  return [platform];
+}
+
+function normalizedHostArch() {
+  if (process.arch === "x64") {
+    return "x64";
+  }
+  if (process.arch === "arm64") {
+    return "arm64";
+  }
+  return process.arch;
 }
 
 async function ensureRustTargets(selected) {

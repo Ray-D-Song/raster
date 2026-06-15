@@ -1,0 +1,327 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+      - "[0-9]*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and pack without publishing"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
+
+jobs:
+  prepare:
+    name: Prepare release
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.prepare.outputs.version }}
+      npm_tag: ${{ steps.prepare.outputs.npm_tag }}
+      dry_run: ${{ steps.prepare.outputs.dry_run }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -e "console.log(JSON.parse(require('fs').readFileSync('config.json', 'utf8')).version)")"
+          ref_name="${GITHUB_REF_NAME}"
+          tag_version="${ref_name#v}"
+
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${tag_version}" != "${version}" ]]; then
+            echo "Git tag ${ref_name} does not match config.json version ${version}" >&2
+            exit 1
+          fi
+
+          npm_tag="latest"
+          if [[ "${version}" == *alpha* ]]; then
+            npm_tag="alpha"
+          fi
+
+          dry_run="false"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            dry_run="${{ inputs.dry_run }}"
+          fi
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "npm_tag=${npm_tag}" >> "$GITHUB_OUTPUT"
+          echo "dry_run=${dry_run}" >> "$GITHUB_OUTPUT"
+
+  build-bin:
+    name: Build ${{ matrix.platform }}
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: darwin-arm64
+            runner: macos-26
+            rust_target: aarch64-apple-darwin
+            package_dir: packages/raster-bin-darwin-arm64
+          - platform: darwin-x64
+            runner: macos-26-intel
+            rust_target: x86_64-apple-darwin
+            package_dir: packages/raster-bin-darwin-x64
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+            rust_target: aarch64-unknown-linux-gnu
+            package_dir: packages/raster-bin-linux-arm64
+          - platform: linux-x64
+            runner: ubuntu-24.04
+            rust_target: x86_64-unknown-linux-gnu
+            package_dir: packages/raster-bin-linux-x64
+          - platform: win32-x64
+            runner: windows-2025
+            rust_target: x86_64-pc-windows-msvc
+            package_dir: packages/raster-bin-win32-x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.platform }}
+
+      - name: Install Linux native dependencies
+        if: startsWith(matrix.runner, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang \
+            cmake \
+            lld \
+            ninja-build \
+            pkg-config \
+            libfontconfig1-dev \
+            libfreetype6-dev \
+            libssl-dev \
+            libvulkan-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcb1-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Clear macOS cargo env on Windows
+        if: startsWith(matrix.runner, 'windows')
+        shell: pwsh
+        run: |
+          "SDKROOT=" >> $env:GITHUB_ENV
+          "BINDGEN_EXTRA_CLANG_ARGS=" >> $env:GITHUB_ENV
+
+      - name: Build native binary
+        run: node scripts/build.mjs --platform ${{ matrix.platform }}
+
+      - name: Upload binary package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: raster-bin-${{ matrix.platform }}
+          path: ${{ matrix.package_dir }}
+          if-no-files-found: error
+
+  build-android:
+    name: Build Android Maven bundle
+    needs: prepare
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --install "platforms;android-35" "build-tools;35.0.0" "ndk;28.2.13676358" "cmake;3.22.1"
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/28.2.13676358" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=${ANDROID_HOME}/ndk/28.2.13676358" >> "$GITHUB_ENV"
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-arm64
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 9.1.0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Build Android runtime
+        run: node scripts/build.mjs --platform android-arm64
+
+      - name: Pack Maven Central bundle
+        run: pnpm pack:android:maven
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+
+      - name: Upload Maven bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: raster-android-maven-central-bundle
+          path: packages/raster-android/build/raster-android-maven-central-bundle.zip
+          if-no-files-found: error
+
+  publish-bin:
+    name: Publish binary npm packages
+    needs:
+      - prepare
+      - build-bin
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: raster-bin-darwin-arm64
+          path: packages/raster-bin-darwin-arm64
+      - uses: actions/download-artifact@v4
+        with:
+          name: raster-bin-darwin-x64
+          path: packages/raster-bin-darwin-x64
+      - uses: actions/download-artifact@v4
+        with:
+          name: raster-bin-linux-arm64
+          path: packages/raster-bin-linux-arm64
+      - uses: actions/download-artifact@v4
+        with:
+          name: raster-bin-linux-x64
+          path: packages/raster-bin-linux-x64
+      - uses: actions/download-artifact@v4
+        with:
+          name: raster-bin-win32-x64
+          path: packages/raster-bin-win32-x64
+
+      - name: Restore executable permissions
+        run: chmod +x packages/raster-bin-*/bin/raster
+
+      - name: Pack binary npm packages
+        if: needs.prepare.outputs.dry_run == 'true'
+        run: node scripts/release.mjs bin --dry-run
+
+      - name: Publish binary npm packages
+        if: needs.prepare.outputs.dry_run != 'true'
+        run: node scripts/release.mjs bin
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-android:
+    name: Publish Android Maven package
+    needs:
+      - prepare
+      - build-android
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: raster-android-maven-central-bundle
+          path: packages/raster-android/build
+
+      - name: Verify Maven bundle
+        if: needs.prepare.outputs.dry_run == 'true'
+        run: test -s packages/raster-android/build/raster-android-maven-central-bundle.zip
+
+      - name: Publish Maven bundle
+        if: needs.prepare.outputs.dry_run != 'true'
+        run: node scripts/publish-maven-central.mjs --name raster-android-${{ needs.prepare.outputs.version }}
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+
+  publish-js:
+    name: Publish JS npm packages
+    needs:
+      - prepare
+      - publish-bin
+      - publish-android
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Pack JS npm packages
+        if: needs.prepare.outputs.dry_run == 'true'
+        run: node scripts/release.mjs js --dry-run
+
+      - name: Publish JS npm packages
+        if: needs.prepare.outputs.dry_run != 'true'
+        run: node scripts/release.mjs js
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

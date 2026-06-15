@@ -18,6 +18,7 @@
     "publish:android:local": "ANDROID_HOME=${ANDROID_HOME:-$HOME/Library/Android/sdk} ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk} gradle -p packages/raster-android :raster-android:publishReleasePublicationToMavenLocal",
     "publish:android:staging": "ANDROID_HOME=${ANDROID_HOME:-$HOME/Library/Android/sdk} ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk} gradle -p packages/raster-android :raster-android:publishReleasePublicationToLocalStagingRepository",
     "pack:android:maven": "rm -rf packages/raster-android/build/maven-staging packages/raster-android/build/raster-android-maven-central-bundle.zip && pnpm run publish:android:staging && cd packages/raster-android/build/maven-staging && zip -qr ../raster-android-maven-central-bundle.zip .",
+    "publish:android:maven": "node scripts/publish-maven-central.mjs",
     "release": "pnpm run release:js",
     "release:js": "node scripts/release.mjs js",
     "release:bin": "node scripts/release.mjs bin",
