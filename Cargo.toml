@@ -12,7 +12,7 @@ anyhow = "1.0"
 chrono = "0.4"
 futures = "0.3"
 csscolorparser = "0.8"
-gpui = { git = "https://github.com/zed-industries/zed", rev = "5688167d224b5eca54875d49afb8bfd73a07915a" }
+gpui = { path = "deps/zed/crates/gpui" }
 pollster = "0.4"
 regex = "1"
 serde_json = "1.0"
@@ -24,7 +24,7 @@ log = "0.4"
 libsui = "0.15.0"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
-gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "5688167d224b5eca54875d49afb8bfd73a07915a", features = ["font-kit", "runtime_shaders"] }
+gpui_platform = { path = "deps/zed/crates/gpui_platform", features = ["font-kit", "runtime_shaders"] }
 llrt_core = { package = "raster_runtime_core", path = "deps/raster-runtime/raster_runtime_core", default-features = false, features = ["macro", "base", "console", "compression-rust", "tls-ring", "crypto-rust"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
@@ -35,7 +35,7 @@ llrt_core = { package = "raster_runtime_core", path = "deps/raster-runtime/raste
 ndk = { version = "0.9", features = ["nativewindow"] }
 
 [dev-dependencies]
-gpui = { git = "https://github.com/zed-industries/zed", rev = "5688167d224b5eca54875d49afb8bfd73a07915a", features = ["test-support"] }
+gpui = { path = "deps/zed/crates/gpui", features = ["test-support"] }
 
 [profile.release]
 strip = "symbols"
