@@ -7,17 +7,18 @@ use crate::{
     DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity, EntityId, EventEmitter,
     FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs, Hsla, InputHandler, IsZero,
     KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke, KeystrokeEvent, LayoutId,
-    LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite, MouseButton, MouseEvent,
-    MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
-    PlatformInputHandler, PlatformWindow, Point, PolychromeSprite, Priority, PromptButton,
-    PromptLevel, Quad, Render, RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams,
-    Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y,
-    ScaledPixels, Scene, Shadow, SharedString, Size, StrikethroughStyle, Style, SubpixelSprite,
-    SubscriberSet, Subscription, SystemWindowTab, SystemWindowTabController, TabStopMap,
-    TaffyLayoutEngine, Task, TextRenderingMode, TextStyle, TextStyleRefinement, ThermalState,
-    TransformationMatrix, Underline, UnderlineStyle, WindowAppearance, WindowBackgroundAppearance,
-    WindowBounds, WindowControls, WindowDecorations, WindowOptions, WindowParams, WindowTextSystem,
-    point, prelude::*, px, rems, size, transparent_black,
+    LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite, MouseButton,
+    MouseDownEvent, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas,
+    PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point, PointerEvent,
+    PointerId, PointerInputEvent, PointerPhase, PointerSource, PolychromeSprite, Priority,
+    PromptButton, PromptLevel, Quad, Render, RenderGlyphParams, RenderImage, RenderImageParams,
+    RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X,
+    SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow, SharedString, Size, StrikethroughStyle,
+    Style, SubpixelSprite, SubscriberSet, Subscription, SystemWindowTab, SystemWindowTabController,
+    TabStopMap, TaffyLayoutEngine, Task, TextRenderingMode, TextStyle, TextStyleRefinement,
+    ThermalState, TransformationMatrix, Underline, UnderlineStyle, WindowAppearance,
+    WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations, WindowOptions,
+    WindowParams, WindowTextSystem, point, prelude::*, px, rems, size, transparent_black,
 };
 use anyhow::{Context as _, Result, anyhow};
 use collections::{FxHashMap, FxHashSet};
@@ -529,6 +530,8 @@ type FrameCallback = Box<dyn FnOnce(&mut Window, &mut App)>;
 
 pub(crate) type AnyMouseListener =
     Box<dyn FnMut(&dyn Any, DispatchPhase, &mut Window, &mut App) + 'static>;
+pub(crate) type AnyPointerListener =
+    Box<dyn FnMut(&dyn Any, DispatchPhase, &mut Window, &mut App) + 'static>;
 
 #[derive(Clone)]
 pub(crate) struct CursorStyleRequest {
@@ -536,7 +539,7 @@ pub(crate) struct CursorStyleRequest {
     pub(crate) style: CursorStyle,
 }
 
-#[derive(Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct HitTest {
     pub(crate) ids: SmallVec<[HitboxId; 8]>,
     pub(crate) hover_hitbox_count: usize,
@@ -750,6 +753,7 @@ pub(crate) struct Frame {
     pub(crate) element_states: FxHashMap<(GlobalElementId, TypeId), ElementStateBox>,
     accessed_element_states: Vec<(GlobalElementId, TypeId)>,
     pub(crate) mouse_listeners: Vec<Option<AnyMouseListener>>,
+    pub(crate) pointer_listeners: Vec<Option<AnyPointerListener>>,
     pub(crate) dispatch_tree: DispatchTree,
     pub(crate) scene: Scene,
     pub(crate) hitboxes: Vec<Hitbox>,
@@ -781,6 +785,7 @@ pub(crate) struct PrepaintStateIndex {
 pub(crate) struct PaintIndex {
     scene_index: usize,
     mouse_listeners_index: usize,
+    pointer_listeners_index: usize,
     input_handlers_index: usize,
     cursor_styles_index: usize,
     accessed_element_states_index: usize,
@@ -796,6 +801,7 @@ impl Frame {
             element_states: FxHashMap::default(),
             accessed_element_states: Vec::new(),
             mouse_listeners: Vec::new(),
+            pointer_listeners: Vec::new(),
             dispatch_tree,
             scene: Scene::default(),
             hitboxes: Vec::new(),
@@ -904,6 +910,20 @@ impl Frame {
 enum InputModality {
     Mouse,
     Keyboard,
+    Touch,
+}
+
+const TOUCH_TAP_SLOP: f64 = 8.0;
+
+#[derive(Clone, Debug)]
+struct ActivePointer {
+    id: PointerId,
+    source: PointerSource,
+    down_position: Point<Pixels>,
+    last_position: Point<Pixels>,
+    down_hit_test: HitTest,
+    tap_candidate: bool,
+    click_count: usize,
 }
 
 /// Holds the state for a specific window.
@@ -971,6 +991,7 @@ pub struct Window {
     /// The hitbox that has captured the pointer, if any.
     /// While captured, mouse events route to this hitbox regardless of hit testing.
     captured_hitbox: Option<HitboxId>,
+    active_pointer: Option<ActivePointer>,
     #[cfg(any(feature = "inspector", debug_assertions))]
     inspector: Option<Entity<Inspector>>,
 }
@@ -1488,6 +1509,7 @@ impl Window {
             client_inset: None,
             image_cache_stack: Vec::new(),
             captured_hitbox: None,
+            active_pointer: None,
             #[cfg(any(feature = "inspector", debug_assertions))]
             inspector: None,
         })
@@ -2681,6 +2703,7 @@ impl Window {
         PaintIndex {
             scene_index: self.next_frame.scene.len(),
             mouse_listeners_index: self.next_frame.mouse_listeners.len(),
+            pointer_listeners_index: self.next_frame.pointer_listeners.len(),
             input_handlers_index: self.next_frame.input_handlers.len(),
             cursor_styles_index: self.next_frame.cursor_styles.len(),
             accessed_element_states_index: self.next_frame.accessed_element_states.len(),
@@ -2705,6 +2728,12 @@ impl Window {
         self.next_frame.mouse_listeners.extend(
             self.rendered_frame.mouse_listeners
                 [range.start.mouse_listeners_index..range.end.mouse_listeners_index]
+                .iter_mut()
+                .map(|listener| listener.take()),
+        );
+        self.next_frame.pointer_listeners.extend(
+            self.rendered_frame.pointer_listeners
+                [range.start.pointer_listeners_index..range.end.pointer_listeners_index]
                 .iter_mut()
                 .map(|listener| listener.take()),
         );
@@ -3966,6 +3995,26 @@ impl Window {
         )));
     }
 
+    /// Register a pointer event listener on the window for the next frame. The type of event
+    /// is determined by the first parameter of the given listener. When the next frame is rendered
+    /// the listener will be cleared.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn on_pointer_event<Event: PointerInputEvent>(
+        &mut self,
+        mut listener: impl FnMut(&Event, DispatchPhase, &mut Window, &mut App) + 'static,
+    ) {
+        self.invalidator.debug_assert_paint();
+
+        self.next_frame.pointer_listeners.push(Some(Box::new(
+            move |event: &dyn Any, phase: DispatchPhase, window: &mut Window, cx: &mut App| {
+                if let Some(event) = event.downcast_ref() {
+                    listener(event, phase, window, cx)
+                }
+            },
+        )));
+    }
+
     /// Register a key event listener on this node for the next frame. The type of event
     /// is determined by the first parameter of the given listener. When the next frame is rendered
     /// the listener will be cleared.
@@ -4113,6 +4162,11 @@ impl Window {
     /// Dispatch a mouse or keyboard event on the window.
     #[profiling::function]
     pub fn dispatch_event(&mut self, event: PlatformInput, cx: &mut App) -> DispatchEventResult {
+        let event = match event {
+            PlatformInput::Pointer(pointer) => return self.dispatch_pointer_event(pointer, cx),
+            event => event,
+        };
+
         // Track input modality for focus-visible styling and hover suppression.
         // Hover is suppressed during keyboard modality so that keyboard navigation
         // doesn't show hover highlights on the item under the mouse cursor.
@@ -4214,6 +4268,7 @@ impl Window {
                 }
             },
             PlatformInput::KeyDown(_) | PlatformInput::KeyUp(_) => event,
+            PlatformInput::Pointer(_) => unreachable!(),
         };
 
         if let Some(any_mouse_event) = event.mouse_event() {
@@ -4230,6 +4285,190 @@ impl Window {
             propagate: cx.propagate_event,
             default_prevented: self.default_prevented,
         }
+    }
+
+    fn dispatch_pointer_event(
+        &mut self,
+        event: PointerEvent,
+        cx: &mut App,
+    ) -> DispatchEventResult {
+        if event.source.is_hover_capable() {
+            return self.dispatch_hover_capable_pointer_event(event, cx);
+        }
+
+        let old_modality = self.last_input_modality;
+        self.last_input_modality = InputModality::Touch;
+        if self.last_input_modality != old_modality {
+            self.refresh();
+        }
+
+        self.modifiers = event.modifiers;
+        self.mouse_position = event.position;
+        cx.propagate_event = true;
+        self.default_prevented = false;
+
+        self.dispatch_pointer_listeners(&event, cx);
+        if !cx.propagate_event {
+            return DispatchEventResult {
+                propagate: cx.propagate_event,
+                default_prevented: self.default_prevented,
+            };
+        }
+
+        match event.phase {
+            PointerPhase::Down => {
+                let down_hit_test = self.rendered_frame.hit_test(event.position);
+                self.active_pointer = Some(ActivePointer {
+                    id: event.id,
+                    source: event.source,
+                    down_position: event.position,
+                    last_position: event.position,
+                    down_hit_test,
+                    tap_candidate: true,
+                    click_count: event.click_count.max(1),
+                });
+            }
+            PointerPhase::Move => {
+                if let Some(pointer) = self.active_pointer.as_mut()
+                    && pointer.id == event.id
+                {
+                    pointer.last_position = event.position;
+                    if (event.position - pointer.down_position).magnitude() > TOUCH_TAP_SLOP {
+                        pointer.tap_candidate = false;
+                    }
+                }
+            }
+            PointerPhase::Up => {
+                let pointer = self
+                    .active_pointer
+                    .take()
+                    .filter(|pointer| pointer.id == event.id);
+
+                if let Some(pointer) = pointer
+                    && pointer.source == PointerSource::Touch
+                    && pointer.tap_candidate
+                    && (event.position - pointer.down_position).magnitude() <= TOUCH_TAP_SLOP
+                {
+                    self.dispatch_touch_tap(pointer, event, cx);
+                }
+
+                self.clear_non_hover_pointer_state(cx);
+            }
+            PointerPhase::Cancel => {
+                self.active_pointer
+                    .take()
+                    .filter(|pointer| pointer.id == event.id);
+                self.clear_non_hover_pointer_state(cx);
+            }
+        }
+
+        if self.invalidator.is_dirty() {
+            self.input_rate_tracker.borrow_mut().record_input();
+        }
+
+        DispatchEventResult {
+            propagate: cx.propagate_event,
+            default_prevented: self.default_prevented,
+        }
+    }
+
+    fn dispatch_pointer_listeners(&mut self, event: &PointerEvent, cx: &mut App) {
+        let mut pointer_listeners = mem::take(&mut self.rendered_frame.pointer_listeners);
+
+        for listener in &mut pointer_listeners {
+            let listener = listener.as_mut().unwrap();
+            listener(event, DispatchPhase::Capture, self, cx);
+            if !cx.propagate_event {
+                break;
+            }
+        }
+
+        if cx.propagate_event {
+            for listener in pointer_listeners.iter_mut().rev() {
+                let listener = listener.as_mut().unwrap();
+                listener(event, DispatchPhase::Bubble, self, cx);
+                if !cx.propagate_event {
+                    break;
+                }
+            }
+        }
+
+        self.rendered_frame.pointer_listeners = pointer_listeners;
+    }
+
+    fn dispatch_hover_capable_pointer_event(
+        &mut self,
+        event: PointerEvent,
+        cx: &mut App,
+    ) -> DispatchEventResult {
+        match event.phase {
+            PointerPhase::Down => self.dispatch_event(
+                PlatformInput::MouseDown(MouseDownEvent {
+                    button: MouseButton::Left,
+                    position: event.position,
+                    modifiers: event.modifiers,
+                    click_count: event.click_count.max(1),
+                    first_mouse: false,
+                }),
+                cx,
+            ),
+            PointerPhase::Move => self.dispatch_event(
+                PlatformInput::MouseMove(MouseMoveEvent {
+                    position: event.position,
+                    pressed_button: self.active_pointer.as_ref().map(|_| MouseButton::Left),
+                    modifiers: event.modifiers,
+                }),
+                cx,
+            ),
+            PointerPhase::Up | PointerPhase::Cancel => self.dispatch_event(
+                PlatformInput::MouseUp(MouseUpEvent {
+                    button: MouseButton::Left,
+                    position: event.position,
+                    modifiers: event.modifiers,
+                    click_count: event.click_count.max(1),
+                }),
+                cx,
+            ),
+        }
+    }
+
+    fn dispatch_touch_tap(&mut self, pointer: ActivePointer, event: PointerEvent, cx: &mut App) {
+        let previous_mouse_position = self.mouse_position;
+        let previous_mouse_hit_test = self.mouse_hit_test.clone();
+
+        self.mouse_position = pointer.down_position;
+        self.mouse_hit_test = pointer.down_hit_test;
+
+        let mouse_down = MouseDownEvent {
+            button: MouseButton::Left,
+            position: pointer.down_position,
+            modifiers: event.modifiers,
+            click_count: pointer.click_count,
+            first_mouse: false,
+        };
+        cx.propagate_event = true;
+        self.default_prevented = false;
+        self.dispatch_mouse_event(&mouse_down, cx);
+
+        let mouse_up = MouseUpEvent {
+            button: MouseButton::Left,
+            position: pointer.down_position,
+            modifiers: event.modifiers,
+            click_count: pointer.click_count,
+        };
+        cx.propagate_event = true;
+        self.default_prevented = false;
+        self.dispatch_mouse_event(&mouse_up, cx);
+
+        self.mouse_position = previous_mouse_position;
+        self.mouse_hit_test = previous_mouse_hit_test;
+    }
+
+    fn clear_non_hover_pointer_state(&mut self, cx: &mut App) {
+        self.mouse_hit_test = HitTest::default();
+        self.captured_hitbox = None;
+        self.reset_cursor_style(cx);
+        self.refresh();
     }
 
     fn dispatch_mouse_event(&mut self, event: &dyn Any, cx: &mut App) {

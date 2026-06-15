@@ -782,6 +782,7 @@ impl IosWindow {
         let phase = touch_phase(touch);
         let tap_count = touch_tap_count(touch);
         let modifiers = self.modifiers.get();
+        let pointer_id = gpui::PointerId(touch as usize as u64);
 
         let logical_x: f32 = position.x.into();
         let logical_y: f32 = position.y.into();
@@ -808,15 +809,14 @@ impl IosWindow {
                     start_x: logical_x,
                     start_y: logical_y,
                 };
-                // Do NOT emit MouseDown here — wait until we know whether
-                // this is a tap or a scroll.  Emitting MouseDown immediately
-                // causes accidental navigation when the user starts scrolling
-                // near a button/tab.
-                //
-                // - Tap (finger lifts within slop) → emit MouseDown + MouseUp
-                //   together in Ended phase.
-                // - Scroll (finger exceeds slop) → emit only MouseMove +
-                //   ScrollWheel, no MouseDown.
+                emit(PlatformInput::Pointer(gpui::PointerEvent {
+                    id: pointer_id,
+                    source: gpui::PointerSource::Touch,
+                    phase: gpui::PointerPhase::Down,
+                    position,
+                    modifiers,
+                    click_count: (tap_count as usize).max(1),
+                }));
             }
 
             UITouchPhase::Moved => {
@@ -848,13 +848,13 @@ impl IosWindow {
                                 touch_phase: gpui::TouchPhase::Started,
                             }));
                         }
-                        // Always emit MouseMove so interactive screens can
-                        // track finger position (e.g. drag line in Animations,
-                        // gradient control in Shaders).
-                        emit(PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                        emit(PlatformInput::Pointer(gpui::PointerEvent {
+                            id: pointer_id,
+                            source: gpui::PointerSource::Touch,
+                            phase: gpui::PointerPhase::Move,
                             position,
                             modifiers,
-                            pressed_button: Some(gpui::MouseButton::Left),
+                            click_count: (tap_count as usize).max(1),
                         }));
                     }
                     TouchState::Scrolling { prev_x, prev_y } => {
@@ -874,11 +874,13 @@ impl IosWindow {
                             modifiers,
                             touch_phase: gpui::TouchPhase::Moved,
                         }));
-                        // MouseMove for interactive screens.
-                        emit(PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                        emit(PlatformInput::Pointer(gpui::PointerEvent {
+                            id: pointer_id,
+                            source: gpui::PointerSource::Touch,
+                            phase: gpui::PointerPhase::Move,
                             position,
                             modifiers,
-                            pressed_button: Some(gpui::MouseButton::Left),
+                            click_count: (tap_count as usize).max(1),
                         }));
                     }
                     TouchState::Idle => {
@@ -890,26 +892,8 @@ impl IosWindow {
             UITouchPhase::Ended | UITouchPhase::Cancelled => {
                 self.touch_pressed.set(false);
                 match ts {
-                    TouchState::Pending { start_x, start_y } => {
-                        // Finger lifted without exceeding slop → tap.
-                        // Emit MouseDown + MouseUp together at the original
-                        // down position so hit-testing matches the initial
-                        // touch point.
+                    TouchState::Pending { .. } => {
                         self.velocity_tracker.borrow_mut().reset();
-                        let tap_pos = gpui::point(gpui::px(start_x), gpui::px(start_y));
-                        emit(PlatformInput::MouseDown(gpui::MouseDownEvent {
-                            button: gpui::MouseButton::Left,
-                            position: tap_pos,
-                            modifiers,
-                            click_count: tap_count as usize,
-                            first_mouse: false,
-                        }));
-                        emit(PlatformInput::MouseUp(gpui::MouseUpEvent {
-                            button: gpui::MouseButton::Left,
-                            position: tap_pos,
-                            modifiers,
-                            click_count: tap_count as usize,
-                        }));
                     }
                     TouchState::Scrolling { prev_x, prev_y } => {
                         // End the active touch-scroll gesture.
@@ -924,15 +908,6 @@ impl IosWindow {
                             modifiers,
                             touch_phase: gpui::TouchPhase::Ended,
                         }));
-                        // Also emit MouseUp so interactive screens can
-                        // detect the end of a drag (e.g. fling a ball).
-                        emit(PlatformInput::MouseUp(gpui::MouseUpEvent {
-                            button: gpui::MouseButton::Left,
-                            position,
-                            modifiers,
-                            click_count: 1,
-                        }));
-
                         // ── Start momentum / inertia scrolling ───────────
                         // Compute release velocity from recent touch samples
                         // and kick off the momentum scroller.  Subsequent
@@ -947,6 +922,18 @@ impl IosWindow {
                     }
                     TouchState::Idle => {}
                 }
+                emit(PlatformInput::Pointer(gpui::PointerEvent {
+                    id: pointer_id,
+                    source: gpui::PointerSource::Touch,
+                    phase: if phase == UITouchPhase::Cancelled {
+                        gpui::PointerPhase::Cancel
+                    } else {
+                        gpui::PointerPhase::Up
+                    },
+                    position,
+                    modifiers,
+                    click_count: (tap_count as usize).max(1),
+                }));
                 ts = TouchState::Idle;
             }
 

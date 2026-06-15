@@ -17,6 +17,9 @@ pub trait KeyEvent: InputEvent {}
 /// A mouse event from the platform.
 pub trait MouseEvent: InputEvent {}
 
+/// A pointer event from a mouse, touch contact, or pen.
+pub trait PointerInputEvent: InputEvent {}
+
 /// A gesture event from the platform.
 pub trait GestureEvent: InputEvent {}
 
@@ -176,6 +179,71 @@ pub struct MouseClickEvent {
     /// The mouse event when the button was released.
     pub up: MouseUpEvent,
 }
+
+/// Stable identifier for an active pointer.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+pub struct PointerId(pub u64);
+
+/// The physical input source that produced a pointer event.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+pub enum PointerSource {
+    /// A hover-capable mouse pointer.
+    #[default]
+    Mouse,
+    /// A direct touch contact on a touch screen.
+    Touch,
+    /// A pen or stylus pointer.
+    Pen,
+}
+
+impl PointerSource {
+    /// Returns whether this source should drive persistent hover state.
+    pub fn is_hover_capable(self) -> bool {
+        match self {
+            PointerSource::Mouse | PointerSource::Pen => true,
+            PointerSource::Touch => false,
+        }
+    }
+}
+
+/// The lifecycle phase for a pointer event.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+pub enum PointerPhase {
+    /// The pointer was pressed or made contact.
+    Down,
+    /// The pointer moved.
+    #[default]
+    Move,
+    /// The pointer was released.
+    Up,
+    /// The pointer was cancelled by the platform.
+    Cancel,
+}
+
+/// A platform pointer event.
+#[derive(Clone, Debug, Default)]
+pub struct PointerEvent {
+    /// Stable id for the active pointer.
+    pub id: PointerId,
+    /// Input source.
+    pub source: PointerSource,
+    /// Lifecycle phase.
+    pub phase: PointerPhase,
+    /// Position in window coordinates.
+    pub position: Point<Pixels>,
+    /// Keyboard modifiers held during the event.
+    pub modifiers: Modifiers,
+    /// Platform click/tap count when available.
+    pub click_count: usize,
+}
+
+impl Sealed for PointerEvent {}
+impl InputEvent for PointerEvent {
+    fn to_platform_input(self) -> PlatformInput {
+        PlatformInput::Pointer(self)
+    }
+}
+impl PointerInputEvent for PointerEvent {}
 
 /// The stage of a pressure click event.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -670,6 +738,8 @@ pub enum PlatformInput {
     Pinch(PinchEvent),
     /// Files were dragged and dropped onto the window.
     FileDrop(FileDropEvent),
+    /// A pointer input event from mouse, touch, or pen.
+    Pointer(PointerEvent),
 }
 
 impl PlatformInput {
@@ -686,6 +756,7 @@ impl PlatformInput {
             PlatformInput::ScrollWheel(event) => Some(event),
             PlatformInput::Pinch(event) => Some(event),
             PlatformInput::FileDrop(event) => Some(event),
+            PlatformInput::Pointer(_) => None,
         }
     }
 
@@ -702,6 +773,7 @@ impl PlatformInput {
             PlatformInput::ScrollWheel(_) => None,
             PlatformInput::Pinch(_) => None,
             PlatformInput::FileDrop(_) => None,
+            PlatformInput::Pointer(_) => None,
         }
     }
 }
