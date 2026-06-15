@@ -39,5 +39,5 @@ android {
 }
 
 dependencies {
-    implementation("io.github.ray-d-song:raster-android:0.1.0-alpha.5")
+    implementation("io.github.ray-d-song:raster-android:0.1.0-alpha.8")
 }

@@ -24,8 +24,8 @@ importers:
   apps/showcase:
     dependencies:
       raster-js:
-        specifier: 0.1.0-alpha.5
-        version: 0.1.0-alpha.5
+        specifier: 0.1.0-alpha.8
+        version: link:../../packages/raster
       react:
         specifier: 19.2.6
         version: 19.2.6
@@ -34,14 +34,14 @@ importers:
         specifier: 19.2.15
         version: 19.2.15
       raster-cli:
-        specifier: 0.1.0-alpha.5
-        version: 0.1.0-alpha.5
+        specifier: 0.1.0-alpha.8
+        version: link:../../packages/cli
       typescript:
         specifier: 6.0.3
         version: 6.0.3
       unplugin-raster:
-        specifier: 0.1.0-alpha.5
-        version: 0.1.0-alpha.5(esbuild@0.28.0)(rolldown@1.0.2)(rollup@4.60.4)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.0))
+        specifier: 0.1.0-alpha.8
+        version: link:../../packages/unplugin-raster
       vite:
         specifier: 8.0.14
         version: 8.0.14(@types/node@25.9.1)(esbuild@0.28.0)
@@ -118,19 +118,19 @@ importers:
         version: 8.0.14(@types/node@25.9.1)(esbuild@0.28.0)
     optionalDependencies:
       raster-bin-darwin-arm64:
-        specifier: 0.1.0-alpha.5
-        version: 0.1.0-alpha.5
+        specifier: 0.1.0-alpha.8
+        version: link:../raster-bin-darwin-arm64
       raster-bin-darwin-x64:
-        specifier: 0.1.0-alpha.5
-        version: 0.1.0-alpha.5
+        specifier: 0.1.0-alpha.8
+        version: link:../raster-bin-darwin-x64
       raster-bin-linux-arm64:
-        specifier: 0.1.0-alpha.5
-        version: 0.1.0-alpha.5
+        specifier: 0.1.0-alpha.8
+        version: link:../raster-bin-linux-arm64
       raster-bin-linux-x64:
-        specifier: 0.1.0-alpha.5
-        version: 0.1.0-alpha.5
+        specifier: 0.1.0-alpha.8
+        version: link:../raster-bin-linux-x64
       raster-bin-win32-x64:
-        specifier: 0.1.0-alpha.5
+        specifier: 0.1.0-alpha.8
         version: link:../raster-bin-win32-x64
 
 packages:
@@ -1896,42 +1896,6 @@ packages:
   radix3@1.1.2:
     resolution: {integrity: sha512-b484I/7b8rDEdSDKckSSBA8knMpcdsXudlE/LNL639wFoHKwLbEkQFZHWEYwDC0wa0FKUcCY+GAF73Z7wxNVFA==}
 
-  raster-bin-darwin-arm64@0.1.0-alpha.5:
-    resolution: {integrity: sha512-4bl03txdls+1TQ1jmc/pjRE8eTmYw9OUcHdfpNI6bEWTSDFQzQTWeYkkCh/wZzfYlRm/DqiVwEGJTZo4oQQlaw==}
-    cpu: [arm64]
-    os: [darwin]
-    libc: [any]
-    hasBin: true
-
-  raster-bin-darwin-x64@0.1.0-alpha.5:
-    resolution: {integrity: sha512-S6FUFkRSxVICrm6QIVucfzPd50mkSrPbDgibrFzBE+JexcTdThayp+FepTET75wqdPDeOqzYVOltNvOwe/shbA==}
-    cpu: [x64]
-    os: [darwin]
-    libc: [any]
-    hasBin: true
-
-  raster-bin-linux-arm64@0.1.0-alpha.5:
-    resolution: {integrity: sha512-k80BgZa2+01lKy8Hdr4UN+0Bvo/kcC1MDxwww+k3Tkk1MgWTvRHzxOnVro+f7u3FHge3FZgVPlQG0R0K8JSekQ==}
-    cpu: [arm64]
-    os: [linux]
-    libc: [any]
-    hasBin: true
-
-  raster-bin-linux-x64@0.1.0-alpha.5:
-    resolution: {integrity: sha512-9d92dByKuvwKKF/pI26ZC7aw1bFrLVfSIJXGbLiVtWqqum8+kvYXU3NzebjBSYL8dvOEYOlY8lfBY80Jw+BpCw==}
-    cpu: [x64]
-    os: [linux]
-    libc: [any]
-    hasBin: true
-
-  raster-cli@0.1.0-alpha.5:
-    resolution: {integrity: sha512-sYtRPw6gaTqgqKl20nQqBoIeNNimAKH2q43tqom1RK7PtsQ7zkD30OY4ke89PKLHCMvb/oO/1EbUKLaATcIwVA==}
-    engines: {node: '>=18.0.0'}
-    hasBin: true
-
-  raster-js@0.1.0-alpha.5:
-    resolution: {integrity: sha512-0BqFwTdwzxDClqcmg7UXu1//IGzdqhuVmnu4OhM4+LfoQ3rLTSSdwFlQHnHRaXbHYvTTLR4E/NghXkjWEmrObg==}
-
   react-reconciler@0.33.0:
     resolution: {integrity: sha512-KetWRytFv1epdpJc3J4G75I4WrplZE5jOL7Yq0p34+OVOKF4Se7WrdIdVC45XsSSmUTlht2FM/fM1FZb1mfQeA==}
     engines: {node: '>=0.10.0'}
@@ -2176,23 +2140,6 @@ packages:
 
   unist-util-visit@5.1.0:
     resolution: {integrity: sha512-m+vIdyeCOpdr/QeQCu2EzxX/ohgS8KbnPDgFni4dQsfSCtpz8UqDyY5GjRru8PDKuYn7Fq19j1CQ+nJSsGKOzg==}
-
-  unplugin-raster@0.1.0-alpha.5:
-    resolution: {integrity: sha512-WVSZGvzaINkRiBgh29Gi4gmczidcwBBbZGjJRgKdAN7xZQxsqnC6h3BBRmHSiY7A29QBlfE3HkxaPRS+Cyex1w==}
-    peerDependencies:
-      esbuild: '>=0.28.0 <1'
-      rolldown: ^1.0.0
-      rollup: ^4.0.0
-      vite: ^8.0.0
-    peerDependenciesMeta:
-      esbuild:
-        optional: true
-      rolldown:
-        optional: true
-      rollup:
-        optional: true
-      vite:
-        optional: true
 
   unplugin@3.0.0:
     resolution: {integrity: sha512-0Mqk3AT2TZCXWKdcoaufeXNukv2mTrEZExeXlHIOZXdqYoHHr4n51pymnwV8x2BOVxwXbK2HLlI7usrqMpycdg==}
@@ -4432,25 +4379,6 @@ snapshots:
 
   radix3@1.1.2: {}
 
-  raster-bin-darwin-arm64@0.1.0-alpha.5:
-    optional: true
-
-  raster-bin-darwin-x64@0.1.0-alpha.5:
-    optional: true
-
-  raster-bin-linux-arm64@0.1.0-alpha.5:
-    optional: true
-
-  raster-bin-linux-x64@0.1.0-alpha.5:
-    optional: true
-
-  raster-cli@0.1.0-alpha.5: {}
-
-  raster-js@0.1.0-alpha.5:
-    dependencies:
-      react: 19.2.6
-      react-reconciler: 0.33.0(react@19.2.6)
-
   react-reconciler@0.33.0(react@19.2.6):
     dependencies:
       react: 19.2.6
@@ -4858,19 +4786,6 @@ snapshots:
       '@types/unist': 3.0.3
       unist-util-is: 6.0.1
       unist-util-visit-parents: 6.0.2
-
-  unplugin-raster@0.1.0-alpha.5(esbuild@0.28.0)(rolldown@1.0.2)(rollup@4.60.4)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.0)):
-    dependencies:
-      unplugin: 3.0.0
-    optionalDependencies:
-      esbuild: 0.28.0
-      raster-bin-darwin-arm64: 0.1.0-alpha.5
-      raster-bin-darwin-x64: 0.1.0-alpha.5
-      raster-bin-linux-arm64: 0.1.0-alpha.5
-      raster-bin-linux-x64: 0.1.0-alpha.5
-      rolldown: 1.0.2
-      rollup: 4.60.4
-      vite: 8.0.14(@types/node@25.9.1)(esbuild@0.28.0)
 
   unplugin@3.0.0:
     dependencies:

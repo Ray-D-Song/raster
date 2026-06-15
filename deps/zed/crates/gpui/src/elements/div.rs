@@ -2710,9 +2710,13 @@ impl Interactivity {
                     .group_active_style
                     .as_ref()
                     .and_then(|group_active| GroupHitboxes::get(&group_active.group, cx));
+                let active_state = active_state.clone();
                 let hitbox = hitbox.clone();
                 window.on_mouse_event(move |_: &MouseDownEvent, phase, window, _cx| {
-                    if phase == DispatchPhase::Bubble && !window.default_prevented() {
+                    if phase == DispatchPhase::Bubble
+                        && !window.default_prevented()
+                        && !window.last_input_was_touch()
+                    {
                         let group_hovered = active_group_hitbox
                             .is_some_and(|group_hitbox_id| group_hitbox_id.is_hovered(window));
                         let element_hovered = hitbox.is_hovered(window);
@@ -2722,6 +2726,42 @@ impl Interactivity {
                                 element: element_hovered,
                             };
                             window.refresh();
+                        }
+                    }
+                });
+            }
+
+            {
+                let active_state = active_state.clone();
+                let hitbox = hitbox.clone();
+                window.on_pointer_event(move |event: &PointerEvent, phase, window, _cx| {
+                    if event.source.is_hover_capable() || phase != DispatchPhase::Capture {
+                        return;
+                    }
+
+                    match event.phase {
+                        PointerPhase::Down => {
+                            if hitbox.bounds.contains(&event.position) {
+                                *active_state.borrow_mut() = ElementClickedState {
+                                    group: false,
+                                    element: true,
+                                };
+                                window.refresh();
+                            }
+                        }
+                        PointerPhase::Move => {
+                            if active_state.borrow().element
+                                && !hitbox.bounds.contains(&event.position)
+                            {
+                                *active_state.borrow_mut() = ElementClickedState::default();
+                                window.refresh();
+                            }
+                        }
+                        PointerPhase::Up | PointerPhase::Cancel => {
+                            if active_state.borrow().is_clicked() {
+                                *active_state.borrow_mut() = ElementClickedState::default();
+                                window.refresh();
+                            }
                         }
                     }
                 });

@@ -1,6 +1,6 @@
 {
   "name": "raster-js",
-  "version": "0.1.0-alpha.5",
+  "version": "0.1.0-alpha.8",
   "type": "module",
   "exports": {
     ".": {
