@@ -117,6 +117,11 @@ impl JsRuntime {
                             pending_reload =
                                 Some((path, Instant::now() + Duration::from_millis(50)));
                         }
+                        Ok(RuntimeCommand::ReloadAppBundleSource { name, source }) => {
+                            if let Err(error) = self.reload_app_bundle_source(name, source).await {
+                                logger::error(format!("failed to reload app bundle: {error}"));
+                            }
+                        }
                         Ok(command) => {
                             if let Err(error) = self.handle_runtime_command(command).await {
                                 logger::error(format!("failed to handle runtime command: {error}"));
@@ -233,16 +238,7 @@ impl JsRuntime {
             "js_runtime reload app bundle start: {}",
             path.display()
         ));
-        self.vm
-            .ctx
-            .with(|ctx| {
-                ctx.eval::<(), _>("globalThis.__rasterPrepareDevReload?.();")
-                    .catch(&ctx)
-                    .map_err(|error| {
-                        anyhow::anyhow!("failed to clear app before reload: {error:?}")
-                    })
-            })
-            .await?;
+        self.prepare_dev_reload().await?;
         let generation = self.reload_generation.fetch_add(1, Ordering::SeqCst) + 1;
         let name = format!("{}?reload={generation}", path.display());
         let source = std::fs::read_to_string(path).map_err(|error| {
@@ -253,6 +249,30 @@ impl JsRuntime {
             "js_runtime reload app bundle success: {}",
             path.display()
         ));
+        Ok(())
+    }
+
+    async fn reload_app_bundle_source(&self, name: String, source: String) -> anyhow::Result<()> {
+        logger::info(format!("js_runtime reload app bundle start: {name}"));
+        self.prepare_dev_reload().await?;
+        let generation = self.reload_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let reload_name = format!("{name}?reload={generation}");
+        self.eval_app_bundle_source(reload_name, source).await?;
+        logger::info(format!("js_runtime reload app bundle success: {name}"));
+        Ok(())
+    }
+
+    async fn prepare_dev_reload(&self) -> anyhow::Result<()> {
+        self.vm
+            .ctx
+            .with(|ctx| {
+                ctx.eval::<(), _>("globalThis.__rasterPrepareDevReload?.();")
+                    .catch(&ctx)
+                    .map_err(|error| {
+                        anyhow::anyhow!("failed to clear app before reload: {error:?}")
+                    })
+            })
+            .await?;
         Ok(())
     }
 
@@ -304,6 +324,9 @@ impl JsRuntime {
                 Ok(())
             }
             RuntimeCommand::ReloadAppBundle { path } => self.reload_app_bundle_path(&path).await,
+            RuntimeCommand::ReloadAppBundleSource { name, source } => {
+                self.reload_app_bundle_source(name, source).await
+            }
             RuntimeCommand::Shutdown => Ok(()),
         }
     }

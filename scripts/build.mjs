@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { access, chmod, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -190,6 +190,28 @@ const platforms = [
       },
     ],
   },
+  {
+    id: "android-arm64",
+    rustTarget: "aarch64-linux-android",
+    androidAbi: "arm64-v8a",
+    androidApi: "26",
+    androidJniLibsDir: "packages/raster-android/src/main/jniLibs",
+    androidLibrary: "arm64-v8a/libraster.so",
+    tools: [
+      {
+        command: "cargo-ndk",
+        install: {
+          default: ["cargo", ["install", "cargo-ndk"]],
+        },
+      },
+      {
+        command: "gradle",
+        install: {
+          darwin: brewFormula("gradle"),
+        },
+      },
+    ],
+  },
 ];
 
 function brewFormula(name) {
@@ -217,6 +239,8 @@ async function main(argv) {
   if (missing.length > 0) {
     throw new Error(`Unknown platform(s): ${missing.join(", ")}`);
   }
+
+  await run("pnpm", ["--dir", "packages/raster", "run", "build:runtime"]);
 
   for (const platform of selected) {
     validatePlatformHost(platform);
@@ -253,7 +277,7 @@ function parseArgs(argv) {
       args.cargoArgs.push(...argv.slice(index + 1));
       break;
     } else {
-      throw new Error(`Unknown build-all-platform argument: ${arg}`);
+      throw new Error(`Unknown build argument: ${arg}`);
     }
   }
 
@@ -316,13 +340,14 @@ async function ensurePlatformTools(selected) {
     }
 
     const install = tool.install[process.platform];
-    if (!install) {
+    const defaultInstall = tool.install.default;
+    if (!install && !defaultInstall) {
       throw new Error(
         `Missing required tool ${tool.command}, and no installer is configured for ${process.platform}`,
       );
     }
 
-    await runInstallStep(install, `Installing missing tool ${tool.command}`);
+    await runInstallStep(install ?? defaultInstall, `Installing missing tool ${tool.command}`);
     if (!(await commandExists(tool.command))) {
       throw new Error(`Installed ${tool.command}, but it is still not available in PATH`);
     }
@@ -376,6 +401,11 @@ function shellQuote(value) {
 
 async function buildPlatform(platform, args) {
   console.log(`Building ${platform.id} (${platform.rustTarget})`);
+  if (platform.androidAbi) {
+    await buildAndroidPlatform(platform, args);
+    return;
+  }
+
   const env = await targetBuildEnv(platform);
   const cargoArgs = [
     platform.rustcLinkArgs?.length ? "rustc" : "build",
@@ -411,6 +441,168 @@ async function buildPlatform(platform, args) {
     await chmod(destination, 0o755);
   }
   console.log(`Copied ${source} -> ${destination}`);
+}
+
+async function buildAndroidPlatform(platform, args) {
+  const outputDir = path.join(rootDir, platform.androidJniLibsDir);
+  const env = await androidBuildEnv();
+  await cleanAndroidCmakeCaches(platform);
+  await run("cargo", [
+    "ndk",
+    "-t",
+    platform.androidAbi,
+    "-P",
+    platform.androidApi,
+    "-o",
+    outputDir,
+    "build",
+    "--release",
+    "--lib",
+    ...args.cargoArgs,
+  ], { env });
+
+  const destination = path.join(outputDir, platform.androidLibrary);
+  await access(destination).catch(() => {
+    throw new Error(`cargo ndk did not produce expected Android library: ${destination}`);
+  });
+  await stripAndroidSharedLibraries(outputDir, env.ANDROID_NDK_HOME);
+  console.log(`Built Android library ${destination}`);
+
+  await run("gradle", ["-p", "packages/raster-android", ":raster-android:assembleRelease"], {
+    env,
+  });
+  const aarPath = path.join(
+    rootDir,
+    "packages/raster-android/raster-android/build/outputs/aar/raster-android-release.aar",
+  );
+  await access(aarPath).catch(() => {
+    throw new Error(`Gradle did not produce expected Android AAR: ${aarPath}`);
+  });
+  console.log(`Built Android AAR ${aarPath}`);
+}
+
+async function stripAndroidSharedLibraries(jniLibsDir, ndkRoot) {
+  const strip = await resolveAndroidLlvmTool(ndkRoot, "llvm-strip");
+  const libraries = await findFiles(jniLibsDir, (filePath) => filePath.endsWith(".so"));
+  for (const library of libraries) {
+    await run(strip, ["--strip-unneeded", library]);
+    await chmod(library, 0o755);
+    console.log(`Stripped Android library ${library}`);
+  }
+}
+
+async function resolveAndroidLlvmTool(ndkRoot, toolName) {
+  const prebuiltDir = path.join(ndkRoot, "toolchains", "llvm", "prebuilt");
+  const hosts = (await readdir(prebuiltDir, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+  for (const host of hosts) {
+    const toolPath = path.join(prebuiltDir, host, "bin", toolName);
+    try {
+      await access(toolPath);
+      return toolPath;
+    } catch {
+      // Try the next prebuilt host directory.
+    }
+  }
+  throw new Error(`Android NDK tool not found: ${toolName}`);
+}
+
+async function findFiles(directory, predicate) {
+  const results = [];
+  const entries = await readdir(directory, { withFileTypes: true });
+  for (const entry of entries) {
+    const filePath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      results.push(...await findFiles(filePath, predicate));
+    } else if (entry.isFile() && predicate(filePath)) {
+      results.push(filePath);
+    }
+  }
+  return results;
+}
+
+async function androidBuildEnv() {
+  const sdkRoot = await resolveAndroidSdkRoot();
+  const ndkRoot = await resolveAndroidNdkRoot(sdkRoot);
+  return {
+    ANDROID_HOME: sdkRoot,
+    ANDROID_SDK_ROOT: sdkRoot,
+    ANDROID_NDK_HOME: ndkRoot,
+    ANDROID_NDK_ROOT: ndkRoot,
+    CMAKE_ANDROID_NDK: ndkRoot,
+    CMAKE_GENERATOR: "Ninja",
+  };
+}
+
+async function cleanAndroidCmakeCaches(platform) {
+  const buildRoot = path.join(rootDir, "target", platform.rustTarget, "release", "build");
+  let entries;
+  try {
+    entries = await readdir(buildRoot, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const buildDirectory = path.join(buildRoot, entry.name, "out", "build");
+    try {
+      await access(path.join(buildDirectory, "CMakeCache.txt"));
+    } catch {
+      continue;
+    }
+    await rm(buildDirectory, { recursive: true, force: true });
+  }
+}
+
+async function resolveAndroidSdkRoot() {
+  const configured = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT;
+  if (configured) {
+    await access(configured);
+    return configured;
+  }
+
+  const defaultRoot = path.join(process.env.HOME ?? "", "Library", "Android", "sdk");
+  await access(defaultRoot).catch(() => {
+    throw new Error("Android SDK not found. Set ANDROID_HOME or ANDROID_SDK_ROOT.");
+  });
+  return defaultRoot;
+}
+
+async function resolveAndroidNdkRoot(sdkRoot) {
+  const configured = process.env.ANDROID_NDK_HOME || process.env.ANDROID_NDK_ROOT;
+  if (configured) {
+    await access(configured);
+    return configured;
+  }
+
+  const ndkDirectory = path.join(sdkRoot, "ndk");
+  const versions = (await readdir(ndkDirectory, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort(compareVersionNames);
+  const version = versions.at(-1);
+  if (!version) {
+    throw new Error(`Android NDK not found under ${ndkDirectory}`);
+  }
+  return path.join(ndkDirectory, version);
+}
+
+function compareVersionNames(left, right) {
+  const leftParts = left.split(".").map((part) => Number(part));
+  const rightParts = right.split(".").map((part) => Number(part));
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index += 1) {
+    const diff = (leftParts[index] || 0) - (rightParts[index] || 0);
+    if (diff !== 0) {
+      return diff;
+    }
+  }
+  return left.localeCompare(right);
 }
 
 async function writeBinaryPackageManifest(platform) {

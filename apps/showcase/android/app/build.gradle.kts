@@ -13,10 +13,6 @@ android {
         versionCode = 1
         versionName = "0.1.0"
 
-        ndk {
-            abiFilters += listOf("arm64-v8a")
-        }
-
         manifestPlaceholders["nativeLibraryName"] = "raster"
     }
 
@@ -36,14 +32,12 @@ android {
 
     sourceSets {
         getByName("main") {
-            jniLibs.srcDirs("src/main/jniLibs")
             assets.srcDirs("src/main/assets")
         }
     }
 
-    packaging {
-        jniLibs {
-            keepDebugSymbols += listOf("*/arm64-v8a/libraster.so")
-        }
-    }
+}
+
+dependencies {
+    implementation("io.github.ray-d-song:raster-android:0.1.0-alpha.5")
 }

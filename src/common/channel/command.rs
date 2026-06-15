@@ -23,6 +23,10 @@ pub enum RuntimeCommand {
     ReloadAppBundle {
         path: PathBuf,
     },
+    ReloadAppBundleSource {
+        name: String,
+        source: String,
+    },
     Shutdown,
 }
 

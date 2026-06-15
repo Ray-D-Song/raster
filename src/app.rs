@@ -1,11 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use crate::{
-    common::{channel::RuntimeCommand, utils::logger},
-    js_runtime::host::NativeBindingState,
-};
 #[cfg(not(target_os = "android"))]
 use crate::gpui_backend;
+use crate::{common::channel::RuntimeCommand, js_runtime::host::NativeBindingState};
 
 pub enum RasterBundle {
     Path(PathBuf),
@@ -38,9 +35,6 @@ pub async fn prepare_raster_app(options: &RasterRunOptions) -> anyhow::Result<Pr
             }
         }
         RasterBundle::Source { name, source } => {
-            if options.dev_mode {
-                logger::warn("dev reload is ignored for in-memory Raster bundles");
-            }
             js_runtime
                 .eval_app_bundle_source(name, source.clone())
                 .await?;

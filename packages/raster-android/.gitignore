@@ -1,0 +1,4 @@
+/.gradle/
+/build/
+/raster-android/build/
+/src/main/jniLibs/

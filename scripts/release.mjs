@@ -68,6 +68,7 @@ const allTargets = [...binaryTargets, ...jsTargets];
 const versionedPackages = [...jsTargets, ...binaryTargets].map((item) => item.packageDir);
 const consumerPackages = ["apps/showcase", "packages/cli/templates/default"];
 const targetAliases = buildTargetAliases(allTargets);
+const androidGradleConsumers = ["packages/cli/templates/platforms/android/app/build.gradle.kts"];
 
 async function main(argv) {
   const args = parseArgs(argv);
@@ -289,8 +290,23 @@ async function syncVersions(version) {
     packageJson.dependencies = packageJson.dependencies ?? {};
     packageJson.devDependencies = packageJson.devDependencies ?? {};
     packageJson.dependencies["raster-js"] = version;
+    packageJson.devDependencies["raster-cli"] = version;
     packageJson.devDependencies["unplugin-raster"] = version;
     await writeJson(packagePath, packageJson);
+  }
+
+  for (const relativePath of androidGradleConsumers) {
+    const gradlePath = path.join(rootDir, relativePath);
+    const source = await readFile(gradlePath, "utf8");
+    const dependencyPattern = /implementation\("io\.github\.ray-d-song:raster-android:[^"]+"\)/;
+    if (!dependencyPattern.test(source)) {
+      throw new Error(`${relativePath} does not contain io.github.ray-d-song:raster-android dependency`);
+    }
+    const next = source.replace(
+      dependencyPattern,
+      `implementation("io.github.ray-d-song:raster-android:${version}")`,
+    );
+    await writeFile(gradlePath, next);
   }
 }
 
