@@ -1,0 +1,13 @@
+#!/bin/bash
+set -e
+
+target=$1
+shift
+
+new_array=()
+for value in "$@"
+do
+    [[ $value != *self-contained/*crt* ]] && [[ $value != *lgcc_s* ]] && new_array+=($value)
+done
+
+zig c++ "${new_array[@]}" -target $target

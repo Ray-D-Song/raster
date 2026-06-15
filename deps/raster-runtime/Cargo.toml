@@ -1,0 +1,61 @@
+[workspace]
+resolver = "2"
+
+members = [
+  "libs/raster_runtime_build",
+  "libs/raster_runtime_compression",
+  "libs/raster_runtime_context",
+  "libs/raster_runtime_encoding",
+  "libs/raster_runtime_json",
+  "libs/raster_runtime_numbers",
+  "libs/raster_runtime_test",
+  "libs/raster_runtime_test_tls",
+  "libs/raster_runtime_utils",
+  "modules/raster_runtime_abort",
+  "modules/raster_runtime_async_hooks",
+  "modules/raster_runtime_buffer",
+  "modules/raster_runtime_child_process",
+  "modules/raster_runtime_console",
+  "modules/raster_runtime_crypto",
+  "modules/raster_runtime_dgram",
+  "modules/raster_runtime_events",
+  "modules/raster_runtime_exceptions",
+  "modules/raster_runtime_fetch",
+  "modules/raster_runtime_fs",
+  "modules/raster_runtime_http",
+  "modules/raster_runtime_intl",
+  "modules/raster_runtime_navigator",
+  "modules/raster_runtime_net",
+  "modules/raster_runtime_os",
+  "modules/raster_runtime_path",
+  "modules/raster_runtime_perf_hooks",
+  "modules/raster_runtime_process",
+  "modules/raster_runtime_stream",
+  "modules/raster_runtime_stream_web",
+  "modules/raster_runtime_string_decoder",
+  "modules/raster_runtime_temporal",
+  "modules/raster_runtime_timers",
+  "modules/raster_runtime_tls",
+  "modules/raster_runtime_tty",
+  "modules/raster_runtime_url",
+  "modules/raster_runtime_util",
+  "modules/raster_runtime_zlib",
+  "raster_runtime_modules",
+  "raster_runtime_core",
+  "raster_runtime",
+]
+
+[profile.flame]
+inherits = "release"
+strip = false
+debug = true
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+opt-level = 3
+panic = "abort"
+
+[profile.test]
+opt-level = 3

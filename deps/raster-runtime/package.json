@@ -1,0 +1,38 @@
+{
+  "workspaces": [
+    "./example/*"
+  ],
+  "license": "Apache-2.0",
+  "version": "0.5.1-beta",
+  "type": "module",
+  "private": true,
+  "prettier": {
+    "trailingComma": "es5",
+    "singleQuote": false
+  },
+  "scripts": {
+    "esbuild": "esbuild",
+    "update": "yarn upgrade-interactive --latest",
+    "reinstall": "rm -rf yarn.lock && rm -rf node_modules && yarn",
+    "test": "make test"
+  },
+  "side-effects": false,
+  "devDependencies": {
+    "@jest/types": "30.3.0",
+    "@types/chai": "5.2.3",
+    "@types/jest": "30.0.0",
+    "@types/readable-stream": "4.0.23",
+    "esbuild": "0.28.0",
+    "esbuild-plugins-node-modules-polyfill": "1.8.1",
+    "prettier": "3.8.3",
+    "pretty-format": "30.3.0",
+    "pretty-quick": "4.2.2",
+    "pure-http": "4.0.2",
+    "readable-stream": "4.7.0",
+    "stream-browserify": "3.0.0",
+    "ts-node": "10.9.2",
+    "typescript": "6.0.3",
+    "vitest": "4.1.5"
+  },
+  "packageManager": "yarn@1.22.22"
+}

@@ -23,5 +23,7 @@ This directory contains source snapshots that Raster patches directly.
 
 ## raster-runtime
 
-- Upstream: Raster-maintained runtime source dependency.
+- Upstream: https://github.com/Ray-D-Song/raster_runtime
+- Commit: `54fdc3cec4d2dcd49dc4baa1977961b81401ab75`
 - Used for: embedded JavaScript runtime crates.
+- Update process: apply upstream changes into this directory as normal source changes. Do not restore nested `.git` metadata.

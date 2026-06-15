@@ -1,0 +1,37 @@
+[package]
+name = "raster_runtime_zlib"
+description = "raster_runtime Module zlib"
+version = "0.8.1-beta"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/ray-d-song/raster_runtime"
+readme = "README.md"
+
+[lib]
+name = "raster_runtime_zlib"
+path = "src/lib.rs"
+
+[features]
+default = ["compression-c"]
+
+compression-c = [
+  "raster_runtime_compression/brotli-c",
+  "raster_runtime_compression/flate2-c",
+  "raster_runtime_compression/zstd-c",
+]
+
+compression-rust = [
+  "raster_runtime_compression/brotli-rust",
+  "raster_runtime_compression/flate2-rust",
+  "raster_runtime_compression/zstd-rust",
+]
+
+[dependencies]
+raster_runtime_buffer = { version = "0.8.1-beta", path = "../raster_runtime_buffer" }
+raster_runtime_compression = { version = "0.8.1-beta", path = "../../libs/raster_runtime_compression", default-features = false }
+raster_runtime_context = { version = "0.8.1-beta", path = "../../libs/raster_runtime_context" }
+raster_runtime_utils = { version = "0.8.1-beta", path = "../../libs/raster_runtime_utils", default-features = false }
+rquickjs = { version = "0.11", git = "https://github.com/DelSkayn/rquickjs", features = ["std"], default-features = false }
+
+[dev-dependencies]
+raster_runtime_test = { path = "../../libs/raster_runtime_test" }
