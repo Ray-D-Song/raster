@@ -96,18 +96,21 @@ const platforms = [
     id: "ios-arm64-device",
     rustTarget: "aarch64-apple-ios",
     iosLibrary: "libraster.a",
+    iosDeploymentTarget: "15.0",
     tools: [],
   },
   {
     id: "ios-arm64-simulator",
     rustTarget: "aarch64-apple-ios-sim",
     iosLibrary: "libraster.a",
+    iosDeploymentTarget: "15.0",
     tools: [],
   },
   {
     id: "ios-x64-simulator",
     rustTarget: "x86_64-apple-ios",
     iosLibrary: "libraster.a",
+    iosDeploymentTarget: "15.0",
     tools: [],
   },
   {
@@ -341,7 +344,7 @@ function shellQuote(value) {
 }
 
 async function buildPlatform(platform, args) {
-  console.log(`Building ${platform.id} (${platform.rustTarget})`);
+  console.log(`Building ${platform.id} (${(platform.rustTargets ?? [platform.rustTarget]).filter(Boolean).join(",")})`);
   if (platform.iosXcframework) {
     await buildIosXcframework(args);
     return;
@@ -709,6 +712,12 @@ async function targetBuildEnv(platform) {
     env[`CMAKE_TOOLCHAIN_FILE_${target}`] = toolchainFile;
     env.TARGET_CMAKE_TOOLCHAIN_FILE = toolchainFile;
     env.CMAKE_TOOLCHAIN_FILE = toolchainFile;
+  }
+  if (platform.iosDeploymentTarget) {
+    env.IPHONEOS_DEPLOYMENT_TARGET = platform.iosDeploymentTarget;
+    env[`CMAKE_OSX_DEPLOYMENT_TARGET_${target}`] = platform.iosDeploymentTarget;
+    env.TARGET_CMAKE_OSX_DEPLOYMENT_TARGET = platform.iosDeploymentTarget;
+    env.CMAKE_OSX_DEPLOYMENT_TARGET = platform.iosDeploymentTarget;
   }
   return env;
 }
