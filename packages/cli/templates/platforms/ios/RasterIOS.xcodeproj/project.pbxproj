@@ -346,7 +346,7 @@
 			repositoryURL = "https://github.com/Ray-D-Song/raster";
 			requirement = {
 				kind = exactVersion;
-				version = "0.1.0-alpha.10";
+				version = "0.1.0-alpha.11";
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */

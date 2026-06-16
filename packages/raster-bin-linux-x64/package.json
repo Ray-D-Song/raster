@@ -1,6 +1,6 @@
 {
   "name": "raster-bin-linux-x64",
-  "version": "0.1.0-alpha.10",
+  "version": "0.1.0-alpha.11",
   "bin": {
     "raster": "bin/raster"
   },

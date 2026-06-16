@@ -1,6 +1,6 @@
 {
   "name": "unplugin-raster",
-  "version": "0.1.0-alpha.10",
+  "version": "0.1.0-alpha.11",
   "type": "module",
   "exports": {
     ".": {
@@ -37,11 +37,11 @@
     "unplugin": "3.0.0"
   },
   "optionalDependencies": {
-    "raster-bin-darwin-arm64": "0.1.0-alpha.10",
-    "raster-bin-darwin-x64": "0.1.0-alpha.10",
-    "raster-bin-linux-arm64": "0.1.0-alpha.10",
-    "raster-bin-linux-x64": "0.1.0-alpha.10",
-    "raster-bin-win32-x64": "0.1.0-alpha.10"
+    "raster-bin-darwin-arm64": "0.1.0-alpha.11",
+    "raster-bin-darwin-x64": "0.1.0-alpha.11",
+    "raster-bin-linux-arm64": "0.1.0-alpha.11",
+    "raster-bin-linux-x64": "0.1.0-alpha.11",
+    "raster-bin-win32-x64": "0.1.0-alpha.11"
   },
   "peerDependencies": {
     "esbuild": ">=0.28.0 <1",
