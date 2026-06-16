@@ -19,7 +19,13 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
   RUSTC_WRAPPER: sccache
-  SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_BUCKET: ${{ secrets.SCCACHE_R2_BUCKET }}
+  SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_R2_ENDPOINT }}
+  SCCACHE_REGION: auto
+  SCCACHE_S3_USE_SSL: "true"
+  SCCACHE_S3_KEY_PREFIX: raster/
+  AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_SECRET_ACCESS_KEY }}
 
 jobs:
   prepare:
@@ -275,10 +281,6 @@ jobs:
         with:
           name: raster-bin-win32-x64
           path: packages/raster-bin-win32-x64
-      - uses: actions/download-artifact@v4
-        with:
-          name: raster-bin-win32-arm64
-          path: packages/raster-bin-win32-arm64
 
       - name: Restore executable permissions
         run: chmod +x packages/raster-bin-*/bin/raster

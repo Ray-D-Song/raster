@@ -41,7 +41,6 @@
     "raster-bin-darwin-x64": "0.1.0-alpha.9",
     "raster-bin-linux-arm64": "0.1.0-alpha.9",
     "raster-bin-linux-x64": "0.1.0-alpha.9",
-    "raster-bin-win32-arm64": "0.1.0-alpha.9",
     "raster-bin-win32-x64": "0.1.0-alpha.9"
   },
   "peerDependencies": {

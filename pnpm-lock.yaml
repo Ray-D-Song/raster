@@ -131,9 +131,6 @@ importers:
       raster-bin-linux-x64:
         specifier: 0.1.0-alpha.9
         version: link:../raster-bin-linux-x64
-      raster-bin-win32-arm64:
-        specifier: 0.1.0-alpha.9
-        version: link:../raster-bin-win32-arm64
       raster-bin-win32-x64:
         specifier: 0.1.0-alpha.9
         version: link:../raster-bin-win32-x64

@@ -12,7 +12,6 @@ const PLATFORM_PACKAGES: Record<string, string> = {
   "darwin-x64": "raster-bin-darwin-x64",
   "linux-arm64": "raster-bin-linux-arm64",
   "linux-x64": "raster-bin-linux-x64",
-  "win32-arm64": "raster-bin-win32-arm64",
   "win32-x64": "raster-bin-win32-x64",
 };
 
