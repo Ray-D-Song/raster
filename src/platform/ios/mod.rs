@@ -18,14 +18,26 @@ use crate::{
     gpui_backend,
 };
 
-const IOS_DEV_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const IOS_DEV_HTTP_TIMEOUT: Duration = Duration::from_millis(800);
+const IOS_DEV_SSE_RECONNECT_INTERVAL: Duration = Duration::from_millis(500);
+const IOS_DEV_SSE_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 static LAST_ERROR: OnceLock<Mutex<Option<CString>>> = OnceLock::new();
 
 #[derive(Debug)]
 struct IosDevConfig {
     urls: Vec<String>,
+}
+
+#[derive(Debug)]
+struct BundleEvent {
+    version: String,
+    url: String,
+}
+
+struct HttpStream {
+    stream: TcpStream,
+    initial_body: String,
 }
 
 #[unsafe(no_mangle)]
@@ -187,57 +199,71 @@ fn start_dev_server_reloader(
     std::thread::spawn(move || {
         let mut last_version = None;
         loop {
-            std::thread::sleep(IOS_DEV_POLL_INTERVAL);
-            let Some((bundle_url, version)) = fetch_first_dev_version(&dev_urls) else {
+            for dev_url in &dev_urls {
+                match listen_for_bundle_events(dev_url, &mut last_version, &sender) {
+                    Ok(()) => {
+                        logger::warn("iOS dev event stream closed");
+                    }
+                    Err(error) => {
+                        logger::warn(format!("iOS dev event stream failed: {error:#}"));
+                    }
+                }
+                std::thread::sleep(IOS_DEV_SSE_RECONNECT_INTERVAL);
+            }
+        }
+    });
+}
+
+fn listen_for_bundle_events(
+    bundle_url: &str,
+    last_version: &mut Option<String>,
+    sender: &crate::common::channel::ChannelSender<RuntimeCommand>,
+) -> anyhow::Result<()> {
+    let events_url = dev_events_url(bundle_url)?;
+    let mut http_stream = http_get_stream(&events_url, IOS_DEV_HTTP_TIMEOUT)?;
+    let mut stream = http_stream.stream;
+    stream.set_read_timeout(Some(IOS_DEV_SSE_READ_TIMEOUT))?;
+
+    let mut pending = std::mem::take(&mut http_stream.initial_body);
+    let mut read_buf = [0_u8; 4096];
+    loop {
+        while let Some(raw_event) = take_sse_event(&mut pending) {
+            let Some(event) = parse_bundle_event(&raw_event)? else {
                 continue;
             };
-            if last_version.as_ref() == Some(&version) {
+            if last_version.as_ref() == Some(&event.version) {
                 continue;
             }
 
-            match http_get_text(&bundle_url, IOS_DEV_HTTP_TIMEOUT) {
+            let reload_url = resolve_dev_url(bundle_url, &event.url)?;
+            match http_get_text(&reload_url, IOS_DEV_HTTP_TIMEOUT) {
                 Ok(source) => {
                     let command = RuntimeCommand::ReloadAppBundleSource {
-                        name: bundle_url,
+                        name: reload_url,
                         source,
                     };
-                    if RuntimeCommandQueue::enqueue(&sender, command).is_err() {
-                        break;
+                    if RuntimeCommandQueue::enqueue(sender, command).is_err() {
+                        return Ok(());
                     }
-                    last_version = Some(version);
+                    *last_version = Some(event.version);
                 }
                 Err(error) => {
                     logger::warn(format!("failed to fetch iOS dev bundle reload: {error:#}"));
                 }
             }
         }
-    });
-}
 
-fn fetch_first_dev_version(dev_urls: &[String]) -> Option<(String, String)> {
-    for url in dev_urls {
-        let version_url = match dev_version_url(url) {
-            Ok(version_url) => version_url,
-            Err(error) => {
-                logger::warn(format!("invalid iOS dev URL {url}: {error:#}"));
-                continue;
-            }
-        };
-        match http_get_text(&version_url, IOS_DEV_HTTP_TIMEOUT) {
-            Ok(version) => return Some((url.clone(), version)),
-            Err(error) => {
-                logger::warn(format!(
-                    "failed to poll iOS dev bundle version {version_url}: {error:#}"
-                ));
-            }
+        let read = stream.read(&mut read_buf)?;
+        if read == 0 {
+            return Ok(());
         }
+        pending.push_str(std::str::from_utf8(&read_buf[..read])?);
     }
-    None
 }
 
-fn dev_version_url(bundle_url: &str) -> anyhow::Result<String> {
+fn dev_events_url(bundle_url: &str) -> anyhow::Result<String> {
     let parsed = parse_http_url(bundle_url)?;
-    Ok(format!("http://{}:{}/version", parsed.host, parsed.port))
+    Ok(format!("http://{}:{}/events", parsed.host, parsed.port))
 }
 
 fn http_get_text(url: &str, timeout: Duration) -> anyhow::Result<String> {
@@ -258,6 +284,120 @@ fn http_get_text(url: &str, timeout: Duration) -> anyhow::Result<String> {
     let mut response = Vec::new();
     stream.read_to_end(&mut response)?;
     parse_http_text_response(url, &response)
+}
+
+fn http_get_stream(url: &str, timeout: Duration) -> anyhow::Result<HttpStream> {
+    let parsed = parse_http_url(url)?;
+    let address = (parsed.host.as_str(), parsed.port)
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("failed to resolve {}", parsed.host))?;
+    let mut stream = TcpStream::connect_timeout(&address, timeout)?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(timeout))?;
+    let request = format!(
+        "GET {} HTTP/1.1\r\nHost: {}:{}\r\nAccept: text/event-stream\r\nConnection: keep-alive\r\n\r\n",
+        parsed.path, parsed.host, parsed.port
+    );
+    stream.write_all(request.as_bytes())?;
+
+    let mut response = Vec::new();
+    let mut buffer = [0_u8; 1024];
+    loop {
+        let read = stream.read(&mut buffer)?;
+        if read == 0 {
+            anyhow::bail!("HTTP stream closed before headers from {url}");
+        }
+        response.extend_from_slice(&buffer[..read]);
+        if let Some(header_end) = response.windows(4).position(|window| window == b"\r\n\r\n") {
+            let headers = std::str::from_utf8(&response[..header_end])
+                .map_err(|error| anyhow::anyhow!("invalid HTTP headers from {url}: {error}"))?;
+            let status_line = headers
+                .lines()
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("missing HTTP status from {url}"))?;
+            if !status_line.contains(" 200 ") {
+                anyhow::bail!("HTTP request failed for {url}: {status_line}");
+            }
+            let initial_body = std::str::from_utf8(&response[header_end + 4..])
+                .map_err(|error| anyhow::anyhow!("invalid HTTP stream body from {url}: {error}"))?
+                .to_owned();
+            return Ok(HttpStream {
+                stream,
+                initial_body,
+            });
+        }
+    }
+}
+
+fn take_sse_event(pending: &mut String) -> Option<String> {
+    let normalized = pending.replace("\r\n", "\n");
+    let event_end = normalized.find("\n\n")?;
+    let event = normalized[..event_end].to_owned();
+    *pending = normalized[event_end + 2..].to_owned();
+    Some(event)
+}
+
+fn parse_bundle_event(raw_event: &str) -> anyhow::Result<Option<BundleEvent>> {
+    let mut event_type = "message";
+    let mut data = String::new();
+    for line in raw_event.lines() {
+        if line.is_empty() || line.starts_with(':') {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("event:") {
+            event_type = value.trim();
+        } else if let Some(value) = line.strip_prefix("data:") {
+            if !data.is_empty() {
+                data.push('\n');
+            }
+            data.push_str(value.trim_start());
+        }
+    }
+    if event_type != "bundle" || data.is_empty() {
+        return Ok(None);
+    }
+    let value: serde_json::Value = serde_json::from_str(&data)
+        .map_err(|error| anyhow::anyhow!("invalid iOS bundle event: {error}"))?;
+    let version = value
+        .get("version")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("iOS bundle event missing version"))?
+        .to_owned();
+    let url = value
+        .get("url")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("iOS bundle event missing url"))?
+        .to_owned();
+    Ok(Some(BundleEvent { version, url }))
+}
+
+fn resolve_dev_url(base_url: &str, event_url: &str) -> anyhow::Result<String> {
+    if event_url.starts_with("http://") {
+        return Ok(event_url.to_owned());
+    }
+    let parsed = parse_http_url(base_url)?;
+    if event_url.starts_with('/') {
+        return Ok(format!(
+            "http://{}:{}{}",
+            parsed.host, parsed.port, event_url
+        ));
+    }
+    let directory = parsed
+        .path
+        .rsplit_once('/')
+        .map(
+            |(directory, _)| {
+                if directory.is_empty() { "/" } else { directory }
+            },
+        )
+        .unwrap_or("/");
+    let path = if directory == "/" {
+        format!("/{event_url}")
+    } else {
+        format!("{}/{}", directory.trim_end_matches('/'), event_url)
+    };
+    Ok(format!("http://{}:{}{}", parsed.host, parsed.port, path))
 }
 
 fn parse_http_text_response(url: &str, response: &[u8]) -> anyhow::Result<String> {

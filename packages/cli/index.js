@@ -202,8 +202,9 @@ async function runMobileDevServer({
   await writeDevConfig();
   const bundlePath = path.join(projectRoot, "target", "raster", "app.js");
   const sourceMapPath = `${bundlePath}.map`;
-  const server = createMobileDevServer({ bundlePath, sourceMapPath });
-  await listen(server, port);
+  const devServer = createMobileDevServer({ bundlePath, sourceMapPath });
+  await listen(devServer.server, port);
+  devServer.start();
 
   console.log(`Raster ${platformName} dev server listening on http://127.0.0.1:${port}`);
   console.log(`Bundle endpoint: http://127.0.0.1:${port}/app.js`);
@@ -222,7 +223,7 @@ async function runMobileDevServer({
   });
 
   const shutdown = () => {
-    server.close();
+    devServer.close();
     if (!vite.killed) {
       vite.kill("SIGTERM");
     }
@@ -233,7 +234,7 @@ async function runMobileDevServer({
   await new Promise((resolve, reject) => {
     vite.on("error", reject);
     vite.on("exit", (code, signal) => {
-      server.close();
+      devServer.close();
       if (code === 0 || signal === "SIGTERM" || signal === "SIGINT") {
         resolve();
       } else {
@@ -466,7 +467,47 @@ function platformScriptNames(platform) {
 }
 
 function createMobileDevServer({ bundlePath, sourceMapPath }) {
-  return http.createServer(async (request, response) => {
+  const clients = new Set();
+  let currentBundleEvent = null;
+  let currentBundleSignature = null;
+  let bundleWatchTimer = null;
+
+  const sendBundleEvent = (response, event) => {
+    response.write(`event: bundle\n`);
+    response.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
+
+  const broadcastBundleEvent = (event) => {
+    for (const response of clients) {
+      sendBundleEvent(response, event);
+    }
+  };
+
+  const refreshBundleVersion = async () => {
+    try {
+      const stat = await fs.stat(bundlePath);
+      if (!stat.isFile()) {
+        return;
+      }
+      const signature = `${stat.mtimeMs}:${stat.size}`;
+      if (signature === currentBundleSignature) {
+        return;
+      }
+      const body = await fs.readFile(bundlePath);
+      currentBundleSignature = signature;
+      currentBundleEvent = {
+        version: crypto.createHash("sha256").update(body).digest("hex"),
+        url: "/app.js",
+      };
+      broadcastBundleEvent(currentBundleEvent);
+    } catch (error) {
+      if (error?.code !== "ENOENT") {
+        console.warn(`Failed to read Raster bundle version: ${error.message}`);
+      }
+    }
+  };
+
+  const server = http.createServer(async (request, response) => {
     try {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       if (url.pathname === "/app.js") {
@@ -477,8 +518,22 @@ function createMobileDevServer({ bundlePath, sourceMapPath }) {
         await sendFile(response, sourceMapPath, "application/json; charset=utf-8");
         return;
       }
-      if (url.pathname === "/version") {
-        await sendBundleVersion(response, bundlePath);
+      if (url.pathname === "/events") {
+        response.useChunkedEncodingByDefault = false;
+        response.writeHead(200, {
+          "cache-control": "no-cache, no-store",
+          "connection": "keep-alive",
+          "content-type": "text/event-stream; charset=utf-8",
+          "x-accel-buffering": "no",
+        });
+        response.write("retry: 1000\n\n");
+        clients.add(response);
+        if (currentBundleEvent) {
+          sendBundleEvent(response, currentBundleEvent);
+        }
+        request.on("close", () => {
+          clients.delete(response);
+        });
         return;
       }
 
@@ -489,6 +544,27 @@ function createMobileDevServer({ bundlePath, sourceMapPath }) {
       response.end(error instanceof Error ? error.message : String(error));
     }
   });
+
+  return {
+    server,
+    start() {
+      void refreshBundleVersion();
+      bundleWatchTimer = setInterval(() => {
+        void refreshBundleVersion();
+      }, 250);
+    },
+    close() {
+      if (bundleWatchTimer) {
+        clearInterval(bundleWatchTimer);
+        bundleWatchTimer = null;
+      }
+      for (const response of clients) {
+        response.end();
+      }
+      clients.clear();
+      server.close();
+    },
+  };
 }
 
 async function sendFile(response, filePath, contentType) {
@@ -505,27 +581,6 @@ async function sendFile(response, filePath, contentType) {
     if (error?.code === "ENOENT") {
       response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
       response.end(`Bundle has not been built yet: ${filePath}`);
-      return;
-    }
-    throw error;
-  }
-}
-
-async function sendBundleVersion(response, bundlePath) {
-  try {
-    const body = await fs.readFile(bundlePath);
-    const hash = crypto.createHash("sha256").update(body).digest("hex");
-    response.writeHead(200, {
-      "cache-control": "no-store",
-      "connection": "close",
-      "content-length": String(Buffer.byteLength(hash)),
-      "content-type": "text/plain; charset=utf-8",
-    });
-    response.end(hash);
-  } catch (error) {
-    if (error?.code === "ENOENT") {
-      response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
-      response.end("missing");
       return;
     }
     throw error;
