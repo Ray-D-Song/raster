@@ -1,0 +1,145 @@
+name: Prepare iOS Swift Package Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version; defaults to config.json"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prepare-ios-release-${{ inputs.version || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUSTC_WRAPPER: sccache
+  SCCACHE_BUCKET: ${{ secrets.SCCACHE_R2_BUCKET }}
+  SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_R2_ENDPOINT }}
+  SCCACHE_REGION: auto
+  SCCACHE_S3_USE_SSL: "true"
+  SCCACHE_S3_KEY_PREFIX: raster/
+  AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_SECRET_ACCESS_KEY }}
+
+jobs:
+  prepare-ios-release:
+    name: Build and stage iOS Swift Package artifact
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ios-xcframework
+          cache-on-failure: true
+          cache-workspace-crates: true
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          config_version="$(node -e "console.log(JSON.parse(require('fs').readFileSync('config.json', 'utf8')).version)")"
+          version="${INPUT_VERSION:-$config_version}"
+          if [[ "${version}" != "${config_version}" ]]; then
+            echo "Requested version ${version} does not match config.json version ${config_version}" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Reset sccache stats
+        run: sccache --zero-stats
+
+      - name: Build iOS XCFramework
+        run: node scripts/build.mjs --platform ios-xcframework
+
+      - name: Verify generated checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="$(node -e 'const source = require("fs").readFileSync("Package.swift", "utf8"); const match = source.match(/checksum: "([0-9a-f]{64})"/); if (!match) process.exit(1); console.log(match[1]);')"
+          actual="$(cat packages/raster-ios/dist/RasterRuntime.xcframework.checksum)"
+          if [[ "${expected}" != "${actual}" ]]; then
+            echo "Package.swift checksum ${expected} does not match generated checksum ${actual}" >&2
+            exit 1
+          fi
+
+      - name: Commit Package.swift checksum
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Package.swift
+          if git diff --cached --quiet; then
+            echo "Package.swift already contains the generated checksum."
+          else
+            git commit -m "release: prepare iOS artifact for ${VERSION}"
+          fi
+          git push origin HEAD:main
+
+      - name: Create or update GitHub Release asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" \
+              packages/raster-ios/dist/RasterRuntime.xcframework.zip \
+              packages/raster-ios/dist/RasterRuntime.xcframework.checksum \
+              --clobber
+            gh release edit "${TAG}" --title "${TAG}" --notes "Raster ${VERSION}"
+          else
+            gh release create "${TAG}" \
+              packages/raster-ios/dist/RasterRuntime.xcframework.zip \
+              packages/raster-ios/dist/RasterRuntime.xcframework.checksum \
+              --target "$(git rev-parse HEAD)" \
+              --title "${TAG}" \
+              --notes "Raster ${VERSION}"
+          fi
+
+      - name: Move release tag to checksum commit
+        shell: bash
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git tag -f "${TAG}" HEAD
+          git push origin -f "${TAG}"
+
+      - name: Show sccache stats
+        if: always()
+        run: sccache --show-stats

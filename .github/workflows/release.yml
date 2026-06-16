@@ -241,57 +241,62 @@ jobs:
           path: packages/raster-android/build/raster-android-maven-central-bundle.zip
           if-no-files-found: error
 
-  build-ios:
-    name: Build iOS Swift Package artifact
+  verify-ios-release-asset:
+    name: Verify iOS Swift Package release asset
     needs: prepare
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
+      - name: Skip iOS release asset check for dry run
+        if: needs.prepare.outputs.dry_run == 'true'
+        run: echo "Dry run does not require an existing GitHub Release iOS artifact."
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
-
-      - uses: mozilla-actions/sccache-action@v0.0.9
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ios-xcframework
-          cache-on-failure: true
-          cache-workspace-crates: true
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Reset sccache stats
-        run: sccache --zero-stats
-
-      - name: Build iOS XCFramework
-        run: node scripts/build.mjs --platform ios-xcframework
-
-      - name: Verify committed Swift package checksum
+      - name: Download iOS release asset
         if: needs.prepare.outputs.dry_run != 'true'
-        run: git diff --exit-code Package.swift
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          mkdir -p packages/raster-ios/dist
+          rm -f packages/raster-ios/dist/RasterRuntime.xcframework.zip
+          rm -f packages/raster-ios/dist/RasterRuntime.xcframework.checksum
+          for attempt in {1..30}; do
+            if gh release download "${tag}" \
+              --pattern RasterRuntime.xcframework.zip \
+              --pattern RasterRuntime.xcframework.checksum \
+              --dir packages/raster-ios/dist \
+              --clobber; then
+              exit 0
+            fi
+            echo "iOS release asset is not available yet; retry ${attempt}/30."
+            sleep 10
+          done
+          echo "Failed to download iOS release asset for ${tag}" >&2
+          exit 1
 
-      - name: Show sccache stats
-        if: always()
-        run: sccache --show-stats
-
-      - name: Upload iOS Swift Package artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: raster-ios-xcframework
-          path: |
-            packages/raster-ios/dist/RasterRuntime.xcframework.zip
-            packages/raster-ios/dist/RasterRuntime.xcframework.checksum
-          if-no-files-found: error
+      - name: Verify iOS release asset checksum
+        if: needs.prepare.outputs.dry_run != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s packages/raster-ios/dist/RasterRuntime.xcframework.zip
+          expected="$(node -e 'const source = require("fs").readFileSync("Package.swift", "utf8"); const match = source.match(/checksum: "([0-9a-f]{64})"/); if (!match) process.exit(1); console.log(match[1]);')"
+          actual="$(swift package compute-checksum packages/raster-ios/dist/RasterRuntime.xcframework.zip)"
+          if [[ "${expected}" != "${actual}" ]]; then
+            echo "Package.swift checksum ${expected} does not match release asset checksum ${actual}" >&2
+            exit 1
+          fi
+          if [[ -s packages/raster-ios/dist/RasterRuntime.xcframework.checksum ]]; then
+            recorded="$(cat packages/raster-ios/dist/RasterRuntime.xcframework.checksum)"
+            if [[ "${recorded}" != "${actual}" ]]; then
+              echo "Recorded checksum ${recorded} does not match release asset checksum ${actual}" >&2
+              exit 1
+            fi
+          fi
 
   publish-bin:
     name: Publish binary npm packages
@@ -377,26 +382,19 @@ jobs:
           MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
 
   publish-github-release:
-    name: Publish GitHub Release assets
+    name: Publish GitHub Release metadata
     needs:
       - prepare
-      - build-ios
+      - verify-ios-release-asset
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: raster-ios-xcframework
-          path: packages/raster-ios/dist
-
-      - name: Verify iOS artifact
+      - name: Verify dry run
         if: needs.prepare.outputs.dry_run == 'true'
-        run: |
-          test -s packages/raster-ios/dist/RasterRuntime.xcframework.zip
-          test -s packages/raster-ios/dist/RasterRuntime.xcframework.checksum
+        run: echo "Dry run verified release package metadata."
 
-      - name: Create or update GitHub Release
+      - name: Update GitHub Release metadata
         if: needs.prepare.outputs.dry_run != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -404,13 +402,8 @@ jobs:
         run: |
           set -euo pipefail
           tag="v${VERSION}"
-          if gh release view "${tag}" >/dev/null 2>&1; then
-            gh release upload "${tag}" packages/raster-ios/dist/RasterRuntime.xcframework.zip --clobber
-          else
-            gh release create "${tag}" packages/raster-ios/dist/RasterRuntime.xcframework.zip \
-              --title "${tag}" \
-              --notes "Raster ${VERSION}"
-          fi
+          gh release view "${tag}" >/dev/null
+          gh release edit "${tag}" --title "${tag}" --notes "Raster ${VERSION}"
 
   publish-js:
     name: Publish JS npm packages
