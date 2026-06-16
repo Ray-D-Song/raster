@@ -13,10 +13,17 @@ const defaultBundlePath = path.join(
 const uploadUrl = "https://central.sonatype.com/api/v1/publisher/upload";
 const statusUrl = "https://central.sonatype.com/api/v1/publisher/status";
 const deploymentUrl = "https://central.sonatype.com/api/v1/publisher/deployment";
+const mavenCentralBaseUrl = "https://repo.maven.apache.org/maven2";
 
 async function main(argv) {
   const args = parseArgs(argv);
   const bundlePath = path.resolve(rootDir, args.bundle);
+  const coordinate = mavenCoordinateFromDeploymentName(args.name);
+  if (coordinate && await mavenArtifactExists(coordinate)) {
+    console.log(`Maven Central artifact already exists: ${coordinate.groupId}:${coordinate.artifactId}:${coordinate.version}`);
+    return;
+  }
+
   const token = authToken();
   const deploymentId = await uploadBundle(bundlePath, token, args.name, args.automatic);
   console.log(`Maven Central deployment uploaded: ${deploymentId}`);
@@ -95,10 +102,11 @@ async function uploadBundle(bundlePath, token, name, automatic) {
   return body.trim();
 }
 
-async function waitForDeployment(deploymentId, token) {
+async function waitForDeployment(deploymentId, token, followedDeploymentIds = new Set()) {
   const started = Date.now();
   const timeoutMs = 20 * 60 * 1000;
   let lastState = "";
+  followedDeploymentIds.add(deploymentId);
 
   while (Date.now() - started < timeoutMs) {
     const status = await deploymentStatus(deploymentId, token);
@@ -114,6 +122,14 @@ async function waitForDeployment(deploymentId, token) {
     if (state === "VALIDATED") {
       await publishValidatedDeployment(deploymentId, token);
     } else if (state === "FAILED") {
+      const existingDeploymentId = duplicatePublishDeploymentId(status);
+      if (existingDeploymentId && !followedDeploymentIds.has(existingDeploymentId)) {
+        console.log(
+          `Maven Central coordinate is already being published in deployment ${existingDeploymentId}; waiting for it.`,
+        );
+        await waitForDeployment(existingDeploymentId, token, followedDeploymentIds);
+        return;
+      }
       throw new Error(`Maven Central deployment failed: ${JSON.stringify(status)}`);
     }
 
@@ -150,6 +166,58 @@ async function publishValidatedDeployment(deploymentId, token) {
   if (!response.ok) {
     throw new Error(`Maven Central publish failed (${response.status}): ${body}`);
   }
+}
+
+function duplicatePublishDeploymentId(status) {
+  const messages = Object.values(status.errors ?? {})
+    .flatMap((value) => Array.isArray(value) ? value : [value])
+    .filter((value) => typeof value === "string");
+  for (const message of messages) {
+    const match = message.match(/currently being published in another deployment \(([0-9a-f-]{36})\)/i);
+    if (match) {
+      return match[1];
+    }
+  }
+  return undefined;
+}
+
+function mavenCoordinateFromDeploymentName(name) {
+  if (!name) {
+    return undefined;
+  }
+  const prefix = "raster-android-";
+  if (!name.startsWith(prefix)) {
+    return undefined;
+  }
+  const version = name.slice(prefix.length);
+  if (!version) {
+    return undefined;
+  }
+  return {
+    groupId: "io.github.ray-d-song",
+    artifactId: "raster-android",
+    version,
+  };
+}
+
+async function mavenArtifactExists(coordinate) {
+  const groupPath = coordinate.groupId.replaceAll(".", "/");
+  const pomUrl = `${mavenCentralBaseUrl}/${groupPath}/${coordinate.artifactId}/${coordinate.version}/${coordinate.artifactId}-${coordinate.version}.pom`;
+  try {
+    const response = await fetch(pomUrl, { method: "HEAD" });
+    if (response.status === 200) {
+      return true;
+    }
+    if (response.status === 404) {
+      return false;
+    }
+    console.log(`Maven Central artifact lookup returned ${response.status}; continuing with upload.`);
+  } catch (error) {
+    console.log(
+      `Maven Central artifact lookup failed; continuing with upload: ${error instanceof Error ? error.message : error}`,
+    );
+  }
+  return false;
 }
 
 function delay(ms) {

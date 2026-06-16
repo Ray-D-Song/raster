@@ -96,7 +96,15 @@ async function main(argv) {
     return;
   }
 
+  let publishedCount = 0;
+  let skippedCount = 0;
   for (const publishTarget of publishTargets) {
+    if (await npmPackageVersionExists(publishTarget.name, version)) {
+      console.log(`Skipping ${publishTarget.name}@${version}; it already exists on npm.`);
+      skippedCount += 1;
+      continue;
+    }
+
     await run(
       "npm",
       [
@@ -109,9 +117,12 @@ async function main(argv) {
       ],
       { cwd: path.join(rootDir, publishTarget.packageDir) },
     );
+    publishedCount += 1;
   }
 
-  console.log(`Published ${publishTargets.length} package(s) at ${version} with tag ${tag}.`);
+  console.log(
+    `Published ${publishedCount} package(s) at ${version} with tag ${tag}; skipped ${skippedCount} existing package(s).`,
+  );
 }
 
 function target(name, packageDir, kind, aliases = [], metadata = {}) {
@@ -424,6 +435,45 @@ function run(command, args, options = {}) {
       }
       const suffix = signal ? `signal ${signal}` : `exit code ${code}`;
       reject(new Error(`${command} ${args.join(" ")} failed with ${suffix}`));
+    });
+  });
+}
+
+async function npmPackageVersionExists(name, version) {
+  const result = await capture("npm", ["view", `${name}@${version}`, "version", "--json"]);
+  if (result.code === 0) {
+    return result.stdout.trim().replace(/^"|"$/g, "") === version;
+  }
+  const output = `${result.stdout}\n${result.stderr}`;
+  if (output.includes("E404") || output.includes("404 Not Found")) {
+    return false;
+  }
+  throw new Error(`npm view ${name}@${version} failed with exit code ${result.code}: ${result.stderr.trim()}`);
+}
+
+function capture(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd ?? rootDir,
+      stdio: ["ignore", "pipe", "pipe"],
+      shell: process.platform === "win32",
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      resolve({
+        code: code ?? 1,
+        signal,
+        stdout,
+        stderr,
+      });
     });
   });
 }
