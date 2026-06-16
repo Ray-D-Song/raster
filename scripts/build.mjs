@@ -92,6 +92,30 @@ const platforms = [
       },
     ],
   },
+  {
+    id: "ios-arm64-device",
+    rustTarget: "aarch64-apple-ios",
+    iosLibrary: "libraster.a",
+    tools: [],
+  },
+  {
+    id: "ios-arm64-simulator",
+    rustTarget: "aarch64-apple-ios-sim",
+    iosLibrary: "libraster.a",
+    tools: [],
+  },
+  {
+    id: "ios-x64-simulator",
+    rustTarget: "x86_64-apple-ios",
+    iosLibrary: "libraster.a",
+    tools: [],
+  },
+  {
+    id: "ios-xcframework",
+    iosXcframework: true,
+    rustTargets: ["aarch64-apple-ios", "aarch64-apple-ios-sim", "x86_64-apple-ios"],
+    tools: [],
+  },
 ];
 
 function brewFormula(name) {
@@ -105,7 +129,7 @@ async function main(argv) {
   const args = parseArgs(argv);
   if (args.list) {
     for (const platform of platforms) {
-      console.log(`${platform.id}\t${platform.rustTarget}`);
+      console.log(`${platform.id}\t${(platform.rustTargets ?? [platform.rustTarget]).filter(Boolean).join(",")}`);
     }
     return;
   }
@@ -180,6 +204,13 @@ function splitPlatforms(value) {
 }
 
 function validatePlatformHost(platform) {
+  if (platform.iosLibrary || platform.iosXcframework) {
+    if (process.platform !== "darwin") {
+      throw new Error(`${platform.id} can only be built from macOS hosts`);
+    }
+    return;
+  }
+
   if (platform.id === "android-arm64") {
     if (process.platform !== "linux" && process.platform !== "darwin") {
       throw new Error("android-arm64 can only be built from Linux or macOS hosts");
@@ -222,7 +253,8 @@ async function ensureRustTargets(selected) {
     .map((line) => line.trim())
     .filter(Boolean));
   const missing = selected
-    .map((platform) => platform.rustTarget)
+    .flatMap((platform) => platform.rustTargets ?? [platform.rustTarget])
+    .filter(Boolean)
     .filter((target) => !installed.has(target));
 
   if (missing.length === 0) {
@@ -310,6 +342,14 @@ function shellQuote(value) {
 
 async function buildPlatform(platform, args) {
   console.log(`Building ${platform.id} (${platform.rustTarget})`);
+  if (platform.iosXcframework) {
+    await buildIosXcframework(args);
+    return;
+  }
+  if (platform.iosLibrary) {
+    await buildIosLibrary(platform, args);
+    return;
+  }
   if (platform.androidAbi) {
     await buildAndroidPlatform(platform, args);
     return;
@@ -350,6 +390,84 @@ async function buildPlatform(platform, args) {
     await chmod(destination, 0o755);
   }
   console.log(`Copied ${source} -> ${destination}`);
+}
+
+async function buildIosLibrary(platform, args) {
+  const env = await targetBuildEnv(platform);
+  await run("cargo", [
+    "build",
+    "--release",
+    "--lib",
+    "--target",
+    platform.rustTarget,
+    ...args.cargoArgs,
+  ], { env });
+
+  const source = path.join(
+    rootDir,
+    "target",
+    platform.rustTarget,
+    "release",
+    platform.iosLibrary,
+  );
+  await access(source).catch(() => {
+    throw new Error(`Cargo build did not produce expected iOS library: ${source}`);
+  });
+  console.log(`Built iOS library ${source}`);
+}
+
+async function buildIosXcframework(args) {
+  const device = platforms.find((platform) => platform.id === "ios-arm64-device");
+  const simArm64 = platforms.find((platform) => platform.id === "ios-arm64-simulator");
+  const simX64 = platforms.find((platform) => platform.id === "ios-x64-simulator");
+  for (const platform of [device, simArm64, simX64]) {
+    await buildIosLibrary(platform, args);
+  }
+
+  const distDir = path.join(rootDir, "packages/raster-ios/dist");
+  const includeDir = path.join(rootDir, "packages/raster-ios/include");
+  const deviceLibrary = path.join(rootDir, "target/aarch64-apple-ios/release/libraster.a");
+  const simArm64Library = path.join(rootDir, "target/aarch64-apple-ios-sim/release/libraster.a");
+  const simX64Library = path.join(rootDir, "target/x86_64-apple-ios/release/libraster.a");
+  const simulatorDir = path.join(rootDir, "target/ios-simulator/release");
+  const simulatorLibrary = path.join(simulatorDir, "libraster.a");
+  const xcframeworkPath = path.join(distDir, "RasterRuntime.xcframework");
+  const zipPath = path.join(distDir, "RasterRuntime.xcframework.zip");
+
+  await mkdir(simulatorDir, { recursive: true });
+  await mkdir(distDir, { recursive: true });
+  await rm(simulatorLibrary, { force: true });
+  await run("xcrun", ["lipo", "-create", simArm64Library, simX64Library, "-output", simulatorLibrary]);
+
+  await rm(xcframeworkPath, { recursive: true, force: true });
+  await rm(zipPath, { force: true });
+  await run("xcodebuild", [
+    "-create-xcframework",
+    "-library",
+    deviceLibrary,
+    "-headers",
+    includeDir,
+    "-library",
+    simulatorLibrary,
+    "-headers",
+    includeDir,
+    "-output",
+    xcframeworkPath,
+  ]);
+
+  await run("ditto", [
+    "-c",
+    "-k",
+    "--sequesterRsrc",
+    "--keepParent",
+    "RasterRuntime.xcframework",
+    "RasterRuntime.xcframework.zip",
+  ], { cwd: distDir });
+  const checksum = (await capture("swift", ["package", "compute-checksum", zipPath])).trim();
+  await writeFile(path.join(distDir, "RasterRuntime.xcframework.checksum"), `${checksum}\n`);
+  await updatePackageSwiftChecksum(await readReleaseVersion(), checksum);
+  console.log(`Built iOS XCFramework ${zipPath}`);
+  console.log(`Swift package checksum ${checksum}`);
 }
 
 async function buildAndroidPlatform(platform, args) {
@@ -544,6 +662,24 @@ async function readReleaseVersion() {
   return version;
 }
 
+async function updatePackageSwiftChecksum(version, checksum) {
+  const packagePath = path.join(rootDir, "Package.swift");
+  const source = await readFile(packagePath, "utf8");
+  const url = `https://github.com/Ray-D-Song/raster/releases/download/v${version}/RasterRuntime.xcframework.zip`;
+  let next = source.replace(
+    /url: "https:\/\/github\.com\/Ray-D-Song\/raster\/releases\/download\/v[^"]+\/RasterRuntime\.xcframework\.zip"/,
+    `url: "${url}"`,
+  );
+  next = next.replace(
+    /checksum: "[0-9a-f]{64}"/,
+    `checksum: "${checksum}"`,
+  );
+  if (next === source) {
+    throw new Error("Package.swift did not contain the expected RasterRuntime binary target URL/checksum");
+  }
+  await writeFile(packagePath, next);
+}
+
 async function writeJson(filePath, value) {
   await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
@@ -614,7 +750,7 @@ function cmakeQuote(value) {
 function capture(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
-      cwd: rootDir,
+      cwd: options.cwd ?? rootDir,
       stdio: ["ignore", "pipe", "inherit"],
       shell: options.shell ?? process.platform === "win32",
     });
@@ -638,7 +774,7 @@ function capture(command, args, options = {}) {
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
-      cwd: rootDir,
+      cwd: options.cwd ?? rootDir,
       env: { ...process.env, ...options.env },
       stdio: "inherit",
       shell: process.platform === "win32",

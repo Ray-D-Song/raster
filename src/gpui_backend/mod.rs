@@ -13,5 +13,5 @@ pub mod retained_tree;
 
 pub use app::{DevReloadConfig, open_raster_window};
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use app::start_desktop;

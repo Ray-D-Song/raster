@@ -16,10 +16,10 @@ use gpui::{
     AnyElement, App, Context, Empty, Entity, IntoElement, Render, WeakEntity, Window,
     WindowOptions, div, prelude::*,
 };
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use gpui::{Bounds, SharedString, TitlebarOptions, WindowBounds, px, size};
 use gpui_component::ActiveTheme;
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use gpui_component_assets::Assets;
 
 use crate::{
@@ -89,7 +89,7 @@ pub struct DevReloadConfig {
     pub demo_bundle_path: std::path::PathBuf,
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn start_desktop(
     width: u32,
     height: u32,

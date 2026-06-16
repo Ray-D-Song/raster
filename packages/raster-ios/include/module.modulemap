@@ -1,0 +1,4 @@
+module RasterRuntime {
+  umbrella header "raster_ios.h"
+  export *
+}

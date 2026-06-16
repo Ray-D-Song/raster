@@ -7,3 +7,7 @@ pub mod js_runtime;
 #[cfg(target_os = "android")]
 #[path = "platform/android/mod.rs"]
 pub mod android;
+
+#[cfg(target_os = "ios")]
+#[path = "platform/ios/mod.rs"]
+pub mod ios;

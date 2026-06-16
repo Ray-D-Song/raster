@@ -17,8 +17,12 @@ use rquickjs::{
 #[cfg(feature = "system")]
 use sysinfo::System;
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "ios")))]
 use self::unix::{
+    get_priority, get_release, get_type, get_user_info, get_version, set_priority, DEV_NULL, EOL,
+};
+#[cfg(target_os = "ios")]
+use self::ios::{
     get_priority, get_release, get_type, get_user_info, get_version, set_priority, DEV_NULL, EOL,
 };
 #[cfg(windows)]
@@ -26,7 +30,9 @@ use self::windows::{
     get_priority, get_release, get_type, get_user_info, get_version, set_priority, DEV_NULL, EOL,
 };
 
-#[cfg(unix)]
+#[cfg(target_os = "ios")]
+mod ios;
+#[cfg(all(unix, not(target_os = "ios")))]
 mod unix;
 #[cfg(windows)]
 mod windows;

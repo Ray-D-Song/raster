@@ -10,6 +10,10 @@
 		C9CC21AD2FDBEABF0025D2F2 /* RasterIOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RasterIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXBuildFile section */
+		C9CC21BB2FDBEAC00025D2F2 /* RasterIOS in Frameworks */ = {isa = PBXBuildFile; productRef = C9CC21BC2FDBEAC00025D2F2 /* RasterIOS */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		C9CC21AF2FDBEABF0025D2F2 /* RasterIOS */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
@@ -23,6 +27,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C9CC21BB2FDBEAC00025D2F2 /* RasterIOS in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -65,6 +70,7 @@
 			);
 			name = RasterIOS;
 			packageProductDependencies = (
+				C9CC21BC2FDBEAC00025D2F2 /* RasterIOS */,
 			);
 			productName = RasterIOS;
 			productReference = C9CC21AD2FDBEABF0025D2F2 /* RasterIOS.app */;
@@ -94,6 +100,9 @@
 			);
 			mainGroup = C9CC21A42FDBEABF0025D2F2;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				C9CC21BD2FDBEAC00025D2F2 /* XCRemoteSwiftPackageReference "raster" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = C9CC21AE2FDBEABF0025D2F2 /* Products */;
 			projectDirPath = "";
@@ -177,7 +186,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
@@ -234,7 +243,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
@@ -253,6 +262,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -284,6 +294,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -328,6 +339,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		C9CC21BD2FDBEAC00025D2F2 /* XCRemoteSwiftPackageReference "raster" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/Ray-D-Song/raster";
+			requirement = {
+				kind = exactVersion;
+				version = "0.1.0-alpha.10";
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		C9CC21BC2FDBEAC00025D2F2 /* RasterIOS */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C9CC21BD2FDBEAC00025D2F2 /* XCRemoteSwiftPackageReference "raster" */;
+			productName = RasterIOS;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = C9CC21A52FDBEABF0025D2F2 /* Project object */;
 }

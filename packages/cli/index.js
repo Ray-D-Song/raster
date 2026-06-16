@@ -18,12 +18,14 @@ const HELP = `Raster CLI
 Usage:
   raster create <project-name>
   raster add <platforms>
-  raster dev android
+  raster dev android|ios
+  raster build ios
 
 Commands:
   create <project-name>       Create a new Raster app.
   add <platforms>             Add platform shell apps. Example: android,ios,win
-  dev android                 Start Android bundle watch and dev server.
+  dev android|ios             Start mobile bundle watch and dev server.
+  build ios                   Build the iOS shell app.
 
 Supported platform inputs:
   android, ios, win, windows, osx, macos, linux
@@ -41,11 +43,12 @@ const PLATFORM_ALIASES = new Map([
 
 const IMPLEMENTED_PLATFORMS = new Set(["android", "ios"]);
 const ANDROID_DEV_PORT = 14200;
+const IOS_DEV_PORT = 14201;
 const ANDROID_DEV_SCRIPT = "raster dev android";
+const IOS_DEV_SCRIPT = "raster dev ios";
 const ANDROID_TODO_SCRIPT =
   "node -e \"throw new Error('Raster Android build/run is not implemented in the CLI yet')\"";
-const IOS_TODO_SCRIPT =
-  "node -e \"throw new Error('Raster iOS build/run is not implemented in the CLI yet')\"";
+const IOS_BUILD_SCRIPT = "raster build ios";
 
 class CliError extends Error {
   constructor(message) {
@@ -77,22 +80,46 @@ async function main(argv) {
     return;
   }
 
+  if (command === "build") {
+    await build(args);
+    return;
+  }
+
   throw new CliError(`Unknown command: ${command}\n\n${HELP}`);
 }
 
 async function dev(args) {
   const platform = args[0];
   if (!platform) {
-    throw new CliError("Missing platform. Usage: raster dev android");
+    throw new CliError("Missing platform. Usage: raster dev android|ios");
   }
   if (args.length > 1) {
     throw new CliError(`Unexpected arguments for dev: ${args.slice(1).join(" ")}`);
   }
-  if (platform !== "android") {
-    throw new CliError(`Unsupported dev platform: ${platform}`);
+  if (platform === "android") {
+    await devAndroid();
+    return;
+  }
+  if (platform === "ios") {
+    await devIos();
+    return;
+  }
+  throw new CliError(`Unsupported dev platform: ${platform}`);
+}
+
+async function build(args) {
+  const platform = args[0];
+  if (!platform) {
+    throw new CliError("Missing platform. Usage: raster build ios");
+  }
+  if (args.length > 1) {
+    throw new CliError(`Unexpected arguments for build: ${args.slice(1).join(" ")}`);
+  }
+  if (platform !== "ios") {
+    throw new CliError(`Unsupported build platform: ${platform}`);
   }
 
-  await devAndroid();
+  await buildIos();
 }
 
 async function devAndroid() {
@@ -101,23 +128,89 @@ async function devAndroid() {
   const androidDir = path.join(projectRoot, "android");
   await assertReadableFile(packageJsonPath, "raster dev android must be run from a project root with package.json");
   await assertReadableDir(androidDir, "raster dev android requires an android/ platform directory");
+  await runMobileDevServer({
+    projectRoot,
+    platformName: "Android",
+    platformDir: androidDir,
+    port: ANDROID_DEV_PORT,
+    writeDevConfig: async () => {},
+    extraLogLines: [`Emulator fallback URL: http://10.0.2.2:${ANDROID_DEV_PORT}/app.js`],
+    beforeWatch: () => tryAdbReverse(ANDROID_DEV_PORT),
+  });
+}
+
+async function devIos() {
+  const projectRoot = process.cwd();
+  const packageJsonPath = path.join(projectRoot, "package.json");
+  const iosDir = path.join(projectRoot, "ios");
+  await assertReadableFile(packageJsonPath, "raster dev ios must be run from a project root with package.json");
+  await assertReadableDir(iosDir, "raster dev ios requires an ios/ platform directory");
+  await runMobileDevServer({
+    projectRoot,
+    platformName: "iOS",
+    platformDir: iosDir,
+    port: IOS_DEV_PORT,
+    writeDevConfig: () => writeIosDevConfig(projectRoot),
+    extraLogLines: ["Run the iOS debug app yourself from Xcode."],
+  });
+}
+
+async function buildIos() {
+  const projectRoot = process.cwd();
+  const packageJsonPath = path.join(projectRoot, "package.json");
+  const iosDir = path.join(projectRoot, "ios");
+  await assertReadableFile(packageJsonPath, "raster build ios must be run from a project root with package.json");
+  await assertReadableDir(iosDir, "raster build ios requires an ios/ platform directory");
 
   const viteBin = await resolveLocalBin(projectRoot, "vite");
   if (!viteBin) {
     throw new CliError("Failed to find local Vite binary. Install project dependencies first.");
   }
+  await runCommand(viteBin, ["build"], {
+    cwd: projectRoot,
+    env: {
+      ...process.env,
+      RASTER_UNPLUGIN_SKIP_BINARY: "1",
+    },
+  });
 
-  const bundlePath = path.join(projectRoot, "dist", "raster", "app.js");
+  await copyIosBundleResources(projectRoot);
+  await runCommand("xcodebuild", [
+    "-project",
+    path.join(iosDir, "RasterIOS.xcodeproj"),
+    "-scheme",
+    "RasterIOS",
+    "-destination",
+    "generic/platform=iOS Simulator",
+    "build",
+  ], { cwd: projectRoot });
+}
+
+async function runMobileDevServer({
+  projectRoot,
+  platformName,
+  port,
+  writeDevConfig,
+  extraLogLines = [],
+  beforeWatch,
+}) {
+  const viteBin = await resolveLocalBin(projectRoot, "vite");
+  if (!viteBin) {
+    throw new CliError("Failed to find local Vite binary. Install project dependencies first.");
+  }
+
+  await writeDevConfig();
+  const bundlePath = path.join(projectRoot, "target", "raster", "app.js");
   const sourceMapPath = `${bundlePath}.map`;
-  const server = createAndroidDevServer({ bundlePath, sourceMapPath });
-  await listen(server, ANDROID_DEV_PORT);
+  const server = createMobileDevServer({ bundlePath, sourceMapPath });
+  await listen(server, port);
 
-  console.log(`Raster Android dev server listening on http://127.0.0.1:${ANDROID_DEV_PORT}`);
-  console.log(`Bundle endpoint: http://127.0.0.1:${ANDROID_DEV_PORT}/app.js`);
-  console.log("Run the Android debug app yourself from Android Studio or Gradle.");
-  console.log(`Emulator fallback URL: http://10.0.2.2:${ANDROID_DEV_PORT}/app.js`);
-
-  tryAdbReverse(ANDROID_DEV_PORT);
+  console.log(`Raster ${platformName} dev server listening on http://127.0.0.1:${port}`);
+  console.log(`Bundle endpoint: http://127.0.0.1:${port}/app.js`);
+  for (const line of extraLogLines) {
+    console.log(line);
+  }
+  beforeWatch?.();
 
   const vite = spawn(viteBin, ["build", "--watch"], {
     cwd: projectRoot,
@@ -145,6 +238,48 @@ async function devAndroid() {
         resolve();
       } else {
         reject(new CliError(`Vite watch exited with code ${code ?? signal}`));
+      }
+    });
+  });
+}
+
+async function writeIosDevConfig(projectRoot) {
+  const rasterDir = path.join(projectRoot, "ios", "RasterIOS", "Resources", "raster");
+  await fs.mkdir(rasterDir, { recursive: true });
+  await fs.writeFile(
+    path.join(rasterDir, "dev.json"),
+    `${JSON.stringify({ urls: [`http://127.0.0.1:${IOS_DEV_PORT}/app.js`] }, null, 2)}\n`,
+  );
+}
+
+async function copyIosBundleResources(projectRoot) {
+  const sourceDir = path.join(projectRoot, "target", "raster");
+  const targetDir = path.join(projectRoot, "ios", "RasterIOS", "Resources", "raster");
+  await fs.mkdir(targetDir, { recursive: true });
+  await fs.copyFile(path.join(sourceDir, "app.js"), path.join(targetDir, "app.js"));
+  try {
+    await fs.copyFile(path.join(sourceDir, "app.js.map"), path.join(targetDir, "app.js.map"));
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw error;
+    }
+  }
+}
+
+function runCommand(command, args, options) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      env: options.env ?? process.env,
+      stdio: "inherit",
+      shell: process.platform === "win32",
+    });
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new CliError(`${command} ${args.join(" ")} failed with ${signal ?? code}`));
       }
     });
   });
@@ -316,8 +451,9 @@ function updatePlatformScripts(packageJson, platforms) {
       packageJson.scripts.android = ANDROID_TODO_SCRIPT;
       packageJson.scripts["build:android"] = ANDROID_TODO_SCRIPT;
     } else if (platform === "ios") {
-      packageJson.scripts.ios = IOS_TODO_SCRIPT;
-      packageJson.scripts["build:ios"] = IOS_TODO_SCRIPT;
+      packageJson.scripts["dev:ios"] = IOS_DEV_SCRIPT;
+      packageJson.scripts.ios = IOS_BUILD_SCRIPT;
+      packageJson.scripts["build:ios"] = IOS_BUILD_SCRIPT;
     }
   }
 }
@@ -326,10 +462,10 @@ function platformScriptNames(platform) {
   if (platform === "android") {
     return ["dev:android", "android", "build:android"];
   }
-  return [platform, `build:${platform}`];
+  return [`dev:${platform}`, platform, `build:${platform}`];
 }
 
-function createAndroidDevServer({ bundlePath, sourceMapPath }) {
+function createMobileDevServer({ bundlePath, sourceMapPath }) {
   return http.createServer(async (request, response) => {
     try {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");

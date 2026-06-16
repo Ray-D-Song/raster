@@ -13,7 +13,7 @@ on:
         default: true
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -241,6 +241,58 @@ jobs:
           path: packages/raster-android/build/raster-android-maven-central-bundle.zip
           if-no-files-found: error
 
+  build-ios:
+    name: Build iOS Swift Package artifact
+    needs: prepare
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ios-xcframework
+          cache-on-failure: true
+          cache-workspace-crates: true
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Reset sccache stats
+        run: sccache --zero-stats
+
+      - name: Build iOS XCFramework
+        run: node scripts/build.mjs --platform ios-xcframework
+
+      - name: Verify committed Swift package checksum
+        if: needs.prepare.outputs.dry_run != 'true'
+        run: git diff --exit-code Package.swift
+
+      - name: Show sccache stats
+        if: always()
+        run: sccache --show-stats
+
+      - name: Upload iOS Swift Package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: raster-ios-xcframework
+          path: |
+            packages/raster-ios/dist/RasterRuntime.xcframework.zip
+            packages/raster-ios/dist/RasterRuntime.xcframework.checksum
+          if-no-files-found: error
+
   publish-bin:
     name: Publish binary npm packages
     needs:
@@ -324,12 +376,49 @@ jobs:
           MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
           MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
 
+  publish-github-release:
+    name: Publish GitHub Release assets
+    needs:
+      - prepare
+      - build-ios
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: raster-ios-xcframework
+          path: packages/raster-ios/dist
+
+      - name: Verify iOS artifact
+        if: needs.prepare.outputs.dry_run == 'true'
+        run: |
+          test -s packages/raster-ios/dist/RasterRuntime.xcframework.zip
+          test -s packages/raster-ios/dist/RasterRuntime.xcframework.checksum
+
+      - name: Create or update GitHub Release
+        if: needs.prepare.outputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release upload "${tag}" packages/raster-ios/dist/RasterRuntime.xcframework.zip --clobber
+          else
+            gh release create "${tag}" packages/raster-ios/dist/RasterRuntime.xcframework.zip \
+              --title "${tag}" \
+              --notes "Raster ${VERSION}"
+          fi
+
   publish-js:
     name: Publish JS npm packages
     needs:
       - prepare
       - publish-bin
       - publish-android
+      - publish-github-release
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

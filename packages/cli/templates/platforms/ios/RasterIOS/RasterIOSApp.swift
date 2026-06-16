@@ -1,10 +1,12 @@
 import SwiftUI
+import RasterIOS
 
 @main
 struct RasterIOSApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RasterAppView(configuration: .default)
+                .ignoresSafeArea()
         }
     }
 }

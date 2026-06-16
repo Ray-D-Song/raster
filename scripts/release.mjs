@@ -69,6 +69,7 @@ const versionedPackages = [...jsTargets, ...binaryTargets].map((item) => item.pa
 const consumerPackages = ["apps/showcase", "packages/cli/templates/default"];
 const targetAliases = buildTargetAliases(allTargets);
 const androidGradleConsumers = ["packages/cli/templates/platforms/android/app/build.gradle.kts"];
+const iosSwiftPackageConsumers = ["packages/cli/templates/platforms/ios/RasterIOS.xcodeproj/project.pbxproj"];
 
 async function main(argv) {
   const args = parseArgs(argv);
@@ -308,6 +309,29 @@ async function syncVersions(version) {
     );
     await writeFile(gradlePath, next);
   }
+
+  await syncPackageSwiftVersion(version);
+
+  for (const relativePath of iosSwiftPackageConsumers) {
+    const projectPath = path.join(rootDir, relativePath);
+    const source = await readFile(projectPath, "utf8");
+    const versionPattern = /version = "[^"]+";/;
+    if (!versionPattern.test(source)) {
+      throw new Error(`${relativePath} does not contain a Swift Package exact version`);
+    }
+    await writeFile(projectPath, source.replace(versionPattern, `version = "${version}";`));
+  }
+}
+
+async function syncPackageSwiftVersion(version) {
+  const packageSwiftPath = path.join(rootDir, "Package.swift");
+  const source = await readFile(packageSwiftPath, "utf8");
+  const url = `https://github.com/Ray-D-Song/raster/releases/download/v${version}/RasterRuntime.xcframework.zip`;
+  const urlPattern = /url: "https:\/\/github\.com\/Ray-D-Song\/raster\/releases\/download\/v[^"]+\/RasterRuntime\.xcframework\.zip"/;
+  if (!urlPattern.test(source)) {
+    throw new Error("Package.swift does not contain the RasterRuntime release URL");
+  }
+  await writeFile(packageSwiftPath, source.replace(urlPattern, `url: "${url}"`));
 }
 
 async function ensureBinaryPackageManifests(version) {

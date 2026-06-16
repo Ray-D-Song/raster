@@ -5,7 +5,7 @@ edition = "2024"
 
 [lib]
 name = "raster"
-crate-type = ["rlib", "cdylib"]
+crate-type = ["rlib", "cdylib", "staticlib"]
 
 [dependencies]
 anyhow = "1.0"
@@ -23,9 +23,13 @@ tokio = { version = "1", features = ["rt", "time"] }
 log = "0.4"
 libsui = "0.15.0"
 
-[target.'cfg(not(target_os = "android"))'.dependencies]
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 gpui_platform = { path = "deps/zed/crates/gpui_platform", features = ["font-kit", "runtime_shaders"] }
 llrt_core = { package = "raster_runtime_core", path = "deps/raster-runtime/raster_runtime_core", default-features = false, features = ["macro", "base", "console", "compression-rust", "tls-ring", "crypto-rust"] }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+gpui-mobile = { path = "deps/gpui-mobile", default-features = false }
+llrt_core = { package = "raster_runtime_core", path = "deps/raster-runtime/raster_runtime_core", default-features = false, features = ["macro", "bindgen", "base", "console", "compression-rust", "tls-ring", "crypto-rust"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 android-activity = { version = "0.6", features = ["native-activity"] }

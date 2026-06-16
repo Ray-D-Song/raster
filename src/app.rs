@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::gpui_backend;
 use crate::{common::channel::RuntimeCommand, js_runtime::host::NativeBindingState};
 
@@ -51,7 +51,7 @@ pub async fn prepare_raster_app(options: &RasterRunOptions) -> anyhow::Result<Pr
     })
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn run_desktop_raster_app(options: RasterRunOptions) -> anyhow::Result<()> {
     let prepared = pollster::block_on(prepare_raster_app(&options))?;
     let dev_reload = match &options.bundle {

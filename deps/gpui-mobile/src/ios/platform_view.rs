@@ -88,9 +88,15 @@ impl IosPlatformView {
             );
 
             let view: *mut AnyObject = match view_type {
+                #[cfg(feature = "video_player")]
                 "video_player" => Self::create_video_player_view(frame, params)?,
+                #[cfg(not(feature = "video_player"))]
+                "video_player" => return Err("video_player feature is not enabled".into()),
                 "webview" => Self::create_webview_view(frame, params)?,
+                #[cfg(feature = "camera")]
                 "camera_preview" => Self::create_camera_preview_view(frame, params)?,
+                #[cfg(not(feature = "camera"))]
+                "camera_preview" => return Err("camera feature is not enabled".into()),
                 _ => Self::create_generic_view(frame)?,
             };
 
@@ -129,7 +135,7 @@ impl IosPlatformView {
     }
 
     /// Create a UIView with an AVPlayerLayer for video playback.
-    #[cfg(target_os = "ios")]
+    #[cfg(all(target_os = "ios", feature = "video_player"))]
     unsafe fn create_video_player_view(
         frame: ObjcCGRect,
         params: &PlatformViewParams,
@@ -224,7 +230,7 @@ impl IosPlatformView {
     }
 
     /// Create a UIView with AVCaptureVideoPreviewLayer for camera preview.
-    #[cfg(target_os = "ios")]
+    #[cfg(all(target_os = "ios", feature = "camera"))]
     unsafe fn create_camera_preview_view(
         frame: ObjcCGRect,
         params: &PlatformViewParams,
