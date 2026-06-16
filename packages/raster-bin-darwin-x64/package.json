@@ -1,6 +1,6 @@
 {
   "name": "raster-bin-darwin-x64",
-  "version": "0.1.0-alpha.9",
+  "version": "0.1.0-alpha.10",
   "bin": {
     "raster": "bin/raster"
   },

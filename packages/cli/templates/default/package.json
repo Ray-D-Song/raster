@@ -9,14 +9,14 @@
     "dev": "vite build --watch"
   },
   "dependencies": {
-    "raster-js": "0.1.0-alpha.9",
+    "raster-js": "0.1.0-alpha.10",
     "react": "19.2.6"
   },
   "devDependencies": {
     "@types/react": "19.2.15",
-    "raster-cli": "0.1.0-alpha.9",
+    "raster-cli": "0.1.0-alpha.10",
     "typescript": "6.0.3",
-    "unplugin-raster": "0.1.0-alpha.9",
+    "unplugin-raster": "0.1.0-alpha.10",
     "vite": "8.0.14"
   }
 }
