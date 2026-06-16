@@ -61,6 +61,16 @@ const platforms = [
     tools: [],
   },
   {
+    id: "win32-arm64",
+    rustTarget: "aarch64-pc-windows-msvc",
+    packageDir: "packages/raster-bin-win32-arm64",
+    packageBinary: "bin/raster.exe",
+    cargoBinary: "raster.exe",
+    os: "win32",
+    cpu: "arm64",
+    tools: [],
+  },
+  {
     id: "android-arm64",
     rustTarget: "aarch64-linux-android",
     androidAbi: "arm64-v8a",

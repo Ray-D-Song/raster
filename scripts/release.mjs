@@ -3,10 +3,10 @@
 // Usage examples:
 //   node scripts/release.mjs
 //   node scripts/release.mjs js
-//   node scripts/release.mjs bin --exclude win32-x64
+//   node scripts/release.mjs bin
 //   node scripts/release.mjs bin --include darwin-arm64,linux-x64
 //   node scripts/release.mjs all --dry-run
-//   node scripts/release.mjs all --exclude win32-x64 --otp 123456
+//   node scripts/release.mjs all --exclude win32-arm64 --otp 123456
 //
 // Domains:
 //   js   Publish raster-js, unplugin-raster, and raster-cli. This is the default.
@@ -15,7 +15,7 @@
 //
 // Target aliases:
 //   JS: raster/raster-js, plugin/unplugin-raster, cli/raster-cli
-//   Bin: darwin-arm64, darwin-x64, linux-arm64, linux-x64, win32-x64
+//   Bin: darwin-arm64, darwin-x64, linux-arm64, linux-x64, win32-x64, win32-arm64
 //
 // The release version always comes from config.json. This script rewrites package
 // versions and internal Raster dependencies before packing or publishing.
@@ -60,6 +60,11 @@ const binaryTargets = [
   target("raster-bin-win32-x64", "packages/raster-bin-win32-x64", "bin", ["win32-x64"], {
     os: "win32",
     cpu: "x64",
+    binary: "bin/raster.exe",
+  }),
+  target("raster-bin-win32-arm64", "packages/raster-bin-win32-arm64", "bin", ["win32-arm64"], {
+    os: "win32",
+    cpu: "arm64",
     binary: "bin/raster.exe",
   }),
 ];

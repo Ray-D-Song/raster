@@ -86,6 +86,10 @@ jobs:
             runner: windows-2025
             rust_target: x86_64-pc-windows-msvc
             package_dir: packages/raster-bin-win32-x64
+          - platform: win32-arm64
+            runner: windows-11-arm
+            rust_target: aarch64-pc-windows-msvc
+            package_dir: packages/raster-bin-win32-arm64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -271,17 +275,21 @@ jobs:
         with:
           name: raster-bin-win32-x64
           path: packages/raster-bin-win32-x64
+      - uses: actions/download-artifact@v4
+        with:
+          name: raster-bin-win32-arm64
+          path: packages/raster-bin-win32-arm64
 
       - name: Restore executable permissions
         run: chmod +x packages/raster-bin-*/bin/raster
 
       - name: Pack binary npm packages
         if: needs.prepare.outputs.dry_run == 'true'
-        run: node scripts/release.mjs bin --exclude win32-x64 --dry-run
+        run: node scripts/release.mjs bin --dry-run
 
       - name: Publish binary npm packages
         if: needs.prepare.outputs.dry_run != 'true'
-        run: node scripts/release.mjs bin --exclude win32-x64
+        run: node scripts/release.mjs bin
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

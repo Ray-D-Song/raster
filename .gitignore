@@ -35,4 +35,5 @@ dist
 
 target/
 
-raster-bin-*
+raster-bin-*.tgz
+packages/raster-bin-*/bin/

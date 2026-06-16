@@ -1,0 +1,22 @@
+{
+  "name": "raster-bin-linux-x64",
+  "version": "0.1.0-alpha.9",
+  "bin": {
+    "raster": "bin/raster"
+  },
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "libc": [
+    "any"
+  ],
+  "files": [
+    "bin"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}
