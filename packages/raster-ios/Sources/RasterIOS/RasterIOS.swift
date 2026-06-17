@@ -154,20 +154,32 @@ public struct RasterAppView: UIViewRepresentable {
         private func installLifecycleObservers() {
             let center = NotificationCenter.default
             observers = [
-                center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { _ in
-                    raster_ios_will_enter_foreground()
-                    self.startDisplayLink()
+                center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+                    DispatchQueue.main.async {
+                        guard let self, self.started else { return }
+                        raster_ios_will_enter_foreground()
+                        self.startDisplayLink()
+                    }
                 },
-                center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
-                    raster_ios_did_become_active()
+                center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                    DispatchQueue.main.async {
+                        guard let self, self.started else { return }
+                        raster_ios_did_become_active()
+                    }
                 },
-                center.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { _ in
-                    raster_ios_will_resign_active()
+                center.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                    DispatchQueue.main.async {
+                        guard let self, self.started else { return }
+                        raster_ios_will_resign_active()
+                    }
                 },
-                center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { _ in
-                    raster_ios_did_enter_background()
-                    self.displayLink?.invalidate()
-                    self.displayLink = nil
+                center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+                    DispatchQueue.main.async {
+                        guard let self, self.started else { return }
+                        raster_ios_did_enter_background()
+                        self.displayLink?.invalidate()
+                        self.displayLink = nil
+                    }
                 }
             ]
         }

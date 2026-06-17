@@ -4,7 +4,7 @@ pub const DEFAULT_ROOT_WIDTH: u32 = 800;
 pub const DEFAULT_ROOT_HEIGHT: u32 = 600;
 #[cfg(test)]
 pub const DEFAULT_ROOT_SIZE: (u32, u32) = (DEFAULT_ROOT_WIDTH, DEFAULT_ROOT_HEIGHT);
-pub const APP_BUNDLE_PATH: &str = "target/raster/template/app.js";
+pub const APP_BUNDLE_PATH: &str = "target/raster/app.js";
 // React's commit traversal is recursive; the LLRT default 512 KiB stack is too small for app trees.
 pub const JS_MAX_STACK_SIZE: usize = 8 * 1024 * 1024;
 

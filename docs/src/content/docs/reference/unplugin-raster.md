@@ -24,10 +24,10 @@ type RasterPluginOptions = {
 | Option | Default |
 | --- | --- |
 | `entry` | `src/main.tsx` |
-| `outfile` | `dist/raster/app.js` |
+| `outfile` | `target/raster/app.js` |
 | `target` | `es2022` |
-| `sourcemap` | `false` |
-| `minify` | `true` |
+| `sourcemap` | `true` |
+| `minify` | `false` |
 
 ## Entry Points
 
@@ -37,5 +37,5 @@ The package exposes plugin entrypoints for Vite, Rollup, Rolldown, and esbuild.
 import raster from "unplugin-raster/vite";
 ```
 
-The plugin keeps Raster host modules external so the Rust runtime can provide
-them.
+The plugin keeps Raster host modules, including `react`, `react/jsx-runtime`,
+and `raster-js/*`, external so the Rust runtime can provide them.

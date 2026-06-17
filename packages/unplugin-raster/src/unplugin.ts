@@ -1,9 +1,12 @@
+import path from "node:path";
+
 import { createUnplugin } from "unplugin";
 
 import { buildRasterExecutable, startRasterDev } from "./binary.ts";
 import {
   mergeRollupExternal,
   normalizeRasterOptions,
+  resolveRasterOptions,
   splitOutfile,
   validateEsbuildMetafile,
   validateRollupBundle,
@@ -20,7 +23,8 @@ export const rasterUnplugin = createUnplugin<RasterPluginOptions>((rawOptions = 
     name: "unplugin-raster",
     vite: {
       config(config) {
-        options = normalizeRasterOptions(rawOptions);
+        const root = path.resolve(config.root ?? process.cwd());
+        options = resolveRasterOptions(normalizeRasterOptions(rawOptions), root);
         bundleValidated = false;
         const output = splitOutfile(options.outfile);
 
@@ -77,6 +81,7 @@ export const rasterUnplugin = createUnplugin<RasterPluginOptions>((rawOptions = 
           file: options.outfile,
           format: "esm",
           inlineDynamicImports: true,
+          sourcemap: options.sourcemap,
         };
       },
       generateBundle(outputOptions, bundle) {
@@ -101,6 +106,7 @@ export const rasterUnplugin = createUnplugin<RasterPluginOptions>((rawOptions = 
           format: "esm",
           codeSplitting: false,
           minify: options.minify,
+          sourcemap: options.sourcemap,
         };
       },
       generateBundle(outputOptions, bundle) {

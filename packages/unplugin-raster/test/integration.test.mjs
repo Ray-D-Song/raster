@@ -17,7 +17,6 @@ process.env.RASTER_UNPLUGIN_SKIP_BINARY = "1";
 test("Vite builds a single Raster app bundle", async () => {
   await withFixture(async (root) => {
     await writeRasterApp(root);
-    const outfile = path.join(root, "dist/raster/app.js");
 
     await viteBuild({
       root,
@@ -25,53 +24,47 @@ test("Vite builds a single Raster app bundle", async () => {
       plugins: [
         viteRaster({
           entry: path.join(root, "src/main.ts"),
-          outfile,
-          minify: false,
         }),
       ],
     });
 
-    assert.deepEqual(await outputFiles(root), ["app.js"]);
+    assert.deepEqual(await outputFiles(root), ["app.js", "app.js.map"]);
   });
 });
 
 test("esbuild builds a single Raster app bundle", async () => {
   await withFixture(async (root) => {
     await writeRasterApp(root);
-    const outfile = path.join(root, "dist/raster/app.js");
 
     await esbuild({
       absWorkingDir: root,
       plugins: [
         esbuildRaster({
           entry: path.join(root, "src/main.ts"),
-          outfile,
-          minify: false,
         }),
       ],
     });
 
-    assert.deepEqual(await outputFiles(root), ["app.js"]);
+    assert.deepEqual(await outputFiles(root), ["app.js", "app.js.map"]);
   });
 });
 
 test("Rolldown builds a single Raster app bundle", async () => {
   await withFixture(async (root) => {
     await writeRasterApp(root);
-    const outfile = path.join(root, "dist/raster/app.js");
+    const outfile = path.join(root, "target/raster/app.js");
 
     await rolldownBuild({
       plugins: [
         rolldownRaster({
           entry: path.join(root, "src/main.ts"),
           outfile,
-          minify: false,
         }),
       ],
       output: {},
     });
 
-    assert.deepEqual(await outputFiles(root), ["app.js"]);
+    assert.deepEqual(await outputFiles(root), ["app.js", "app.js.map"]);
   });
 });
 
@@ -126,6 +119,7 @@ async function writeRasterApp(root, options = {}) {
     path.join(root, "src/main.ts"),
     `
 import { createRoot } from "raster-js/react";
+import { Button } from "raster-js/components";
 import { jsx } from "react/jsx-runtime";
 import { label } from "./lazy.ts";
 ${options.extraEntry ?? ""}
@@ -136,11 +130,11 @@ async function loadLabel() {
 }
 
 void loadLabel();
-createRoot({ width: 320, height: 240 }).render(jsx("View", { children: label }));
+createRoot({ width: 320, height: 240 }).render(jsx(Button, { children: label }));
 `
   );
 }
 
 async function outputFiles(root) {
-  return (await readdir(path.join(root, "dist/raster"))).sort();
+  return (await readdir(path.join(root, "target/raster"))).sort();
 }

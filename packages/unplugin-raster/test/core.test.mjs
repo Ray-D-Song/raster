@@ -13,10 +13,11 @@ test("normalizes default Raster plugin options", () => {
   const options = normalizeRasterOptions();
 
   assert.equal(options.entry, "src/main.tsx");
-  assert.equal(options.outfile, "dist/raster/app.js");
+  assert.equal(options.outfile, "target/raster/app.js");
+  assert.equal(options.out, "target/raster/app");
   assert.equal(options.target, "es2022");
-  assert.equal(options.sourcemap, false);
-  assert.equal(options.minify, true);
+  assert.equal(options.sourcemap, true);
+  assert.equal(options.minify, false);
   assert.deepEqual(options.external, []);
   assert.deepEqual(options.hostExternal, [...HOST_EXTERNALS]);
   assert.deepEqual(options.allExternal, [...HOST_EXTERNALS]);

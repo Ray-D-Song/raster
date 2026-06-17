@@ -67,16 +67,26 @@ export const HOST_EXTERNALS = [
   "react",
   "react/jsx-runtime",
   "react-raster",
+  "raster-js",
+  "raster-js/core",
+  "raster-js/react",
+  "raster-js/component",
+  "raster-js/components",
+  "raster",
+  "raster/core",
+  "raster/react",
+  "raster/component",
+  "raster/components",
 ] as const;
 
 export const DEFAULT_RASTER_PLUGIN_OPTIONS = {
   entry: "src/main.tsx",
-  outfile: "dist/raster/app.js",
-  out: "dist/raster/app",
+  outfile: "target/raster/app.js",
+  out: "target/raster/app",
   watch: false,
   target: "es2022",
-  sourcemap: false,
-  minify: true,
+  sourcemap: true,
+  minify: false,
 } as const;
 
 export class RasterPluginError extends Error {
@@ -115,6 +125,18 @@ export function normalizeRasterOptions(
     external: userExternal,
     hostExternal,
     allExternal: unique([...hostExternal, ...userExternal]),
+  };
+}
+
+export function resolveRasterOptions(
+  options: NormalizedRasterPluginOptions,
+  root: string
+): NormalizedRasterPluginOptions {
+  return {
+    ...options,
+    entry: resolveFromRoot(options.entry, root),
+    outfile: resolveFromRoot(options.outfile, root),
+    out: resolveFromRoot(options.out, root),
   };
 }
 
@@ -239,6 +261,10 @@ function uniqueStrings(values: string[], name: string): string[] {
 
 function unique(values: string[]): string[] {
   return [...new Set(values)];
+}
+
+function resolveFromRoot(value: string, root: string): string {
+  return path.isAbsolute(value) ? value : path.resolve(root, value);
 }
 
 function matchesExistingExternal(

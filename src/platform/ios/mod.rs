@@ -86,32 +86,49 @@ pub extern "C" fn raster_ios_request_frame() {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn raster_ios_will_enter_foreground() {
-    gpui_mobile::ios::ffi::gpui_ios_will_enter_foreground(std::ptr::null_mut());
+    with_ios_window(|window| {
+        gpui_mobile::ios::ffi::gpui_ios_will_enter_foreground(window);
+    });
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn raster_ios_did_become_active() {
-    gpui_mobile::ios::ffi::gpui_ios_did_become_active(std::ptr::null_mut());
+    with_ios_window(|window| {
+        gpui_mobile::ios::ffi::gpui_ios_did_become_active(window);
+    });
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn raster_ios_will_resign_active() {
-    gpui_mobile::ios::ffi::gpui_ios_will_resign_active(std::ptr::null_mut());
+    with_ios_window(|window| {
+        gpui_mobile::ios::ffi::gpui_ios_will_resign_active(window);
+    });
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn raster_ios_did_enter_background() {
-    gpui_mobile::ios::ffi::gpui_ios_did_enter_background(std::ptr::null_mut());
+    with_ios_window(|window| {
+        gpui_mobile::ios::ffi::gpui_ios_did_enter_background(window);
+    });
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn raster_ios_will_terminate() {
-    gpui_mobile::ios::ffi::gpui_ios_will_terminate(std::ptr::null_mut());
+    with_ios_window(|window| {
+        gpui_mobile::ios::ffi::gpui_ios_will_terminate(window);
+    });
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn raster_ios_handle_open_url(url_ptr: *mut c_void) {
     gpui_mobile::ios::ffi::gpui_ios_handle_open_url(url_ptr);
+}
+
+fn with_ios_window(callback: impl FnOnce(*mut c_void)) {
+    let window = gpui_mobile::ios::ffi::gpui_ios_get_window();
+    if !window.is_null() {
+        callback(window);
+    }
 }
 
 unsafe fn run_app(

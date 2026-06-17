@@ -308,8 +308,13 @@ macro_rules! raster_component_module {
 }
 
 react_renderer_module!(ReactRasterModule, "react-raster");
+react_renderer_module!(RasterJsReactModule, "raster-js/react");
 react_renderer_module!(RasterReactModule, "raster/react");
+raster_core_module!(RasterJsModule, "raster-js");
+raster_core_module!(RasterJsCoreModule, "raster-js/core");
 raster_core_module!(RasterModule, "raster");
 raster_core_module!(RasterCoreModule, "raster/core");
+raster_component_module!(RasterJsComponentsModule, "raster-js/components");
+raster_component_module!(RasterJsComponentModule, "raster-js/component");
 raster_component_module!(RasterComponentsModule, "raster/components");
 raster_component_module!(RasterComponentModule, "raster/component");
