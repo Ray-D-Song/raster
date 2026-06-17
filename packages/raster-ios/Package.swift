@@ -3,7 +3,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "Raster",
+    name: "RasterIOSLocal",
     platforms: [
         .iOS(.v15)
     ],
@@ -17,12 +17,11 @@ let package = Package(
         .target(
             name: "RasterIOS",
             dependencies: ["RasterRuntime"],
-            path: "packages/raster-ios/Sources/RasterIOS"
+            path: "Sources/RasterIOS"
         ),
         .binaryTarget(
             name: "RasterRuntime",
-            url: "https://github.com/Ray-D-Song/raster/releases/download/v0.1.0-alpha.13/RasterRuntime.xcframework.zip",
-            checksum: "54214083095dfee9bcb2e31134dc49aaa2884b8386413d963398bcff05b995e3"
+            path: "dist/RasterRuntime.xcframework"
         )
     ]
 )

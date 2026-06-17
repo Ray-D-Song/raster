@@ -1,6 +1,6 @@
 use std::{
     ffi::{CStr, CString, c_char, c_void},
-    io::{Read, Write},
+    io::{ErrorKind, Read, Write},
     net::{TcpStream, ToSocketAddrs},
     sync::{Mutex, OnceLock},
     time::Duration,
@@ -82,6 +82,15 @@ pub extern "C" fn raster_ios_request_frame() {
     if !window.is_null() {
         gpui_mobile::ios::ffi::gpui_ios_request_frame(window);
     }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn raster_ios_root_view() -> *mut c_void {
+    let window = gpui_mobile::ios::ffi::gpui_ios_get_window();
+    if window.is_null() {
+        return std::ptr::null_mut();
+    }
+    gpui_mobile::ios::ffi::gpui_ios_get_root_view(window)
 }
 
 #[unsafe(no_mangle)]
@@ -314,7 +323,18 @@ fn listen_for_bundle_events(
             }
         }
 
-        let read = stream.read(&mut read_buf)?;
+        let read = match stream.read(&mut read_buf) {
+            Ok(read) => read,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
+                ) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
         if read == 0 {
             return Ok(());
         }

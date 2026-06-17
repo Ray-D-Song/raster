@@ -295,7 +295,8 @@ impl JsRuntime {
                             anyhow::anyhow!("failed to invoke JS event handler: {error:?}")
                         })
                     })
-                    .await
+                    .await?;
+                Ok(())
             }
             RuntimeCommand::InvokeQuery {
                 handler_id,

@@ -129,7 +129,7 @@ type RasterEventMetadata = {
 
 type RasterRuntimeGlobal = typeof globalThis & {
   __rasterDevReload?: boolean;
-  __rasterDevRoot?: RasterRoot;
+  __rasterDevRoot?: RasterDevRoot;
   __rasterPrepareDevReload?: () => void;
   __rasterFlushSyncWork?: () => void;
   __rasterRunEvent?: (
@@ -138,6 +138,15 @@ type RasterRuntimeGlobal = typeof globalThis & {
     event: RasterEventMetadata | null
   ) => unknown;
   __rasterRendererVersion?: string;
+};
+
+type RasterDevRoot = RasterRoot & {
+  __rasterRunEvent: (
+    handler: RasterEventHandler,
+    payload: unknown,
+    event: RasterEventMetadata | null
+  ) => unknown;
+  __rasterFlushSyncWork: () => void;
 };
 
 const rasterGlobal = globalThis as RasterRuntimeGlobal;
@@ -515,11 +524,43 @@ function createFabricReconcilerContainer(containerInfo: FabricContainerNode): Fa
   );
 }
 
-export function createFabricRoot(options?: RasterRootOptions): RasterRoot {
+export function createFabricRoot(options?: RasterRootOptions): RasterDevRoot {
   const root = createFabricContainerForHostConfig(options);
   const container = createFabricReconcilerContainer(root);
 
-  const rasterRoot: RasterRoot = {
+  const runEvent = (
+    handler: RasterEventHandler,
+    payload: unknown,
+    event: RasterEventMetadata | null
+  ) => {
+    const previousRasterEvent = currentRasterEvent;
+    const previousGlobalEvent = rasterEventGlobal.event;
+    const nextEvent = normalizeEventMetadata(event);
+    currentRasterEvent = nextEvent;
+    schedulerEvent = null;
+    if (nextEvent == null) {
+      delete rasterEventGlobal.event;
+    } else {
+      rasterEventGlobal.event = nextEvent;
+    }
+
+    try {
+      const result = fabricReconciler.flushSyncFromReconciler(() =>
+        fabricReconciler.discreteUpdates(handler, payload)
+      );
+      flushRasterWork(fabricReconciler);
+      return result;
+    } finally {
+      currentRasterEvent = previousRasterEvent;
+      if (previousGlobalEvent === undefined) {
+        delete rasterEventGlobal.event;
+      } else {
+        rasterEventGlobal.event = previousGlobalEvent;
+      }
+    }
+  };
+
+  const rasterRoot: RasterDevRoot = {
     render(element: ReactElement | null) {
       const previousSurfaceId = currentFabricSurfaceId;
       currentFabricSurfaceId = root.surfaceId;
@@ -543,6 +584,10 @@ export function createFabricRoot(options?: RasterRootOptions): RasterRoot {
         currentFabricSurfaceId = previousSurfaceId;
       }
     },
+    __rasterRunEvent: runEvent,
+    __rasterFlushSyncWork() {
+      flushRasterWork(fabricReconciler);
+    },
   };
   return rasterRoot;
 }
@@ -552,20 +597,25 @@ export function createRoot(options?: RasterRootOptions): RasterRoot {
     if (rasterGlobal.__rasterDevRoot == null) {
       rasterGlobal.__rasterDevRoot = createFabricRoot(options);
     }
+    rasterGlobal.__rasterRunEvent = rasterGlobal.__rasterDevRoot.__rasterRunEvent;
+    rasterGlobal.__rasterFlushSyncWork = rasterGlobal.__rasterDevRoot.__rasterFlushSyncWork;
     return rasterGlobal.__rasterDevRoot;
   }
-  return createFabricRoot(options);
+  const root = createFabricRoot(options);
+  rasterGlobal.__rasterRunEvent = root.__rasterRunEvent;
+  rasterGlobal.__rasterFlushSyncWork = root.__rasterFlushSyncWork;
+  return root;
 }
 
 rasterGlobal.__rasterPrepareDevReload = () => {
   rasterGlobal.__rasterDevRoot?.clear();
 };
 
-rasterGlobal.__rasterFlushSyncWork = () => {
+rasterGlobal.__rasterFlushSyncWork ??= () => {
   flushRasterWork(currentEventReconciler);
 };
 
-rasterGlobal.__rasterRunEvent = (handler, payload, event) => {
+rasterGlobal.__rasterRunEvent ??= (handler, payload, event) => {
   const previousRasterEvent = currentRasterEvent;
   const previousGlobalEvent = rasterEventGlobal.event;
   const nextEvent = normalizeEventMetadata(event);

@@ -237,7 +237,8 @@ impl RasterRootView {
 
     fn drain_commits(&mut self) -> ApplyOutcome {
         let mut outcome = ApplyOutcome::new();
-        for batch in self.native_binding.drain_commits() {
+        let batches = self.native_binding.drain_commits();
+        for batch in batches {
             match self.tree.borrow_mut().apply_batch(batch) {
                 Ok(batch_outcome) => {
                     outcome.merge(batch_outcome);

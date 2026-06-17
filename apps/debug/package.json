@@ -1,5 +1,5 @@
 {
-  "name": "__RASTER_APP_NAME__",
+  "name": "debug",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -15,14 +15,14 @@
     "build:ios": "raster build ios"
   },
   "dependencies": {
-    "raster-js": "0.1.0-alpha.13",
+    "raster-js": "workspace:*",
     "react": "19.2.6"
   },
   "devDependencies": {
     "@types/react": "19.2.15",
-    "raster-cli": "0.1.0-alpha.13",
+    "raster-cli": "workspace:*",
     "typescript": "6.0.3",
-    "unplugin-raster": "0.1.0-alpha.13",
+    "unplugin-raster": "workspace:*",
     "vite": "8.0.14"
   }
 }

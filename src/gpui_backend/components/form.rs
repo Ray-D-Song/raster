@@ -160,7 +160,9 @@ fn build_field_from_node(
     if let Some(description) = props.get("description").map(display_value) {
         if bool_prop(props, "__validationError").unwrap_or(false) {
             native_field = native_field.description_fn(move |_window, cx| {
-                div().text_color(cx.theme().danger).child(description.clone())
+                div()
+                    .text_color(cx.theme().danger)
+                    .child(description.clone())
             });
         } else {
             native_field = native_field.description(description);

@@ -21,6 +21,31 @@ importers:
         specifier: 6.0.3
         version: 6.0.3
 
+  apps/debug:
+    dependencies:
+      raster-js:
+        specifier: workspace:*
+        version: link:../../packages/raster
+      react:
+        specifier: 19.2.6
+        version: 19.2.6
+    devDependencies:
+      '@types/react':
+        specifier: 19.2.15
+        version: 19.2.15
+      raster-cli:
+        specifier: workspace:*
+        version: link:../../packages/cli
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      unplugin-raster:
+        specifier: workspace:*
+        version: link:../../packages/unplugin-raster
+      vite:
+        specifier: 8.0.14
+        version: 8.0.14(@types/node@25.9.1)(esbuild@0.28.0)
+
   apps/showcase:
     dependencies:
       raster-js:

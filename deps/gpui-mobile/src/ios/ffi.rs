@@ -29,6 +29,8 @@ struct IosAppState {
     /// This is the closure passed to Application::run().
     /// Using std::cell::UnsafeCell since this is only accessed from the main thread.
     finish_launching: std::cell::UnsafeCell<Option<Box<dyn FnOnce()>>>,
+    /// Keeps GPUI's AppCell alive after Application::run returns on iOS.
+    application: std::cell::UnsafeCell<Option<Application>>,
 }
 
 // Safety: On iOS, all GPUI operations happen on the main thread.
@@ -61,6 +63,7 @@ pub extern "C" fn gpui_ios_initialize() -> *mut c_void {
     // Initialize the app state
     let state = IosAppState {
         finish_launching: std::cell::UnsafeCell::new(None),
+        application: std::cell::UnsafeCell::new(None),
     };
 
     if IOS_APP_STATE.set(state).is_err() {
@@ -86,8 +89,19 @@ pub extern "C" fn gpui_ios_initialize() -> *mut c_void {
 pub(crate) fn register_window(window: *const super::window::IosWindow) {
     if let Some(wrapper) = IOS_WINDOW_LIST.get() {
         unsafe {
-            (*wrapper.0.get()).push(window);
+            let windows = &mut *wrapper.0.get();
+            windows.push(window);
             log::info!("GPUI iOS: Registered window {:p}", window);
+        }
+    }
+}
+
+pub(crate) fn unregister_window(window: *const super::window::IosWindow) {
+    if let Some(wrapper) = IOS_WINDOW_LIST.get() {
+        unsafe {
+            let windows = &mut *wrapper.0.get();
+            windows.retain(|&registered| registered != window);
+            log::info!("GPUI iOS: Unregistered window {:p}", window);
         }
     }
 }
@@ -109,6 +123,17 @@ pub extern "C" fn gpui_ios_get_window() -> *mut c_void {
     }
     log::warn!("GPUI iOS: No windows registered");
     std::ptr::null_mut()
+}
+
+/// Get the root UIKit view backing a GPUI iOS window.
+#[unsafe(no_mangle)]
+pub extern "C" fn gpui_ios_get_root_view(window_ptr: *mut c_void) -> *mut c_void {
+    if window_ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let window = unsafe { &*(window_ptr as *const super::window::IosWindow) };
+    window.metal_view_ptr() as *mut c_void
 }
 
 /// Store the finish launching callback.
@@ -310,7 +335,10 @@ pub extern "C" fn gpui_ios_request_frame(window_ptr: *mut c_void) {
             ..Default::default()
         });
         // Restore the callback for the next frame
-        window.request_frame_callback.borrow_mut().replace(cb);
+        let mut slot = window.request_frame_callback.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(cb);
+        }
     }
 }
 
@@ -484,13 +512,21 @@ pub fn run_app() {
     if IOS_APP_STATE.get().is_none() {
         let state = IosAppState {
             finish_launching: std::cell::UnsafeCell::new(None),
+            application: std::cell::UnsafeCell::new(None),
         };
         let _ = IOS_APP_STATE.set(state);
         let _ = IOS_WINDOW_LIST.set(WindowListWrapper(std::cell::UnsafeCell::new(Vec::new())));
     }
 
     let platform = Rc::new(super::IosPlatform::new());
-    Application::with_platform(platform).run(|cx: &mut App| {
+    let application = Application::with_platform(platform);
+    if let Some(state) = IOS_APP_STATE.get() {
+        unsafe {
+            *state.application.get() = Some(application.clone());
+        }
+    }
+
+    application.run(|cx: &mut App| {
         if let Some(cb) = take_app_callback() {
             log::info!("GPUI iOS: Invoking user-provided app callback");
             cb(cx);

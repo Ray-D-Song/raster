@@ -1,0 +1,8 @@
+/.gradle/
+/build/
+/app/build/
+/local.properties
+/.idea/
+/app/src/main/jniLibs/
+/app/src/main/assets/raster/app.js
+/app/src/main/assets/raster/app.js.map

@@ -607,26 +607,29 @@ impl IosWindow {
                 preferred_present_mode: None,
             };
 
+            let raw_window = RawIosWindow {
+                view: ios_window.view as *mut c_void,
+            };
+
             let metal_instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
                 backends: wgpu::Backends::METAL,
                 flags: wgpu::InstanceFlags::default(),
                 backend_options: wgpu::BackendOptions::default(),
                 memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
-                display: None,
+                display: Some(Box::new(raw_window)),
             });
-
-            let raw_window = RawIosWindow {
-                view: ios_window.view as *mut c_void,
-            };
 
             // Build a temporary surface for WgpuContext initialisation
             // (adapter selection needs a surface to test compatibility).
             let window_handle = raw_window
                 .window_handle()
                 .expect("iOS window handle unavailable");
+            let display_handle = raw_window
+                .display_handle()
+                .expect("iOS display handle unavailable");
 
             let target = wgpu::SurfaceTargetUnsafe::RawHandle {
-                raw_display_handle: None,
+                raw_display_handle: Some(display_handle.as_raw()),
                 raw_window_handle: window_handle.as_raw(),
             };
 
@@ -999,18 +1002,21 @@ impl IosWindow {
     /// **before** the GPUI render callback runs, so that the scroll delta
     /// is picked up during the current frame's layout/paint cycle.
     pub(crate) fn pump_momentum(&self) {
-        let mut scroller = self.momentum_scroller.borrow_mut();
-        if !scroller.is_active() {
-            return;
-        }
+        let modifiers = self.modifiers.get();
+        let mut inputs = Vec::new();
 
-        if let Some(delta) = scroller.step() {
-            let modifiers = self.modifiers.get();
-            let position = gpui::point(gpui::px(delta.position_x), gpui::px(delta.position_y));
-            let fling_ended = !scroller.is_active();
+        {
+            let mut scroller = self.momentum_scroller.borrow_mut();
+            if !scroller.is_active() {
+                return;
+            }
 
-            if let Some(callback) = self.input_callback.borrow_mut().as_mut() {
-                callback(PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+            if let Some(delta) = scroller.step() {
+                let position =
+                    gpui::point(gpui::px(delta.position_x), gpui::px(delta.position_y));
+                let fling_ended = !scroller.is_active();
+
+                inputs.push(PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
                     position,
                     delta: gpui::ScrollDelta::Pixels(gpui::point(
                         gpui::px(delta.dx),
@@ -1022,29 +1028,41 @@ impl IosWindow {
 
                 // If this was the last momentum frame, send Ended now.
                 if fling_ended {
-                    callback(PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                    inputs.push(PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
                         position,
-                        delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(0.0))),
+                        delta: gpui::ScrollDelta::Pixels(gpui::point(
+                            gpui::px(0.0),
+                            gpui::px(0.0),
+                        )),
                         modifiers,
                         touch_phase: gpui::TouchPhase::Ended,
                     }));
                 }
-            }
-        } else {
-            // Fling finished — emit one final Ended event so GPUI knows
-            // the scroll gesture is truly complete.
-            let position = gpui::point(
-                gpui::px(scroller.position_x()),
-                gpui::px(scroller.position_y()),
-            );
-            let modifiers = self.modifiers.get();
-            if let Some(callback) = self.input_callback.borrow_mut().as_mut() {
-                callback(PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+            } else {
+                // Fling finished — emit one final Ended event so GPUI knows
+                // the scroll gesture is truly complete.
+                let position = gpui::point(
+                    gpui::px(scroller.position_x()),
+                    gpui::px(scroller.position_y()),
+                );
+                inputs.push(PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
                     position,
                     delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(0.0))),
                     modifiers,
                     touch_phase: gpui::TouchPhase::Ended,
                 }));
+            }
+        }
+
+        let callback = self.input_callback.borrow_mut().take();
+        if let Some(mut callback) = callback {
+            for input in inputs {
+                callback(input);
+            }
+
+            let mut slot = self.input_callback.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(callback);
             }
         }
     }
@@ -1248,8 +1266,14 @@ impl IosWindow {
     pub fn notify_active_status_change(&self, is_active: bool) {
         log::info!("GPUI iOS: Window active status changed to: {}", is_active);
 
-        if let Some(callback) = self.active_status_callback.borrow_mut().as_mut() {
+        let callback = self.active_status_callback.borrow_mut().take();
+        if let Some(mut callback) = callback {
             callback(is_active);
+
+            let mut slot = self.active_status_callback.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(callback);
+            }
         }
     }
 
@@ -1343,6 +1367,12 @@ impl HasDisplayHandle for IosWindow {
     {
         let handle = UiKitDisplayHandle::new();
         Ok(unsafe { raw_window_handle::DisplayHandle::borrow_raw(handle.into()) })
+    }
+}
+
+impl Drop for IosWindow {
+    fn drop(&mut self) {
+        super::ffi::unregister_window(self as *const Self);
     }
 }
 

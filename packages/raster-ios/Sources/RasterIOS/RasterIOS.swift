@@ -62,14 +62,33 @@ public struct RasterAppView: UIViewRepresentable {
     }
 
     public func makeUIView(context: Context) -> UIView {
-        let view = UIView(frame: .zero)
+        let view = RasterHostView(frame: UIScreen.main.bounds)
         view.backgroundColor = .clear
         context.coordinator.start()
+        context.coordinator.attachRootView(to: view)
         return view
     }
 
     public func updateUIView(_ uiView: UIView, context: Context) {
         context.coordinator.update(configuration: configuration)
+        context.coordinator.attachRootView(to: uiView)
+        context.coordinator.layoutRootView(in: uiView)
+    }
+
+    @available(iOS 16.0, *)
+    public func sizeThatFits(_ proposal: ProposedViewSize, uiView: UIView, context: Context) -> CGSize? {
+        let fallback = UIScreen.main.bounds.size
+        return CGSize(
+            width: proposedLength(proposal.width, fallback: fallback.width),
+            height: proposedLength(proposal.height, fallback: fallback.height)
+        )
+    }
+
+    private func proposedLength(_ length: CGFloat?, fallback: CGFloat) -> CGFloat {
+        guard let length, length > 0 else {
+            return fallback
+        }
+        return length
     }
 
     public static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
@@ -81,6 +100,7 @@ public struct RasterAppView: UIViewRepresentable {
         private var displayLink: CADisplayLink?
         private var observers: [NSObjectProtocol] = []
         private var started = false
+        private var enteredBackground = false
 
         init(configuration: RasterConfiguration) {
             self.configuration = configuration
@@ -144,6 +164,35 @@ public struct RasterAppView: UIViewRepresentable {
             raster_ios_will_terminate()
         }
 
+        func attachRootView(to container: UIView) {
+            guard let pointer = raster_ios_root_view() else {
+                return
+            }
+            let rootView = Unmanaged<UIView>.fromOpaque(pointer).takeUnretainedValue()
+            if rootView.superview !== container {
+                rootView.removeFromSuperview()
+                rootView.frame = effectiveBounds(for: container)
+                rootView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                container.addSubview(rootView)
+            }
+        }
+
+        func layoutRootView(in container: UIView) {
+            guard let pointer = raster_ios_root_view() else {
+                return
+            }
+            let rootView = Unmanaged<UIView>.fromOpaque(pointer).takeUnretainedValue()
+            guard rootView.superview === container else { return }
+            rootView.frame = effectiveBounds(for: container)
+        }
+
+        private func effectiveBounds(for container: UIView) -> CGRect {
+            if !container.bounds.isEmpty {
+                return container.bounds
+            }
+            return CGRect(origin: .zero, size: UIScreen.main.bounds.size)
+        }
+
         private func startDisplayLink() {
             guard displayLink == nil else { return }
             let link = CADisplayLink(target: self, selector: #selector(renderFrame))
@@ -157,14 +206,19 @@ public struct RasterAppView: UIViewRepresentable {
                 center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
                     DispatchQueue.main.async {
                         guard let self, self.started else { return }
-                        raster_ios_will_enter_foreground()
+                        if self.enteredBackground {
+                            raster_ios_will_enter_foreground()
+                        }
                         self.startDisplayLink()
                     }
                 },
                 center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
                     DispatchQueue.main.async {
                         guard let self, self.started else { return }
-                        raster_ios_did_become_active()
+                        if self.enteredBackground {
+                            self.enteredBackground = false
+                            raster_ios_did_become_active()
+                        }
                     }
                 },
                 center.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
@@ -176,6 +230,7 @@ public struct RasterAppView: UIViewRepresentable {
                 center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
                     DispatchQueue.main.async {
                         guard let self, self.started else { return }
+                        self.enteredBackground = true
                         raster_ios_did_enter_background()
                         self.displayLink?.invalidate()
                         self.displayLink = nil
@@ -186,6 +241,26 @@ public struct RasterAppView: UIViewRepresentable {
 
         @objc private func renderFrame() {
             raster_ios_request_frame()
+        }
+    }
+}
+
+private final class RasterHostView: UIView {
+    override var intrinsicContentSize: CGSize {
+        UIScreen.main.bounds.size
+    }
+
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        if !bounds.isEmpty {
+            return super.point(inside: point, with: event)
+        }
+        return CGRect(origin: .zero, size: UIScreen.main.bounds.size).contains(point)
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        for subview in subviews {
+            subview.frame = bounds.isEmpty ? CGRect(origin: .zero, size: UIScreen.main.bounds.size) : bounds
         }
     }
 }

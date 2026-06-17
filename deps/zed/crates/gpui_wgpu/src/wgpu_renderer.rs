@@ -356,7 +356,8 @@ impl WgpuRenderer {
             ..Default::default()
         });
 
-        let uniform_alignment = device.limits().min_uniform_buffer_offset_alignment as u64;
+        let uniform_alignment =
+            (device.limits().min_uniform_buffer_offset_alignment as u64).max(256);
         let globals_size = std::mem::size_of::<GlobalParams>() as u64;
         let gamma_size = std::mem::size_of::<GammaParams>() as u64;
         let path_globals_offset = globals_size.next_multiple_of(uniform_alignment);

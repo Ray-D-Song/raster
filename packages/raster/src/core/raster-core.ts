@@ -34,6 +34,11 @@ interface HandlerRecord {
   name: string;
 }
 
+interface RasterHandlerRegistry {
+  handlers: Map<HandlerId, HandlerRecord>;
+  handlerSlots: Map<HandlerSlotKey, HandlerId>;
+}
+
 interface RasterEventMetadata {
   type: string | null;
   timeStamp: number;
@@ -48,12 +53,12 @@ export interface RasterFabricContainer {
 type RasterRuntimeGlobal = typeof globalThis & {
   __rasterNative?: RasterNativeBinding;
   __rasterFlushSyncWork?: () => void;
-  __rasterHasHandler?: (id: HandlerId) => boolean;
   __rasterInvokeHandler?: (id: HandlerId, payload: unknown) => unknown;
   __rasterInvokeHandlerJson?: (id: HandlerId, payloadJson: string) => unknown;
   __rasterInvokeHandlersJson?: (callsJson: string) => unknown[];
   __rasterInvokeQuery?: (id: HandlerId, payload: unknown) => unknown;
   __rasterInvokeQueryJson?: (id: HandlerId, payloadJson: string) => string;
+  __rasterHandlerRegistry?: RasterHandlerRegistry;
   __rasterReadMaterializeDiagnostics?: () => RasterFabricMaterializeDiagnostics;
   __rasterResetMaterializeDiagnostics?: () => void;
   __rasterRunEvent?: (
@@ -64,8 +69,14 @@ type RasterRuntimeGlobal = typeof globalThis & {
 };
 
 const rasterGlobal = globalThis as RasterRuntimeGlobal;
-const handlers = new Map<HandlerId, HandlerRecord>();
-const handlerSlots = new Map<HandlerSlotKey, HandlerId>();
+const handlerRegistry =
+  rasterGlobal.__rasterHandlerRegistry ??
+  (rasterGlobal.__rasterHandlerRegistry = {
+    handlers: new Map<HandlerId, HandlerRecord>(),
+    handlerSlots: new Map<HandlerSlotKey, HandlerId>(),
+  });
+const handlers = handlerRegistry.handlers;
+const handlerSlots = handlerRegistry.handlerSlots;
 const RASTER_NATIVE_NODE_TYPE = "raster.native-node" as const;
 const RASTER_NATIVE_CHILD_SET_TYPE = "raster.native-child-set" as const;
 const RASTER_NATIVE_CONTAINER_TYPE = "raster.native-container" as const;
@@ -1363,10 +1374,6 @@ rasterGlobal.__rasterInvokeQueryJson = function (
 ): string {
   const result = rasterGlobal.__rasterInvokeQuery?.(id, JSON.parse(payloadJson));
   return JSON.stringify(result ?? null);
-};
-
-rasterGlobal.__rasterHasHandler = function (id: HandlerId): boolean {
-  return handlers.has(id);
 };
 
 rasterGlobal.__rasterReadMaterializeDiagnostics = readRasterFabricMaterializeDiagnostics;
