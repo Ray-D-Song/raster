@@ -1,12 +1,12 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
-      - "[0-9]*"
   workflow_dispatch:
     inputs:
+      version:
+        description: "Release version; defaults to config.json"
+        required: false
+        type: string
       dry_run:
         description: "Build and pack without publishing"
         type: boolean
@@ -14,6 +14,10 @@ on:
 
 permissions:
   contents: write
+
+concurrency:
+  group: release-${{ inputs.version || github.ref_name }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -40,14 +44,15 @@ jobs:
 
       - id: prepare
         shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
-          version="$(node -e "console.log(JSON.parse(require('fs').readFileSync('config.json', 'utf8')).version)")"
-          ref_name="${GITHUB_REF_NAME}"
-          tag_version="${ref_name#v}"
-
-          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${tag_version}" != "${version}" ]]; then
-            echo "Git tag ${ref_name} does not match config.json version ${version}" >&2
+          config_version="$(node -e "console.log(JSON.parse(require('fs').readFileSync('config.json', 'utf8')).version)")"
+          version="${INPUT_VERSION:-$config_version}"
+          if [[ "${version}" != "${config_version}" ]]; then
+            echo "Requested version ${version} does not match config.json version ${config_version}" >&2
             exit 1
           fi
 
@@ -56,18 +61,129 @@ jobs:
             npm_tag="alpha"
           fi
 
-          dry_run="false"
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            dry_run="${{ inputs.dry_run }}"
-          fi
+          dry_run="${INPUT_DRY_RUN:-true}"
 
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "npm_tag=${npm_tag}" >> "$GITHUB_OUTPUT"
           echo "dry_run=${dry_run}" >> "$GITHUB_OUTPUT"
 
+  build-ios-release:
+    name: Build and stage iOS Swift Package artifact
+    needs: prepare
+    runs-on: macos-26
+    outputs:
+      release_sha: ${{ steps.release-sha.outputs.release_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ios-xcframework
+          cache-on-failure: true
+          cache-workspace-crates: true
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Reset sccache stats
+        run: sccache --zero-stats
+
+      - name: Build iOS XCFramework
+        run: node scripts/build.mjs --platform ios-xcframework
+
+      - name: Verify generated checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="$(node -e 'const source = require("fs").readFileSync("Package.swift", "utf8"); const match = source.match(/checksum: "([0-9a-f]{64})"/); if (!match) process.exit(1); console.log(match[1]);')"
+          actual="$(cat packages/raster-ios/dist/RasterRuntime.xcframework.checksum)"
+          if [[ "${expected}" != "${actual}" ]]; then
+            echo "Package.swift checksum ${expected} does not match generated checksum ${actual}" >&2
+            exit 1
+          fi
+
+      - name: Commit Package.swift checksum
+        if: needs.prepare.outputs.dry_run != 'true'
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Package.swift
+          if git diff --cached --quiet; then
+            echo "Package.swift already contains the generated checksum."
+          else
+            git commit -m "release: prepare iOS artifact for ${VERSION}"
+          fi
+          git push origin HEAD:main
+
+      - name: Create or update GitHub Release asset
+        if: needs.prepare.outputs.dry_run != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release upload "${tag}" \
+              packages/raster-ios/dist/RasterRuntime.xcframework.zip \
+              packages/raster-ios/dist/RasterRuntime.xcframework.checksum \
+              --clobber
+            gh release edit "${tag}" --title "${tag}" --notes "Raster ${VERSION}"
+          else
+            gh release create "${tag}" \
+              packages/raster-ios/dist/RasterRuntime.xcframework.zip \
+              packages/raster-ios/dist/RasterRuntime.xcframework.checksum \
+              --target "$(git rev-parse HEAD)" \
+              --title "${tag}" \
+              --notes "Raster ${VERSION}"
+          fi
+
+      - name: Move release tag to checksum commit
+        if: needs.prepare.outputs.dry_run != 'true'
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          git tag -f "${tag}" HEAD
+          git push origin -f "${tag}"
+
+      - name: Export release commit
+        id: release-sha
+        shell: bash
+        run: echo "release_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Show sccache stats
+        if: always()
+        run: sccache --show-stats
+
   build-bin:
     name: Build ${{ matrix.platform }}
-    needs: prepare
+    needs:
+      - prepare
+      - build-ios-release
     strategy:
       fail-fast: false
       matrix:
@@ -99,6 +215,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build-ios-release.outputs.release_sha }}
 
       - uses: pnpm/action-setup@v4
 
@@ -170,10 +288,14 @@ jobs:
 
   build-android:
     name: Build Android Maven bundle
-    needs: prepare
+    needs:
+      - prepare
+      - build-ios-release
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build-ios-release.outputs.release_sha }}
 
       - uses: pnpm/action-setup@v4
 
@@ -243,10 +365,14 @@ jobs:
 
   verify-ios-release-asset:
     name: Verify iOS Swift Package release asset
-    needs: prepare
+    needs:
+      - prepare
+      - build-ios-release
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build-ios-release.outputs.release_sha }}
 
       - name: Skip iOS release asset check for dry run
         if: needs.prepare.outputs.dry_run == 'true'
@@ -302,10 +428,13 @@ jobs:
     name: Publish binary npm packages
     needs:
       - prepare
+      - build-ios-release
       - build-bin
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build-ios-release.outputs.release_sha }}
 
       - uses: pnpm/action-setup@v4
 
@@ -356,10 +485,13 @@ jobs:
     name: Publish Android Maven package
     needs:
       - prepare
+      - build-ios-release
       - build-android
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build-ios-release.outputs.release_sha }}
 
       - uses: actions/setup-node@v4
         with:
@@ -385,10 +517,13 @@ jobs:
     name: Publish GitHub Release metadata
     needs:
       - prepare
+      - build-ios-release
       - verify-ios-release-asset
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build-ios-release.outputs.release_sha }}
 
       - name: Verify dry run
         if: needs.prepare.outputs.dry_run == 'true'
@@ -409,12 +544,15 @@ jobs:
     name: Publish JS npm packages
     needs:
       - prepare
+      - build-ios-release
       - publish-bin
       - publish-android
       - publish-github-release
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build-ios-release.outputs.release_sha }}
 
       - uses: pnpm/action-setup@v4
 
