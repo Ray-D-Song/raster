@@ -79,12 +79,13 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - uses: pnpm/action-setup@v6
-
       - uses: actions/setup-node@v5
         with:
           node-version: 24
-          cache: pnpm
+
+      - uses: pnpm/action-setup@v6
+        with:
+          cache: true
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -218,12 +219,13 @@ jobs:
         with:
           ref: ${{ needs.build-ios-release.outputs.release_sha }}
 
-      - uses: pnpm/action-setup@v6
-
       - uses: actions/setup-node@v5
         with:
           node-version: 24
-          cache: pnpm
+
+      - uses: pnpm/action-setup@v6
+        with:
+          cache: true
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -297,12 +299,13 @@ jobs:
         with:
           ref: ${{ needs.build-ios-release.outputs.release_sha }}
 
-      - uses: pnpm/action-setup@v6
-
       - uses: actions/setup-node@v5
         with:
           node-version: 24
-          cache: pnpm
+
+      - uses: pnpm/action-setup@v6
+        with:
+          cache: true
 
       - uses: actions/setup-java@v5
         with:
@@ -436,13 +439,14 @@ jobs:
         with:
           ref: ${{ needs.build-ios-release.outputs.release_sha }}
 
-      - uses: pnpm/action-setup@v6
-
       - uses: actions/setup-node@v5
         with:
           node-version: 24
-          cache: pnpm
           registry-url: https://registry.npmjs.org
+
+      - uses: pnpm/action-setup@v6
+        with:
+          cache: true
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -554,13 +558,14 @@ jobs:
         with:
           ref: ${{ needs.build-ios-release.outputs.release_sha }}
 
-      - uses: pnpm/action-setup@v6
-
       - uses: actions/setup-node@v5
         with:
           node-version: 24
-          cache: pnpm
           registry-url: https://registry.npmjs.org
+
+      - uses: pnpm/action-setup@v6
+        with:
+          cache: true
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
