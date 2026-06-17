@@ -13,6 +13,7 @@ on:
         default: true
 
 permissions:
+  actions: write
   contents: write
 
 concurrency:
@@ -66,6 +67,12 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "npm_tag=${npm_tag}" >> "$GITHUB_OUTPUT"
           echo "dry_run=${dry_run}" >> "$GITHUB_OUTPUT"
+
+      - name: Cancel workflow on failure
+        if: failure() && !cancelled()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel "${{ github.run_id }}" --repo "${{ github.repository }}" || true
 
   build-ios-release:
     name: Build and stage iOS Swift Package artifact
@@ -181,13 +188,19 @@ jobs:
         if: always()
         run: sccache --show-stats
 
+      - name: Cancel workflow on failure
+        if: failure() && !cancelled()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel "${{ github.run_id }}" --repo "${{ github.repository }}" || true
+
   build-bin:
     name: Build ${{ matrix.platform }}
     needs:
       - prepare
       - build-ios-release
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
           - platform: darwin-arm64
@@ -290,6 +303,12 @@ jobs:
           path: ${{ matrix.package_dir }}
           if-no-files-found: error
 
+      - name: Cancel workflow on failure
+        if: failure() && !cancelled()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel "${{ github.run_id }}" --repo "${{ github.repository }}" || true
+
   build-android:
     name: Build Android Maven bundle
     needs:
@@ -369,6 +388,12 @@ jobs:
           path: packages/raster-android/build/raster-android-maven-central-bundle.zip
           if-no-files-found: error
 
+      - name: Cancel workflow on failure
+        if: failure() && !cancelled()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel "${{ github.run_id }}" --repo "${{ github.repository }}" || true
+
   verify-ios-release-asset:
     name: Verify iOS Swift Package release asset
     needs:
@@ -430,6 +455,12 @@ jobs:
             fi
           fi
 
+      - name: Cancel workflow on failure
+        if: failure() && !cancelled()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel "${{ github.run_id }}" --repo "${{ github.repository }}" || true
+
   publish-bin:
     name: Publish binary npm packages
     needs:
@@ -489,6 +520,12 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      - name: Cancel workflow on failure
+        if: failure() && !cancelled()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel "${{ github.run_id }}" --repo "${{ github.repository }}" || true
+
   publish-android:
     name: Publish Android Maven package
     needs:
@@ -522,6 +559,12 @@ jobs:
           MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
           MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
 
+      - name: Cancel workflow on failure
+        if: failure() && !cancelled()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel "${{ github.run_id }}" --repo "${{ github.repository }}" || true
+
   publish-github-release:
     name: Publish GitHub Release metadata
     needs:
@@ -548,6 +591,12 @@ jobs:
           tag="v${VERSION}"
           gh release view "${tag}" >/dev/null
           gh release edit "${tag}" --title "${tag}" --notes "Raster ${VERSION}"
+
+      - name: Cancel workflow on failure
+        if: failure() && !cancelled()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel "${{ github.run_id }}" --repo "${{ github.repository }}" || true
 
   publish-js:
     name: Publish JS npm packages
@@ -585,3 +634,9 @@ jobs:
         run: node scripts/release.mjs js
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Cancel workflow on failure
+        if: failure() && !cancelled()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel "${{ github.run_id }}" --repo "${{ github.repository }}" || true
