@@ -8,6 +8,7 @@ export type RasterPluginOptions = {
   target?: string;
   sourcemap?: boolean;
   minify?: boolean;
+  hostExternal?: boolean;
   external?: string[];
 };
 
@@ -112,7 +113,7 @@ export function normalizeRasterOptions(
   );
   const out = nonEmptyString(options.out, "out", DEFAULT_RASTER_PLUGIN_OPTIONS.out);
   const userExternal = uniqueStrings(options.external ?? [], "external");
-  const hostExternal = [...HOST_EXTERNALS];
+  const hostExternal = options.hostExternal === false ? [] : [...HOST_EXTERNALS];
 
   return {
     entry,

@@ -32,6 +32,17 @@ test("appends user externals without removing host externals", () => {
   assert.deepEqual(options.allExternal, [...HOST_EXTERNALS, "node:fs"]);
 });
 
+test("can disable host externals for local debug bundles", () => {
+  const options = normalizeRasterOptions({
+    hostExternal: false,
+    external: ["node:fs", "node:fs"],
+  });
+
+  assert.deepEqual(options.hostExternal, []);
+  assert.deepEqual(options.external, ["node:fs"]);
+  assert.deepEqual(options.allExternal, ["node:fs"]);
+});
+
 test("rejects Rollup-like bundles with multiple JS chunks", () => {
   const options = normalizeRasterOptions({ outfile: "dist/raster/app.js" });
 

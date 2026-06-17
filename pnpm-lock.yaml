@@ -4,6 +4,14 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  raster-bin-darwin-arm64: workspace:*
+  raster-bin-darwin-x64: workspace:*
+  raster-bin-linux-arm64: workspace:*
+  raster-bin-linux-x64: workspace:*
+  raster-bin-win32-arm64: workspace:*
+  raster-bin-win32-x64: workspace:*
+
 importers:
 
   .:
@@ -145,20 +153,20 @@ importers:
         version: 8.0.14(@types/node@25.9.1)(esbuild@0.28.0)
     optionalDependencies:
       raster-bin-darwin-arm64:
-        specifier: 0.1.0-alpha.12
-        version: 0.1.0-alpha.12
+        specifier: workspace:*
+        version: link:../raster-bin-darwin-arm64
       raster-bin-darwin-x64:
-        specifier: 0.1.0-alpha.12
-        version: 0.1.0-alpha.12
+        specifier: workspace:*
+        version: link:../raster-bin-darwin-x64
       raster-bin-linux-arm64:
-        specifier: 0.1.0-alpha.12
-        version: 0.1.0-alpha.12
+        specifier: workspace:*
+        version: link:../raster-bin-linux-arm64
       raster-bin-linux-x64:
-        specifier: 0.1.0-alpha.12
-        version: 0.1.0-alpha.12
+        specifier: workspace:*
+        version: link:../raster-bin-linux-x64
       raster-bin-win32-x64:
-        specifier: 0.1.0-alpha.12
-        version: 0.1.0-alpha.12
+        specifier: workspace:*
+        version: link:../raster-bin-win32-x64
 
 packages:
 
@@ -1922,76 +1930,6 @@ packages:
 
   radix3@1.1.2:
     resolution: {integrity: sha512-b484I/7b8rDEdSDKckSSBA8knMpcdsXudlE/LNL639wFoHKwLbEkQFZHWEYwDC0wa0FKUcCY+GAF73Z7wxNVFA==}
-
-  raster-bin-darwin-arm64@0.1.0-alpha.12:
-    resolution: {integrity: sha512-RVJRq4eBSkipcuE+0zWS+avja2JApTHcR6MjkwfovWSbVQ1m2XjKdL7KEtBZ3ClGue3KSCXdmQYbgO11pDERWg==}
-    cpu: [arm64]
-    os: [darwin]
-    libc: [any]
-    hasBin: true
-
-  raster-bin-darwin-arm64@0.1.0-alpha.13:
-    resolution: {integrity: sha512-ViCumrWwuQuQsT54Sh9F6yMJavsmWU1H9un4AKiRiHReMWBwpofWSD9x222uQ2nMeBYRzOVevgKoQi5/zb9eWw==}
-    cpu: [arm64]
-    os: [darwin]
-    libc: [any]
-    hasBin: true
-
-  raster-bin-darwin-x64@0.1.0-alpha.12:
-    resolution: {integrity: sha512-lZ+8mn6PCIKvj0I2Nl+ugEWqQwy4PUr9epELNf7y/M+tA0IOUxYWAiUqoiDf6uu0WTs/OuYl9Wigg59+7D6IJw==}
-    cpu: [x64]
-    os: [darwin]
-    libc: [any]
-    hasBin: true
-
-  raster-bin-darwin-x64@0.1.0-alpha.13:
-    resolution: {integrity: sha512-0YhFFEylivlv4bIqC42KG4E25966mof44cEqyevufaD9zNUAvwLvnZVj1UV0hlBMVtR9xyB9FoGNSSi7Ax1ZNg==}
-    cpu: [x64]
-    os: [darwin]
-    libc: [any]
-    hasBin: true
-
-  raster-bin-linux-arm64@0.1.0-alpha.12:
-    resolution: {integrity: sha512-Kl9ZYSgf2Q+NKjvMHFeO6Tds3FSuWt+T2/vnvloUdYxbe9rOPMMDK/eQqkKD5OTVqCjIpTxbhE9k42kd/CSm/w==}
-    cpu: [arm64]
-    os: [linux]
-    libc: [any]
-    hasBin: true
-
-  raster-bin-linux-arm64@0.1.0-alpha.13:
-    resolution: {integrity: sha512-pRjd2qp8DOfed60z7/obA1Am5SVn+kOZwy9zWX1pCEknzEiSi+BkeKadcx5IFEaaimImCjES+SAaARgV/rhRgg==}
-    cpu: [arm64]
-    os: [linux]
-    libc: [any]
-    hasBin: true
-
-  raster-bin-linux-x64@0.1.0-alpha.12:
-    resolution: {integrity: sha512-Aqhii53MJYZxDWeiGqhq5Q0/PyrqfWu9C7F4MlzYR1iasoZW/dqUmUIzFIm+ygvqcLGNskh5eEpatE5Tmtfiew==}
-    cpu: [x64]
-    os: [linux]
-    libc: [any]
-    hasBin: true
-
-  raster-bin-linux-x64@0.1.0-alpha.13:
-    resolution: {integrity: sha512-g3K2GSDAwft76b06RCqxU3bbWvEivaofncDHTV90lc75pBle7Y/nVobeXfQaqYPULZr5Tn0gJ7rKEbvi5wBXOg==}
-    cpu: [x64]
-    os: [linux]
-    libc: [any]
-    hasBin: true
-
-  raster-bin-win32-x64@0.1.0-alpha.12:
-    resolution: {integrity: sha512-1RVGdAGL39e3ybvvq8x1k5fDHl26OFKYu1HbQgr5wASBMkiIbo0nGc6LtL3XqvW5G20gi5/eT9HoUNYE5GLEvQ==}
-    cpu: [x64]
-    os: [win32]
-    libc: [any]
-    hasBin: true
-
-  raster-bin-win32-x64@0.1.0-alpha.13:
-    resolution: {integrity: sha512-GKo6bmukU7Zua4dq1/mjGoh0VM4vaBLuTCxyQhqc9O7dc0iP9khZwnNBwu8P9HD03WVVQ7vPy1og7oDnD3U8zA==}
-    cpu: [x64]
-    os: [win32]
-    libc: [any]
-    hasBin: true
 
   raster-cli@0.1.0-alpha.13:
     resolution: {integrity: sha512-bnBUnz7cYkFYVLc6vypqYNqorAZNzsyvLIsKlwJ9Xoh25U0V47XDFpE41R+TCuV5RsEfnfzkretLRfku5zrnlg==}
@@ -4501,36 +4439,6 @@ snapshots:
 
   radix3@1.1.2: {}
 
-  raster-bin-darwin-arm64@0.1.0-alpha.12:
-    optional: true
-
-  raster-bin-darwin-arm64@0.1.0-alpha.13:
-    optional: true
-
-  raster-bin-darwin-x64@0.1.0-alpha.12:
-    optional: true
-
-  raster-bin-darwin-x64@0.1.0-alpha.13:
-    optional: true
-
-  raster-bin-linux-arm64@0.1.0-alpha.12:
-    optional: true
-
-  raster-bin-linux-arm64@0.1.0-alpha.13:
-    optional: true
-
-  raster-bin-linux-x64@0.1.0-alpha.12:
-    optional: true
-
-  raster-bin-linux-x64@0.1.0-alpha.13:
-    optional: true
-
-  raster-bin-win32-x64@0.1.0-alpha.12:
-    optional: true
-
-  raster-bin-win32-x64@0.1.0-alpha.13:
-    optional: true
-
   raster-cli@0.1.0-alpha.13: {}
 
   raster-js@0.1.0-alpha.13:
@@ -4951,11 +4859,11 @@ snapshots:
       unplugin: 3.0.0
     optionalDependencies:
       esbuild: 0.28.0
-      raster-bin-darwin-arm64: 0.1.0-alpha.13
-      raster-bin-darwin-x64: 0.1.0-alpha.13
-      raster-bin-linux-arm64: 0.1.0-alpha.13
-      raster-bin-linux-x64: 0.1.0-alpha.13
-      raster-bin-win32-x64: 0.1.0-alpha.13
+      raster-bin-darwin-arm64: link:packages/raster-bin-darwin-arm64
+      raster-bin-darwin-x64: link:packages/raster-bin-darwin-x64
+      raster-bin-linux-arm64: link:packages/raster-bin-linux-arm64
+      raster-bin-linux-x64: link:packages/raster-bin-linux-x64
+      raster-bin-win32-x64: link:packages/raster-bin-win32-x64
       rolldown: 1.0.2
       rollup: 4.60.4
       vite: 8.0.14(@types/node@25.9.1)(esbuild@0.28.0)

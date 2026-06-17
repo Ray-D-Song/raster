@@ -2,3 +2,11 @@ packages:
   - "packages/*"
   - "apps/*"
   - "docs"
+
+overrides:
+  raster-bin-darwin-arm64: workspace:*
+  raster-bin-darwin-x64: workspace:*
+  raster-bin-linux-arm64: workspace:*
+  raster-bin-linux-x64: workspace:*
+  raster-bin-win32-arm64: workspace:*
+  raster-bin-win32-x64: workspace:*
