@@ -24,7 +24,7 @@ log = "0.4"
 libsui = "0.15.0"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-gpui_platform = { path = "deps/zed/crates/gpui_platform", features = ["font-kit", "runtime_shaders"] }
+gpui_platform = { path = "deps/zed/crates/gpui_platform", features = ["font-kit", "runtime_shaders", "wayland", "x11"] }
 llrt_core = { package = "raster_runtime_core", path = "deps/raster-runtime/raster_runtime_core", default-features = false, features = ["macro", "base", "console", "compression-rust", "tls-ring", "crypto-rust"] }
 
 [target.'cfg(target_os = "ios")'.dependencies]
