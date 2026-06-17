@@ -175,7 +175,7 @@ fn is_app_debuggable(app: &AndroidApp) -> anyhow::Result<bool> {
         let flags_field = CString::new("flags")?;
         let int_signature = CString::new("I")?;
         let flags = unsafe {
-            let native = **raw_env;
+            let native = &**raw_env;
             let activity_class = (native.v1_1.GetObjectClass)(raw_env, activity);
             let method_id = (native.v1_1.GetMethodID)(
                 raw_env,
