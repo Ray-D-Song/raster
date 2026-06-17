@@ -8,7 +8,7 @@ use std::{
 use android_activity::AndroidApp;
 use gpui::{App, Application, WindowOptions};
 use gpui_mobile::android::jni as gpui_jni;
-use jni::{JavaVM, objects::JObject};
+use jni::{JavaVM, sys};
 
 use crate::{
     app::{RasterBundle, RasterRunOptions, prepare_raster_app},
@@ -166,18 +166,45 @@ fn load_android_bundle(app: &AndroidApp, debuggable: bool) -> anyhow::Result<Loa
 fn is_app_debuggable(app: &AndroidApp) -> anyhow::Result<bool> {
     const FLAG_DEBUGGABLE: i32 = 0x2;
     let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) };
-    let mut env = vm.attach_current_thread()?;
-    let activity = unsafe { JObject::from_raw(&env, app.activity_as_ptr().cast()) };
-    let application_info = env
-        .call_method(
-            &activity,
-            "getApplicationInfo",
-            "()Landroid/content/pm/ApplicationInfo;",
-            &[],
-        )?
-        .l()?;
-    let flags = env.get_field(&application_info, "flags", "I")?.i()?;
-    Ok((flags & FLAG_DEBUGGABLE) != 0)
+    vm.attach_current_thread(|env| -> anyhow::Result<bool> {
+        let raw_env = env.get_raw();
+        let activity = app.activity_as_ptr().cast::<sys::_jobject>();
+        let get_application_info = CString::new("getApplicationInfo")?;
+        let get_application_info_signature =
+            CString::new("()Landroid/content/pm/ApplicationInfo;")?;
+        let flags_field = CString::new("flags")?;
+        let int_signature = CString::new("I")?;
+        let flags = unsafe {
+            let native = **raw_env;
+            let activity_class = (native.GetObjectClass)(raw_env, activity);
+            let method_id = (native.GetMethodID)(
+                raw_env,
+                activity_class,
+                get_application_info.as_ptr(),
+                get_application_info_signature.as_ptr(),
+            );
+            if method_id.is_null() {
+                anyhow::bail!("failed to find Activity.getApplicationInfo");
+            }
+            let application_info =
+                (native.CallObjectMethodA)(raw_env, activity, method_id, std::ptr::null());
+            if application_info.is_null() {
+                anyhow::bail!("Activity.getApplicationInfo returned null");
+            }
+            let application_info_class = (native.GetObjectClass)(raw_env, application_info);
+            let field_id = (native.GetFieldID)(
+                raw_env,
+                application_info_class,
+                flags_field.as_ptr(),
+                int_signature.as_ptr(),
+            );
+            if field_id.is_null() {
+                anyhow::bail!("failed to find ApplicationInfo.flags");
+            }
+            (native.GetIntField)(raw_env, application_info, field_id)
+        };
+        Ok((flags & FLAG_DEBUGGABLE) != 0)
+    })
 }
 
 fn load_dev_urls(app: &AndroidApp) -> anyhow::Result<Vec<String>> {
