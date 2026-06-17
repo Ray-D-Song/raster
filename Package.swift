@@ -21,8 +21,8 @@ let package = Package(
         ),
         .binaryTarget(
             name: "RasterRuntime",
-            url: "https://github.com/Ray-D-Song/raster/releases/download/v0.1.0-alpha.12/RasterRuntime.xcframework.zip",
-            checksum: "1bd8a336a73d8c5171da9f4f8b9a97d662236f7b76d86ed8dfb7f0e363c8b7ca"
+            url: "https://github.com/Ray-D-Song/raster/releases/download/v0.1.0-alpha.13/RasterRuntime.xcframework.zip",
+            checksum: "9f3f5da5a224012a53f3b2a5724b02c56abb9ce49aad6675ae2b9410bd9308e3"
         )
     ]
 )
