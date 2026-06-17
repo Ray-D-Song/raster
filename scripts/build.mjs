@@ -423,9 +423,9 @@ async function buildIosXcframework(args) {
   const device = platforms.find((platform) => platform.id === "ios-arm64-device");
   const simArm64 = platforms.find((platform) => platform.id === "ios-arm64-simulator");
   const simX64 = platforms.find((platform) => platform.id === "ios-x64-simulator");
-  for (const platform of [device, simArm64, simX64]) {
-    await buildIosLibrary(platform, args);
-  }
+  await Promise.all(
+    [device, simArm64, simX64].map((platform) => buildIosLibrary(platform, args)),
+  );
 
   const distDir = path.join(rootDir, "packages/raster-ios/dist");
   const includeDir = path.join(rootDir, "packages/raster-ios/include");
