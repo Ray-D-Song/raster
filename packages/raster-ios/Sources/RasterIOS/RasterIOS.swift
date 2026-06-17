@@ -3,12 +3,26 @@ import SwiftUI
 import UIKit
 import RasterRuntime
 
+public enum RasterBundleMode: Equatable {
+    case development
+    case production
+}
+
 public struct RasterConfiguration: Equatable {
+    public var mode: RasterBundleMode
     public var bundleName: String
-    public var bundleURL: URL
+    public var bundleURL: URL?
     public var devConfigURL: URL?
 
+    public init(mode: RasterBundleMode, bundleName: String = "raster/app.js", bundleURL: URL? = nil, devConfigURL: URL? = nil) {
+        self.mode = mode
+        self.bundleName = bundleName
+        self.bundleURL = bundleURL
+        self.devConfigURL = devConfigURL
+    }
+
     public init(bundleName: String = "raster/app.js", bundleURL: URL, devConfigURL: URL? = nil) {
+        self.mode = .production
         self.bundleName = bundleName
         self.bundleURL = bundleURL
         self.devConfigURL = devConfigURL
@@ -16,14 +30,19 @@ public struct RasterConfiguration: Equatable {
 
     public static var `default`: RasterConfiguration {
         let bundle = Bundle.main
-        guard let bundleURL = bundle.url(forResource: "app", withExtension: "js", subdirectory: "raster") else {
-            return RasterConfiguration(bundleName: "raster/app.js", bundleURL: URL(fileURLWithPath: "/__missing_raster_app_js__"))
-        }
+        #if DEBUG
         return RasterConfiguration(
+            mode: .development,
             bundleName: "raster/app.js",
-            bundleURL: bundleURL,
             devConfigURL: bundle.url(forResource: "dev", withExtension: "json", subdirectory: "raster")
         )
+        #else
+        return RasterConfiguration(
+            mode: .production,
+            bundleName: "raster/app.js",
+            bundleURL: bundle.url(forResource: "app", withExtension: "js", subdirectory: "raster")
+        )
+        #endif
     }
 }
 
@@ -76,16 +95,29 @@ public struct RasterAppView: UIViewRepresentable {
             started = true
 
             do {
-                let source = try String(contentsOf: configuration.bundleURL, encoding: .utf8)
-                let devConfig = configuration.devConfigURL.flatMap { try? String(contentsOf: $0, encoding: .utf8) }
-                let ok = source.withCString { sourcePtr in
-                    configuration.bundleName.withCString { namePtr in
-                        if let devConfig {
-                            return devConfig.withCString { devPtr in
-                                raster_ios_run_app(namePtr, sourcePtr, devPtr)
-                            }
+                let ok: Bool
+                switch configuration.mode {
+                case .development:
+                    guard let devConfigURL = configuration.devConfigURL else {
+                        assertionFailure("Missing Raster iOS dev config: raster/dev.json")
+                        return
+                    }
+                    let devConfig = try String(contentsOf: devConfigURL, encoding: .utf8)
+                    ok = configuration.bundleName.withCString { namePtr in
+                        devConfig.withCString { devPtr in
+                            raster_ios_run_app(namePtr, nil, devPtr)
                         }
-                        return raster_ios_run_app(namePtr, sourcePtr, nil)
+                    }
+                case .production:
+                    guard let bundleURL = configuration.bundleURL else {
+                        assertionFailure("Missing Raster iOS bundle: raster/app.js")
+                        return
+                    }
+                    let source = try String(contentsOf: bundleURL, encoding: .utf8)
+                    ok = source.withCString { sourcePtr in
+                        configuration.bundleName.withCString { namePtr in
+                            raster_ios_run_app(namePtr, sourcePtr, nil)
+                        }
                     }
                 }
                 if !ok {

@@ -8,18 +8,21 @@
     "build": "vite build",
     "dev": "vite build --watch",
     "dev:android": "raster dev android",
-    "android": "node -e \"throw new Error('Raster Android build/run is not implemented in the CLI yet')\"",
-    "build:android": "node -e \"throw new Error('Raster Android build/run is not implemented in the CLI yet')\""
+    "android": "raster build android",
+    "build:android": "raster build android",
+    "dev:ios": "raster dev ios",
+    "ios": "raster build ios",
+    "build:ios": "raster build ios"
   },
   "dependencies": {
-    "raster-js": "0.1.0-alpha.11",
+    "raster-js": "0.1.0-alpha.12",
     "react": "19.2.6"
   },
   "devDependencies": {
     "@types/react": "19.2.15",
-    "raster-cli": "0.1.0-alpha.11",
+    "raster-cli": "0.1.0-alpha.12",
     "typescript": "6.0.3",
-    "unplugin-raster": "0.1.0-alpha.11",
+    "unplugin-raster": "0.1.0-alpha.12",
     "vite": "8.0.14"
   }
 }

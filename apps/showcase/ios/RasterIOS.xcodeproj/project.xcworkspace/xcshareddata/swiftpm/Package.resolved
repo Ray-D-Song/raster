@@ -1,0 +1,15 @@
+{
+  "originHash" : "323ce7e1242f1c89b4008fe7712177a9b32f74155127717640d7a8374c534671",
+  "pins" : [
+    {
+      "identity" : "raster",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/Ray-D-Song/raster",
+      "state" : {
+        "revision" : "9e4e45c9633b72d864d177564f993a8a37d39edc",
+        "version" : "0.1.0-alpha.11"
+      }
+    }
+  ],
+  "version" : 3
+}

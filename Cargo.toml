@@ -35,6 +35,7 @@ llrt_core = { package = "raster_runtime_core", path = "deps/raster-runtime/raste
 android-activity = { version = "0.6", features = ["native-activity"] }
 android_logger = "0.15"
 gpui-mobile = { path = "deps/gpui-mobile", default-features = false }
+jni = "0.22"
 llrt_core = { package = "raster_runtime_core", path = "deps/raster-runtime/raster_runtime_core", default-features = false, features = ["macro", "bindgen", "base", "console", "compression-rust", "tls-ring", "crypto-rust"] }
 ndk = { version = "0.9", features = ["nativewindow"] }
 

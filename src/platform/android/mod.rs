@@ -7,7 +7,8 @@ use std::{
 
 use android_activity::AndroidApp;
 use gpui::{App, Application, WindowOptions};
-use gpui_mobile::android::jni;
+use gpui_mobile::android::jni as gpui_jni;
+use jni::{objects::JObject, JavaVM};
 
 use crate::{
     app::{RasterBundle, RasterRunOptions, prepare_raster_app},
@@ -51,7 +52,7 @@ fn android_main(app: AndroidApp) {
             .with_max_level(log::LevelFilter::Info)
             .with_tag("raster"),
     );
-    jni::install_panic_hook();
+    gpui_jni::install_panic_hook();
 
     let _ = logger::init(LoggerConfig {
         level: LogLevel::Info,
@@ -59,7 +60,14 @@ fn android_main(app: AndroidApp) {
     });
     logger::info("android_main entered");
 
-    let loaded_bundle = match load_android_bundle(&app) {
+    let debuggable = match is_app_debuggable(&app) {
+        Ok(debuggable) => debuggable,
+        Err(error) => {
+            logger::error(format!("failed to read Android debuggable flag: {error:#}"));
+            return;
+        }
+    };
+    let loaded_bundle = match load_android_bundle(&app, debuggable) {
         Ok(bundle) => bundle,
         Err(error) => {
             logger::error(format!("failed to load Android Raster bundle: {error:#}"));
@@ -91,8 +99,8 @@ fn android_main(app: AndroidApp) {
         start_dev_server_reloader(loaded_bundle.dev_urls, prepared.runtime_commands.clone());
     }
 
-    let _platform = jni::init_platform(&app);
-    let Some(shared_platform) = jni::shared_platform() else {
+    let _platform = gpui_jni::init_platform(&app);
+    let Some(shared_platform) = gpui_jni::shared_platform() else {
         logger::error("failed to get GPUI Android shared platform");
         return;
     };
@@ -116,36 +124,32 @@ fn android_main(app: AndroidApp) {
     });
 }
 
-fn load_android_bundle(app: &AndroidApp) -> anyhow::Result<LoadedAndroidBundle> {
-    match load_dev_urls(app) {
-        Ok(dev_urls) => {
-            for attempt in 0..=ANDROID_DEV_INITIAL_RETRY_COUNT {
-                for url in &dev_urls {
-                    match http_get_text(url, ANDROID_DEV_HTTP_TIMEOUT) {
-                        Ok(source) => {
-                            logger::info(format!("loaded Android Raster dev bundle: {url}"));
-                            return Ok(LoadedAndroidBundle {
-                                name: url.clone(),
-                                source,
-                                dev_urls,
-                            });
-                        }
-                        Err(error) => {
-                            if attempt == ANDROID_DEV_INITIAL_RETRY_COUNT {
-                                logger::warn(format!(
-                                    "failed to load Android dev bundle {url}: {error:#}"
-                                ));
-                            }
+fn load_android_bundle(app: &AndroidApp, debuggable: bool) -> anyhow::Result<LoadedAndroidBundle> {
+    if debuggable {
+        let dev_urls = load_dev_urls(app)?;
+        for attempt in 0..=ANDROID_DEV_INITIAL_RETRY_COUNT {
+            for url in &dev_urls {
+                match http_get_text(url, ANDROID_DEV_HTTP_TIMEOUT) {
+                    Ok(source) => {
+                        logger::info(format!("loaded Android Raster dev bundle: {url}"));
+                        return Ok(LoadedAndroidBundle {
+                            name: url.clone(),
+                            source,
+                            dev_urls,
+                        });
+                    }
+                    Err(error) => {
+                        if attempt == ANDROID_DEV_INITIAL_RETRY_COUNT {
+                            logger::warn(format!(
+                                "failed to load Android dev bundle {url}: {error:#}"
+                            ));
                         }
                     }
                 }
-                std::thread::sleep(ANDROID_DEV_INITIAL_RETRY_INTERVAL);
             }
-            logger::warn("Android dev bundle unavailable; falling back to asset bundle");
+            std::thread::sleep(ANDROID_DEV_INITIAL_RETRY_INTERVAL);
         }
-        Err(error) => {
-            logger::info(format!("Android dev config unavailable: {error:#}"));
-        }
+        anyhow::bail!("Android dev bundle unavailable");
     }
 
     let source = load_asset_string(app, ANDROID_BUNDLE_ASSET)?;
@@ -157,6 +161,23 @@ fn load_android_bundle(app: &AndroidApp) -> anyhow::Result<LoadedAndroidBundle> 
         source,
         dev_urls: Vec::new(),
     })
+}
+
+fn is_app_debuggable(app: &AndroidApp) -> anyhow::Result<bool> {
+    const FLAG_DEBUGGABLE: i32 = 0x2;
+    let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast())? };
+    let mut env = vm.attach_current_thread()?;
+    let activity = unsafe { JObject::from_raw(&env, app.activity_as_ptr().cast()) };
+    let application_info = env
+        .call_method(
+            &activity,
+            "getApplicationInfo",
+            "()Landroid/content/pm/ApplicationInfo;",
+            &[],
+        )?
+        .l()?;
+    let flags = env.get_field(&application_info, "flags", "I")?.i()?;
+    Ok((flags & FLAG_DEBUGGABLE) != 0)
 }
 
 fn load_dev_urls(app: &AndroidApp) -> anyhow::Result<Vec<String>> {

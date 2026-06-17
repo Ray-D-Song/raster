@@ -19,6 +19,8 @@ use crate::{
 };
 
 const IOS_DEV_HTTP_TIMEOUT: Duration = Duration::from_millis(800);
+const IOS_DEV_INITIAL_RETRY_COUNT: usize = 25;
+const IOS_DEV_INITIAL_RETRY_INTERVAL: Duration = Duration::from_millis(200);
 const IOS_DEV_SSE_RECONNECT_INTERVAL: Duration = Duration::from_millis(500);
 const IOS_DEV_SSE_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -27,6 +29,12 @@ static LAST_ERROR: OnceLock<Mutex<Option<CString>>> = OnceLock::new();
 #[derive(Debug)]
 struct IosDevConfig {
     urls: Vec<String>,
+}
+
+struct LoadedIosBundle {
+    name: String,
+    source: String,
+    dev_urls: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -114,9 +122,6 @@ unsafe fn run_app(
     if bundle_name.is_null() {
         anyhow::bail!("bundle_name must not be null");
     }
-    if bundle_source.is_null() {
-        anyhow::bail!("bundle_source must not be null");
-    }
 
     let _ = logger::init(LoggerConfig {
         level: LogLevel::Info,
@@ -127,10 +132,6 @@ unsafe fn run_app(
         .to_str()
         .map_err(|error| anyhow::anyhow!("bundle_name is not valid UTF-8: {error}"))?
         .to_owned();
-    let source = unsafe { CStr::from_ptr(bundle_source) }
-        .to_str()
-        .map_err(|error| anyhow::anyhow!("bundle_source is not valid UTF-8: {error}"))?
-        .to_owned();
     let dev_config = if dev_config_json.is_null() {
         None
     } else {
@@ -138,20 +139,36 @@ unsafe fn run_app(
             unsafe { CStr::from_ptr(dev_config_json) }.to_str()?,
         )?)
     };
-    let dev_mode = dev_config
-        .as_ref()
-        .map(|config| !config.urls.is_empty())
-        .unwrap_or(false);
+    let loaded_bundle = if let Some(config) = dev_config {
+        load_dev_bundle(config.urls)?
+    } else {
+        if bundle_source.is_null() {
+            anyhow::bail!("bundle_source must not be null in production mode");
+        }
+        let source = unsafe { CStr::from_ptr(bundle_source) }
+            .to_str()
+            .map_err(|error| anyhow::anyhow!("bundle_source is not valid UTF-8: {error}"))?
+            .to_owned();
+        LoadedIosBundle {
+            name,
+            source,
+            dev_urls: Vec::new(),
+        }
+    };
+    let dev_mode = !loaded_bundle.dev_urls.is_empty();
 
     let options = RasterRunOptions {
         width: DEFAULT_ROOT_WIDTH,
         height: DEFAULT_ROOT_HEIGHT,
-        bundle: RasterBundle::Source { name, source },
+        bundle: RasterBundle::Source {
+            name: loaded_bundle.name,
+            source: loaded_bundle.source,
+        },
         dev_mode,
     };
     let prepared = pollster::block_on(prepare_raster_app(&options))?;
-    if let Some(config) = dev_config.filter(|config| !config.urls.is_empty()) {
-        start_dev_server_reloader(config.urls, prepared.runtime_commands.clone());
+    if dev_mode {
+        start_dev_server_reloader(loaded_bundle.dev_urls, prepared.runtime_commands.clone());
     }
 
     gpui_mobile::ios::ffi::set_app_callback(Box::new(move |cx: &mut App| {
@@ -188,8 +205,35 @@ fn parse_dev_config(source: &str) -> anyhow::Result<IosDevConfig> {
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>()
         })
-        .unwrap_or_default();
+        .ok_or_else(|| anyhow::anyhow!("iOS dev config must contain urls array"))?;
+    if urls.is_empty() {
+        anyhow::bail!("iOS dev config urls array is empty");
+    }
     Ok(IosDevConfig { urls })
+}
+
+fn load_dev_bundle(dev_urls: Vec<String>) -> anyhow::Result<LoadedIosBundle> {
+    for attempt in 0..=IOS_DEV_INITIAL_RETRY_COUNT {
+        for url in &dev_urls {
+            match http_get_text(url, IOS_DEV_HTTP_TIMEOUT) {
+                Ok(source) => {
+                    logger::info(format!("loaded iOS Raster dev bundle: {url}"));
+                    return Ok(LoadedIosBundle {
+                        name: url.clone(),
+                        source,
+                        dev_urls,
+                    });
+                }
+                Err(error) => {
+                    if attempt == IOS_DEV_INITIAL_RETRY_COUNT {
+                        logger::warn(format!("failed to load iOS dev bundle {url}: {error:#}"));
+                    }
+                }
+            }
+        }
+        std::thread::sleep(IOS_DEV_INITIAL_RETRY_INTERVAL);
+    }
+    anyhow::bail!("iOS dev bundle unavailable")
 }
 
 fn start_dev_server_reloader(

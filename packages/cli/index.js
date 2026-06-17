@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -19,13 +20,13 @@ Usage:
   raster create <project-name>
   raster add <platforms>
   raster dev android|ios
-  raster build ios
+  raster build android|ios
 
 Commands:
   create <project-name>       Create a new Raster app.
   add <platforms>             Add platform shell apps. Example: android,ios,win
   dev android|ios             Start mobile bundle watch and dev server.
-  build ios                   Build the iOS shell app.
+  build android|ios           Build the mobile shell app.
 
 Supported platform inputs:
   android, ios, win, windows, osx, macos, linux
@@ -46,8 +47,7 @@ const ANDROID_DEV_PORT = 14200;
 const IOS_DEV_PORT = 14201;
 const ANDROID_DEV_SCRIPT = "raster dev android";
 const IOS_DEV_SCRIPT = "raster dev ios";
-const ANDROID_TODO_SCRIPT =
-  "node -e \"throw new Error('Raster Android build/run is not implemented in the CLI yet')\"";
+const ANDROID_BUILD_SCRIPT = "raster build android";
 const IOS_BUILD_SCRIPT = "raster build ios";
 
 class CliError extends Error {
@@ -110,16 +110,20 @@ async function dev(args) {
 async function build(args) {
   const platform = args[0];
   if (!platform) {
-    throw new CliError("Missing platform. Usage: raster build ios");
+    throw new CliError("Missing platform. Usage: raster build android|ios");
   }
   if (args.length > 1) {
     throw new CliError(`Unexpected arguments for build: ${args.slice(1).join(" ")}`);
   }
-  if (platform !== "ios") {
-    throw new CliError(`Unsupported build platform: ${platform}`);
+  if (platform === "android") {
+    await buildAndroid();
+    return;
   }
-
-  await buildIos();
+  if (platform === "ios") {
+    await buildIos();
+    return;
+  }
+  throw new CliError(`Unsupported build platform: ${platform}`);
 }
 
 async function devAndroid() {
@@ -186,6 +190,30 @@ async function buildIos() {
   ], { cwd: projectRoot });
 }
 
+async function buildAndroid() {
+  const projectRoot = process.cwd();
+  const packageJsonPath = path.join(projectRoot, "package.json");
+  const androidDir = path.join(projectRoot, "android");
+  await assertReadableFile(packageJsonPath, "raster build android must be run from a project root with package.json");
+  await assertReadableDir(androidDir, "raster build android requires an android/ platform directory");
+
+  const viteBin = await resolveLocalBin(projectRoot, "vite");
+  if (!viteBin) {
+    throw new CliError("Failed to find local Vite binary. Install project dependencies first.");
+  }
+  await runCommand(viteBin, ["build"], {
+    cwd: projectRoot,
+    env: {
+      ...process.env,
+      RASTER_UNPLUGIN_SKIP_BINARY: "1",
+    },
+  });
+
+  await copyAndroidBundleResources(projectRoot);
+  const gradle = process.platform === "win32" ? "gradlew.bat" : "./gradlew";
+  await runCommand(gradle, ["assembleRelease"], { cwd: androidDir });
+}
+
 async function runMobileDevServer({
   projectRoot,
   platformName,
@@ -208,6 +236,10 @@ async function runMobileDevServer({
 
   console.log(`Raster ${platformName} dev server listening on http://127.0.0.1:${port}`);
   console.log(`Bundle endpoint: http://127.0.0.1:${port}/app.js`);
+  const lanIp = getLanIpAddress();
+  if (lanIp) {
+    console.log(`LAN bundle endpoint: http://${lanIp}:${port}/app.js`);
+  }
   for (const line of extraLogLines) {
     console.log(line);
   }
@@ -246,16 +278,35 @@ async function runMobileDevServer({
 
 async function writeIosDevConfig(projectRoot) {
   const rasterDir = path.join(projectRoot, "ios", "RasterIOS", "Resources", "raster");
+  const urls = [`http://127.0.0.1:${IOS_DEV_PORT}/app.js`];
+  const lanIp = getLanIpAddress();
+  if (lanIp) {
+    urls.unshift(`http://${lanIp}:${IOS_DEV_PORT}/app.js`);
+  }
   await fs.mkdir(rasterDir, { recursive: true });
   await fs.writeFile(
     path.join(rasterDir, "dev.json"),
-    `${JSON.stringify({ urls: [`http://127.0.0.1:${IOS_DEV_PORT}/app.js`] }, null, 2)}\n`,
+    `${JSON.stringify({ urls }, null, 2)}\n`,
   );
 }
 
 async function copyIosBundleResources(projectRoot) {
   const sourceDir = path.join(projectRoot, "target", "raster");
   const targetDir = path.join(projectRoot, "ios", "RasterIOS", "Resources", "raster");
+  await fs.mkdir(targetDir, { recursive: true });
+  await fs.copyFile(path.join(sourceDir, "app.js"), path.join(targetDir, "app.js"));
+  try {
+    await fs.copyFile(path.join(sourceDir, "app.js.map"), path.join(targetDir, "app.js.map"));
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw error;
+    }
+  }
+}
+
+async function copyAndroidBundleResources(projectRoot) {
+  const sourceDir = path.join(projectRoot, "target", "raster");
+  const targetDir = path.join(projectRoot, "android", "app", "src", "main", "assets", "raster");
   await fs.mkdir(targetDir, { recursive: true });
   await fs.copyFile(path.join(sourceDir, "app.js"), path.join(targetDir, "app.js"));
   try {
@@ -449,8 +500,8 @@ function updatePlatformScripts(packageJson, platforms) {
   for (const platform of platforms) {
     if (platform === "android") {
       packageJson.scripts["dev:android"] = ANDROID_DEV_SCRIPT;
-      packageJson.scripts.android = ANDROID_TODO_SCRIPT;
-      packageJson.scripts["build:android"] = ANDROID_TODO_SCRIPT;
+      packageJson.scripts.android = ANDROID_BUILD_SCRIPT;
+      packageJson.scripts["build:android"] = ANDROID_BUILD_SCRIPT;
     } else if (platform === "ios") {
       packageJson.scripts["dev:ios"] = IOS_DEV_SCRIPT;
       packageJson.scripts.ios = IOS_BUILD_SCRIPT;
@@ -590,11 +641,22 @@ async function sendFile(response, filePath, contentType) {
 async function listen(server, port) {
   await new Promise((resolve, reject) => {
     server.once("error", reject);
-    server.listen(port, "127.0.0.1", () => {
+    server.listen(port, "0.0.0.0", () => {
       server.off("error", reject);
       resolve();
     });
   });
+}
+
+function getLanIpAddress() {
+  for (const interfaces of Object.values(os.networkInterfaces())) {
+    for (const address of interfaces ?? []) {
+      if (address.family === "IPv4" && !address.internal) {
+        return address.address;
+      }
+    }
+  }
+  return null;
 }
 
 async function resolveLocalBin(projectRoot, name) {

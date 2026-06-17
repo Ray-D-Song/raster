@@ -5679,6 +5679,7 @@ dependencies = [
  "gpui-component-assets",
  "gpui-mobile",
  "gpui_platform",
+ "jni",
  "libsui",
  "log",
  "ndk",
