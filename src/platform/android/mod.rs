@@ -8,7 +8,7 @@ use std::{
 use android_activity::AndroidApp;
 use gpui::{App, Application, WindowOptions};
 use gpui_mobile::android::jni as gpui_jni;
-use jni::{objects::JObject, JavaVM};
+use jni::{JavaVM, objects::JObject};
 
 use crate::{
     app::{RasterBundle, RasterRunOptions, prepare_raster_app},
@@ -165,7 +165,7 @@ fn load_android_bundle(app: &AndroidApp, debuggable: bool) -> anyhow::Result<Loa
 
 fn is_app_debuggable(app: &AndroidApp) -> anyhow::Result<bool> {
     const FLAG_DEBUGGABLE: i32 = 0x2;
-    let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast())? };
+    let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) };
     let mut env = vm.attach_current_thread()?;
     let activity = unsafe { JObject::from_raw(&env, app.activity_as_ptr().cast()) };
     let application_info = env
