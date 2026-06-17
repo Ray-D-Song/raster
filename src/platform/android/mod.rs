@@ -176,8 +176,8 @@ fn is_app_debuggable(app: &AndroidApp) -> anyhow::Result<bool> {
         let int_signature = CString::new("I")?;
         let flags = unsafe {
             let native = **raw_env;
-            let activity_class = (native.GetObjectClass)(raw_env, activity);
-            let method_id = (native.GetMethodID)(
+            let activity_class = (native.v1_1.GetObjectClass)(raw_env, activity);
+            let method_id = (native.v1_1.GetMethodID)(
                 raw_env,
                 activity_class,
                 get_application_info.as_ptr(),
@@ -187,12 +187,12 @@ fn is_app_debuggable(app: &AndroidApp) -> anyhow::Result<bool> {
                 anyhow::bail!("failed to find Activity.getApplicationInfo");
             }
             let application_info =
-                (native.CallObjectMethodA)(raw_env, activity, method_id, std::ptr::null());
+                (native.v1_1.CallObjectMethodA)(raw_env, activity, method_id, std::ptr::null());
             if application_info.is_null() {
                 anyhow::bail!("Activity.getApplicationInfo returned null");
             }
-            let application_info_class = (native.GetObjectClass)(raw_env, application_info);
-            let field_id = (native.GetFieldID)(
+            let application_info_class = (native.v1_1.GetObjectClass)(raw_env, application_info);
+            let field_id = (native.v1_1.GetFieldID)(
                 raw_env,
                 application_info_class,
                 flags_field.as_ptr(),
@@ -201,7 +201,7 @@ fn is_app_debuggable(app: &AndroidApp) -> anyhow::Result<bool> {
             if field_id.is_null() {
                 anyhow::bail!("failed to find ApplicationInfo.flags");
             }
-            (native.GetIntField)(raw_env, application_info, field_id)
+            (native.v1_1.GetIntField)(raw_env, application_info, field_id)
         };
         Ok((flags & FLAG_DEBUGGABLE) != 0)
     })
