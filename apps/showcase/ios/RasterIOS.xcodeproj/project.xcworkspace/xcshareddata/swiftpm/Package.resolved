@@ -6,8 +6,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/Ray-D-Song/raster",
       "state" : {
-        "revision" : "9e4e45c9633b72d864d177564f993a8a37d39edc",
-        "version" : "0.1.0-alpha.11"
+        "revision" : "15200c05fe2a0452260a01040b7bc2ac79117609",
+        "version" : "0.1.0-alpha.13"
       }
     }
   ],
