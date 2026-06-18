@@ -8,7 +8,6 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test:plugin": "pnpm --dir packages/unplugin-raster test",
     "build:runtime": "pnpm --dir packages/raster build:runtime",
-    "build:template": "pnpm --dir apps/template build",
     "docs:dev": "pnpm --dir docs dev",
     "docs:build": "pnpm --dir docs build",
     "docs:preview": "pnpm --dir docs preview",
@@ -31,8 +30,7 @@
     "release:all": "node scripts/release.mjs all",
     "release:js:dry-run": "node scripts/release.mjs js --dry-run",
     "release:bin:dry-run": "node scripts/release.mjs bin --dry-run",
-    "release:all:dry-run": "node scripts/release.mjs all --dry-run",
-    "release:dry-run": "pnpm run release:js:dry-run"
+    "release:all:dry-run": "node scripts/release.mjs all --dry-run"
   },
   "devDependencies": {
     "@types/react": "19.2.15",
