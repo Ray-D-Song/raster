@@ -23,9 +23,12 @@ import type {
   RasterNotificationShowOptions,
   RasterNotificationType,
   RasterQueryHandler,
+  RasterStyle,
+  RasterStyleInput,
   RasterThemeColors,
   RasterThemeConfig,
   RasterThemeMode,
+  StyleDimension,
   TabVariant,
   TextChangePayload,
   TextareaProps,
@@ -50,9 +53,12 @@ export type {
   RasterNotificationShowOptions,
   RasterNotificationType,
   RasterQueryHandler,
+  RasterStyle,
+  RasterStyleInput,
   RasterThemeColors,
   RasterThemeConfig,
   RasterThemeMode,
+  StyleDimension,
   TabVariant,
   TextChangePayload,
   TextareaProps,
@@ -273,6 +279,10 @@ interface ChartBaseProps extends ComponentBaseProps {
   maxDataLength?: number;
   tickMargin?: number;
   grid?: boolean;
+  width?: StyleDimension;
+  height?: StyleDimension;
+  minHeight?: StyleDimension;
+  maxHeight?: StyleDimension;
 }
 
 export interface LineChartProps extends ChartBaseProps {

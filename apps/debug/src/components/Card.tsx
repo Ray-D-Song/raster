@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { View } from "raster-js/components";
-import type { RasterStyle } from "raster-js";
+import type { RasterStyle } from "raster-js/components";
 import { borderColor, panelBackground } from "../styles";
 import type { ThemePreference } from "../types";
 

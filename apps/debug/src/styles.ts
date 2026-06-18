@@ -1,4 +1,4 @@
-import type { RasterStyle } from "raster-js";
+import type { RasterStyle } from "raster-js/components";
 import type { ThemePreference } from "./types";
 
 export const colors = {

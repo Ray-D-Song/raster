@@ -46,7 +46,7 @@ export function Transactions({
   const expenses = totalExpenses(filtered);
 
   return (
-    <View style={{ ...pagePadding, gap: 12 }}>
+    <View style={[pagePadding, { gap: 12 }]}>
       <View style={spaceBetween}>
         <View style={{ gap: 3 }}>
           <Text style={{ color: secondaryText(theme), fontSize: 12 }}>Activity</Text>

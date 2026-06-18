@@ -49,7 +49,7 @@ export function Overview({
   }));
 
   return (
-    <View style={{ ...pagePadding, gap: 14 }}>
+    <View style={[pagePadding, { gap: 14 }]}>
       <View style={spaceBetween}>
         <View style={{ gap: 3 }}>
           <Text style={{ color: secondaryText(theme), fontSize: 12 }}>Thursday, June 18</Text>
@@ -99,7 +99,7 @@ export function Overview({
             band="label"
             value="value"
             fill="color"
-            style={{ height: 130 }}
+            height={130}
             cornerRadius={5}
             labelAxis
           />
@@ -132,7 +132,7 @@ export function Overview({
         ))}
       </View>
 
-      <View style={{ ...row, gap: 6, justifyContent: "center" }}>
+      <View style={[row, { gap: 6, justifyContent: "center" }]}>
         <Icon name="circle-check" color={colors.green} size="small" />
         <Text style={{ color: secondaryText(theme), fontSize: 11 }}>Offline data. No bank connection required.</Text>
       </View>

@@ -1,4 +1,4 @@
-import { Button, Dialog, Input, Select, Text, View } from "raster-js/components";
+import { Button, Input, Select, Sheet, Text, View } from "raster-js/components";
 import { categories, defaultDraft } from "../data";
 import { colors, secondaryText, textColor } from "../styles";
 import type { NewTransactionDraft, ThemePreference, TransactionType } from "../types";
@@ -30,10 +30,10 @@ export function AddTransactionDialog({
   onSubmit,
 }: AddTransactionDialogProps) {
   return (
-    <Dialog open={open} title="Add transaction" width={360} closeButton onCancel={onCancel} onOpenChange={(event) => {
+    <Sheet open={open} title="Add transaction" placement="bottom" size={660} overlay resizable={false} onOpenChange={(event) => {
       if (!event.open) onCancel();
     }}>
-      <View style={{ gap: 12 }}>
+      <View style={{ gap: 12, padding: { top: 4, right: 12, bottom: 14, left: 12 } }}>
         <Text style={{ color: secondaryText(theme), fontSize: 12 }}>
           Add an offline transaction to test list updates, budgets, and dashboard totals.
         </Text>
@@ -76,6 +76,6 @@ export function AddTransactionDialog({
         </Text>
         <Text style={{ color: colors.faint, fontSize: 10 }}>Data resets when the debug app restarts.</Text>
       </View>
-    </Dialog>
+    </Sheet>
   );
 }

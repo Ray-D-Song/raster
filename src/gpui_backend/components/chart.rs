@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use gpui::{
-    AnyElement, Corners, Hsla, InteractiveElement, IntoElement, ParentElement, Styled, div, px,
-    transparent_black,
+    AnyElement, Corners, Hsla, InteractiveElement, IntoElement, Length, ParentElement, Styled, div,
+    px, transparent_black,
 };
 use gpui_component::{
     chart::{AreaChart, BarChart, CandlestickChart, LineChart, PieChart},
@@ -130,7 +130,28 @@ pub(in crate::gpui_backend) fn render_chart_from_node(
         div().id(("raster-chart", node.id.0)),
         &widget.style,
     );
-    if widget.style.height.is_none() {
+    let props = component_props(node);
+    if widget.style.width.is_none()
+        && let Some(width) = length_prop(props, "width")
+    {
+        wrapper = wrapper.w(width);
+    }
+    if widget.style.height.is_none()
+        && let Some(height) = length_prop(props, "height")
+    {
+        wrapper = wrapper.h(height);
+    }
+    if widget.style.min_height.is_none()
+        && let Some(min_height) = length_prop(props, "minHeight")
+    {
+        wrapper = wrapper.min_h(min_height);
+    }
+    if widget.style.max_height.is_none()
+        && let Some(max_height) = length_prop(props, "maxHeight")
+    {
+        wrapper = wrapper.max_h(max_height);
+    }
+    if widget.style.height.is_none() && !props.contains_key("height") {
         wrapper = wrapper.h(px(240.0));
     }
 
@@ -424,6 +445,14 @@ fn tick_margin(props: &BTreeMap<String, NodeValue>) -> usize {
     number_prop(props, "tickMargin")
         .map(|value| value.max(1.0) as usize)
         .unwrap_or(1)
+}
+
+fn length_prop(props: &BTreeMap<String, NodeValue>, name: &str) -> Option<Length> {
+    match props.get(name) {
+        Some(NodeValue::Number(value)) => Some(Length::Definite(px(*value as f32).into())),
+        Some(NodeValue::String(value)) => Length::try_from(value.as_str()).ok(),
+        _ => None,
+    }
 }
 
 fn parse_bar_alignment(value: &str) -> BarAlignment {

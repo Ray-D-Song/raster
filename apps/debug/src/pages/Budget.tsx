@@ -29,7 +29,7 @@ export function Budget({
   const overCount = budgets.filter((budget) => spentForCategory(transactions, budget.category) > budget.limit).length;
 
   return (
-    <View style={{ ...pagePadding, gap: 12 }}>
+    <View style={[pagePadding, { gap: 12 }]}>
       <View style={{ gap: 3 }}>
         <Text style={{ color: secondaryText(theme), fontSize: 12 }}>Monthly plan</Text>
         <Text style={{ color: textColor(theme), fontSize: 24, fontWeight: "800" }}>Budget</Text>

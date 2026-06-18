@@ -58,3 +58,55 @@ fn runtime_bundle_reconciles_view_text_app() {
         )
     }));
 }
+
+#[test]
+fn runtime_bundle_flattens_style_arrays() {
+    let runtime = pollster::block_on(super::super::start()).expect("start js runtime");
+    pollster::block_on(runtime.eval_runtime_script_to_string(
+        r##"
+        const {
+          createRoot,
+          jsx,
+        } = globalThis.__RasterBundle;
+
+        const View = "View";
+        const root = createRoot({ width: 320, height: 240 });
+        root.render(jsx(View, {
+          style: [
+            { gap: 8, backgroundColor: "#ffffff" },
+            null,
+            [{ gap: 12 }],
+          ],
+          children: null,
+        }));
+
+        "rendered";
+        "##,
+    ))
+    .expect("reconcile style array app");
+
+    let batches = runtime.native_binding().drain_commits();
+    let create_view = batches
+        .iter()
+        .flat_map(|batch| batch.mutations.iter())
+        .find_map(|mutation| match mutation {
+            crate::common::mount::MountMutation::CreateNode { name, payload, .. }
+                if name == "View" =>
+            {
+                Some(payload)
+            }
+            _ => None,
+        })
+        .expect("View node should be created");
+
+    assert_eq!(
+        create_view.style.get("gap"),
+        Some(&crate::common::mount::NodeValue::Number(12.0))
+    );
+    assert_eq!(
+        create_view.style.get("backgroundColor"),
+        Some(&crate::common::mount::NodeValue::String(
+            "#ffffff".to_owned()
+        ))
+    );
+}

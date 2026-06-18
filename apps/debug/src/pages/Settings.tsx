@@ -24,7 +24,7 @@ const themeOptions = [
 
 export function Settings({ settings, theme, onChange, transactionCount }: SettingsProps) {
   return (
-    <View style={{ ...pagePadding, gap: 12 }}>
+    <View style={[pagePadding, { gap: 12 }]}>
       <View style={{ gap: 3 }}>
         <Text style={{ color: secondaryText(theme), fontSize: 12 }}>Personal workspace</Text>
         <Text style={{ color: textColor(theme), fontSize: 24, fontWeight: "800" }}>Settings</Text>
