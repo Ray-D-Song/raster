@@ -12,7 +12,12 @@
       "raster-js/react": ["./packages/raster/src/react/index.ts"],
       "raster-js/component": ["./packages/raster/src/component/index.ts"],
       "raster-js/components": ["./packages/raster/src/component/index.ts"],
-      "react-raster": ["./packages/raster/src/react/index.ts"]
+      "react-raster": ["./packages/raster/src/react/index.ts"],
+      "unplugin-raster": ["./packages/unplugin-raster/src/index.ts"],
+      "unplugin-raster/vite": ["./packages/unplugin-raster/src/vite.ts"],
+      "unplugin-raster/esbuild": ["./packages/unplugin-raster/src/esbuild.ts"],
+      "unplugin-raster/rollup": ["./packages/unplugin-raster/src/rollup.ts"],
+      "unplugin-raster/rolldown": ["./packages/unplugin-raster/src/rolldown.ts"]
     },
     "jsx": "react-jsx",
     "strict": true,

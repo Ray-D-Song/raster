@@ -19,6 +19,7 @@ const PLATFORM_PACKAGES: Record<string, string> = {
 let devProcess: ChildProcess | undefined;
 let viteWatchProcess: ChildProcess | undefined;
 let cleanupInstalled = false;
+let stopping = false;
 
 export function buildRasterExecutable(options: NormalizedRasterPluginOptions): Promise<void> {
   if (skipRasterBinary()) {
@@ -38,16 +39,23 @@ export function startRasterDev(options: NormalizedRasterPluginOptions): void {
   }
 
   const binary = resolveRasterBinary();
+  stopping = false;
   installDevProcessCleanup();
   devProcess = spawn(binary, ["dev", "--bundle", options.outfile], {
     stdio: "inherit",
   });
-  devProcess.on("exit", () => {
+  devProcess.on("exit", (code, signal) => {
     devProcess = undefined;
+    if (isViteDevChild() && !stopping) {
+      process.exit(signalExitCode(signal) ?? code ?? 0);
+    }
   });
 }
 
-export function startViteBuildWatchForRasterDev(options: NormalizedRasterPluginOptions): void {
+export function startViteBuildWatchForRasterDev(
+  options: NormalizedRasterPluginOptions,
+  onExit?: (code: number | null, signal: NodeJS.Signals | null) => void
+): void {
   if (skipRasterBinary() || isViteDevChild()) {
     return;
   }
@@ -56,6 +64,7 @@ export function startViteBuildWatchForRasterDev(options: NormalizedRasterPluginO
   }
 
   const vite = resolveViteBinary();
+  stopping = false;
   installDevProcessCleanup();
   viteWatchProcess = spawn(vite, ["build", "--watch"], {
     cwd: options.root ?? process.cwd(),
@@ -66,25 +75,35 @@ export function startViteBuildWatchForRasterDev(options: NormalizedRasterPluginO
     stdio: "inherit",
     shell: process.platform === "win32",
   });
-  viteWatchProcess.on("exit", () => {
+  viteWatchProcess.on("exit", (code, signal) => {
     viteWatchProcess = undefined;
+    if (!stopping) {
+      onExit?.(code, signal);
+    }
   });
 }
 
 export function stopRasterDev(): void {
-  if (!devProcess || devProcess.killed || devProcess.exitCode != null) {
+  stopping = true;
+  const activeDevProcess = devProcess && !devProcess.killed && devProcess.exitCode == null;
+  const activeViteWatchProcess =
+    viteWatchProcess && !viteWatchProcess.killed && viteWatchProcess.exitCode == null;
+  const dev = devProcess;
+  const viteWatch = viteWatchProcess;
+
+  if (!activeDevProcess) {
     devProcess = undefined;
   } else {
-    devProcess.kill();
+    dev?.kill();
     devProcess = undefined;
   }
 
-  if (!viteWatchProcess || viteWatchProcess.killed || viteWatchProcess.exitCode != null) {
+  if (!activeViteWatchProcess) {
     viteWatchProcess = undefined;
-    return;
+  } else {
+    viteWatch?.kill();
+    viteWatchProcess = undefined;
   }
-  viteWatchProcess.kill();
-  viteWatchProcess = undefined;
 }
 
 function runRaster(args: string[], context: { mode: "build" }): Promise<void> {
@@ -137,7 +156,7 @@ function resolveViteBinary(): string {
   if (process.env.RASTER_UNPLUGIN_VITE_BIN) {
     return process.env.RASTER_UNPLUGIN_VITE_BIN;
   }
-  return require.resolve("vite/bin/vite.js");
+  return path.join(path.dirname(require.resolve("vite/package.json")), "bin", "vite.js");
 }
 
 function skipRasterBinary(): boolean {
@@ -146,6 +165,16 @@ function skipRasterBinary(): boolean {
 
 export function isViteDevChild(): boolean {
   return process.env[VITE_DEV_CHILD_ENV] === "1";
+}
+
+function signalExitCode(signal: NodeJS.Signals | null): number | undefined {
+  if (signal === "SIGINT") {
+    return 130;
+  }
+  if (signal === "SIGTERM") {
+    return 143;
+  }
+  return undefined;
 }
 
 function installDevProcessCleanup(): void {

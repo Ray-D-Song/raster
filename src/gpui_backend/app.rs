@@ -13,7 +13,7 @@ use std::{
 
 use futures::{StreamExt, channel::mpsc};
 use gpui::{
-    AnyElement, App, Context, Empty, Entity, IntoElement, Render, WeakEntity, Window,
+    AnyElement, App, Context, Empty, Entity, IntoElement, QuitMode, Render, WeakEntity, Window,
     WindowOptions, div, prelude::*,
 };
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -100,6 +100,7 @@ pub fn start_desktop(
     logger::info("gpui_backend initialize start");
     gpui_platform::application()
         .with_assets(Assets)
+        .with_quit_mode(QuitMode::LastWindowClosed)
         .run(move |cx: &mut App| {
             if let Some(config) = &dev_reload {
                 logger::info(format!(

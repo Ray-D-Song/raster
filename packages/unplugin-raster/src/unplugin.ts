@@ -62,10 +62,28 @@ export const rasterUnplugin = createUnplugin<RasterPluginOptions>((rawOptions = 
         if (viteCommand !== "serve" || isViteDevChild()) {
           return;
         }
-        startViteBuildWatchForRasterDev(options);
-        server.httpServer?.once("close", () => {
-          stopRasterDev();
+        const close = server.close.bind(server);
+        let closing = false;
+        const closeServer = async () => {
+          if (closing) {
+            return;
+          }
+          closing = true;
+          await server.close();
+        };
+        startViteBuildWatchForRasterDev(options, (code, signal) => {
+          void closeServer().finally(() => {
+            if (process.env.RASTER_UNPLUGIN_TEST_DISABLE_PARENT_EXIT !== "1") {
+              process.exit(viteDevExitCode(code, signal));
+            }
+          });
         });
+        server.listen = async () => server;
+        server.printUrls = () => {};
+        server.close = async () => {
+          stopRasterDev();
+          await close();
+        };
       },
       generateBundle(outputOptions, bundle) {
         validateRollupBundle(outputOptions, bundle, options);
@@ -165,3 +183,13 @@ export const rasterUnplugin = createUnplugin<RasterPluginOptions>((rawOptions = 
     },
   };
 });
+
+function viteDevExitCode(code: number | null, signal: NodeJS.Signals | null): number {
+  if (signal === "SIGINT") {
+    return 130;
+  }
+  if (signal === "SIGTERM") {
+    return 143;
+  }
+  return code ?? 0;
+}
