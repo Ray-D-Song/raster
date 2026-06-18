@@ -362,6 +362,7 @@ impl SelectDelegate for RasterSelectDelegate {
 #[derive(Clone, Copy, Debug, Default)]
 struct SelectEventBindings {
     on_change: Option<HandlerId>,
+    on_value_change: Option<HandlerId>,
     on_open_change: Option<HandlerId>,
     on_search_change: Option<HandlerId>,
 }
@@ -370,6 +371,7 @@ impl SelectEventBindings {
     fn from_node(node: &RetainedNode) -> Self {
         Self {
             on_change: event_handler(node, "onChange"),
+            on_value_change: event_handler(node, "onValueChange"),
             on_open_change: event_handler(node, "onOpenChange"),
             on_search_change: event_handler(node, "onSearchChange"),
         }
@@ -382,39 +384,66 @@ impl SelectEventBindings {
         model: &RasterSelectModel,
         runtime_commands: &ChannelSender<RuntimeCommand>,
     ) {
-        let Some(handler_id) = self.on_change else {
-            return;
-        };
-
-        let mut payload = BTreeMap::new();
-        match value {
+        let value_payload = match value {
             Some(value) => {
-                payload.insert("value".to_owned(), value.clone());
-                let item = index
-                    .and_then(|index| model.item(index))
-                    .or_else(|| model.first_item_with_value(value));
-                if let Some(item) = item {
-                    if let Some(id) = &item.id {
-                        payload.insert("id".to_owned(), id.clone());
+                if let Some(handler_id) = self.on_change {
+                    let mut payload = BTreeMap::new();
+                    payload.insert("value".to_owned(), value.clone());
+                    let item = index
+                        .and_then(|index| model.item(index))
+                        .or_else(|| model.first_item_with_value(value));
+                    if let Some(item) = item {
+                        if let Some(id) = &item.id {
+                            payload.insert("id".to_owned(), id.clone());
+                        }
+                        if let Some(label) = &item.label {
+                            payload.insert("label".to_owned(), label.clone());
+                        }
                     }
-                    if let Some(label) = &item.label {
-                        payload.insert("label".to_owned(), label.clone());
+
+                    if runtime_commands
+                        .send(RuntimeCommand::InvokeEvent {
+                            handler_id,
+                            payload: NodeValue::Object(payload),
+                        })
+                        .is_err()
+                    {
+                        logger::error("failed to enqueue Select onChange event");
                     }
                 }
+                value.clone()
             }
             None => {
-                payload.insert("value".to_owned(), NodeValue::Null);
+                if let Some(handler_id) = self.on_change {
+                    let payload = NodeValue::Object(
+                        [("value".to_owned(), NodeValue::Null)]
+                            .into_iter()
+                            .collect(),
+                    );
+                    if runtime_commands
+                        .send(RuntimeCommand::InvokeEvent {
+                            handler_id,
+                            payload,
+                        })
+                        .is_err()
+                    {
+                        logger::error("failed to enqueue Select onChange event");
+                    }
+                }
+                NodeValue::Null
             }
-        }
+        };
 
-        if runtime_commands
-            .send(RuntimeCommand::InvokeEvent {
-                handler_id,
-                payload: NodeValue::Object(payload),
-            })
-            .is_err()
-        {
-            logger::error("failed to enqueue Select onChange event");
+        if let Some(handler_id) = self.on_value_change {
+            if runtime_commands
+                .send(RuntimeCommand::InvokeEvent {
+                    handler_id,
+                    payload: value_payload,
+                })
+                .is_err()
+            {
+                logger::error("failed to enqueue Select onValueChange event");
+            }
         }
     }
 
@@ -522,5 +551,85 @@ fn item_disabled(item: &std::collections::BTreeMap<String, NodeValue>) -> bool {
     match item.get("disabled") {
         Some(NodeValue::Bool(value)) => *value,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::channel::channel;
+
+    #[test]
+    fn dispatch_change_sends_payload_and_value_events() {
+        let (sender, receiver) = channel();
+        let bindings = SelectEventBindings {
+            on_change: Some(HandlerId(1)),
+            on_value_change: Some(HandlerId(2)),
+            on_open_change: None,
+            on_search_change: None,
+        };
+        let model = RasterSelectModel {
+            sections: vec![RasterSelectSection {
+                label: None,
+                items: vec![RasterSelectItem {
+                    id: Some(NodeValue::String("stable".to_owned())),
+                    label: Some(NodeValue::String("Stable".to_owned())),
+                    title: "Stable".to_owned(),
+                    description: None,
+                    value: NodeValue::String("stable".to_owned()),
+                    disabled: false,
+                }],
+            }],
+        };
+
+        bindings.dispatch_change(
+            Some(&NodeValue::String("stable".to_owned())),
+            Some(IndexPath::default().section(0).row(0)),
+            &model,
+            &sender,
+        );
+
+        let events = receiver.drain();
+        assert_eq!(events.len(), 2);
+        assert!(matches!(
+            &events[0],
+            RuntimeCommand::InvokeEvent {
+                handler_id: HandlerId(1),
+                payload: NodeValue::Object(payload),
+            } if payload.get("value") == Some(&NodeValue::String("stable".to_owned()))
+                && payload.get("id") == Some(&NodeValue::String("stable".to_owned()))
+                && payload.get("label") == Some(&NodeValue::String("Stable".to_owned()))
+        ));
+        assert!(matches!(
+            &events[1],
+            RuntimeCommand::InvokeEvent {
+                handler_id: HandlerId(2),
+                payload: NodeValue::String(value),
+            } if value == "stable"
+        ));
+    }
+
+    #[test]
+    fn dispatch_change_sends_null_value_when_cleared() {
+        let (sender, receiver) = channel();
+        let bindings = SelectEventBindings {
+            on_change: None,
+            on_value_change: Some(HandlerId(2)),
+            on_open_change: None,
+            on_search_change: None,
+        };
+        let model = RasterSelectModel { sections: vec![] };
+
+        bindings.dispatch_change(None, None, &model, &sender);
+
+        let events = receiver.drain();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            RuntimeCommand::InvokeEvent {
+                handler_id: HandlerId(2),
+                payload: NodeValue::Null,
+            }
+        ));
     }
 }

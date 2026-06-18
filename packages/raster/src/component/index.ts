@@ -262,6 +262,7 @@ export interface ColorPickerProps extends ComponentBaseProps {
   size?: ComponentSize;
   anchor?: ColorPickerAnchor;
   onChange?: RasterEventHandler<ColorPickerChangePayload>;
+  onValueChange?: RasterEventHandler<string | null>;
 }
 
 export type ChartDatum = Record<string, JsonValue>;
@@ -370,6 +371,7 @@ export interface DatePickerProps extends ComponentBaseProps {
   cleanable?: boolean;
   appearance?: boolean;
   onChange?: RasterEventHandler<DateChangePayload>;
+  onValueChange?: RasterEventHandler<DatePickerValue>;
 }
 
 export type DialogOpenChangeReason = "ok" | "cancel" | "controlled";
@@ -505,6 +507,7 @@ export interface SelectProps extends ComponentBaseProps {
   size?: ComponentSize;
   anchor?: MenuAnchor;
   onChange?: RasterEventHandler<SelectChangePayload>;
+  onValueChange?: RasterEventHandler<JsonValue>;
   onOpenChange?: RasterEventHandler<SelectOpenChangePayload>;
   onSearchChange?: RasterEventHandler<string>;
 }

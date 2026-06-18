@@ -59,9 +59,7 @@ export function Settings({ settings, theme, onChange, transactionCount }: Settin
             <Select
               value={settings.currency}
               options={currencyOptions}
-              onChange={(payload) =>
-                onChange({ ...settings, currency: String(payload.value ?? "USD") as CurrencyCode })
-              }
+              onValueChange={(value) => onChange({ ...settings, currency: String(value ?? "USD") as CurrencyCode })}
             />
           </View>
           <View style={{ gap: 6 }}>
@@ -69,9 +67,7 @@ export function Settings({ settings, theme, onChange, transactionCount }: Settin
             <Select
               value={settings.theme}
               options={themeOptions}
-              onChange={(payload) =>
-                onChange({ ...settings, theme: String(payload.value ?? "light") as ThemePreference })
-              }
+              onValueChange={(value) => onChange({ ...settings, theme: String(value ?? "light") as ThemePreference })}
             />
           </View>
         </Card>

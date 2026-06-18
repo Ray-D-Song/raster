@@ -60,7 +60,7 @@ export function Transactions({
         <Select
           value={categoryFilter}
           options={categoryOptions}
-          onChange={(payload) => onCategoryChange(String(payload.value ?? "all"))}
+          onValueChange={(value) => onCategoryChange(String(value ?? "all"))}
         />
       </Card>
 

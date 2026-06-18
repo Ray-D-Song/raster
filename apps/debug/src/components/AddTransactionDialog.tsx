@@ -56,13 +56,13 @@ export function AddTransactionDialog({
         <Select
           value={draft.type}
           options={typeOptions}
-          onChange={(payload) => onChange({ ...draft, type: String(payload.value ?? "expense") as TransactionType })}
+          onValueChange={(value) => onChange({ ...draft, type: String(value ?? "expense") as TransactionType })}
         />
         {draft.type === "expense" ? (
           <Select
             value={draft.category}
             options={categoryOptions}
-            onChange={(payload) => onChange({ ...draft, category: String(payload.value ?? defaultDraft.category) })}
+            onValueChange={(value) => onChange({ ...draft, category: String(value ?? defaultDraft.category) })}
           />
         ) : null}
         <Input value={draft.date} placeholder="YYYY-MM-DD" onChangeText={(date) => onChange({ ...draft, date })} />

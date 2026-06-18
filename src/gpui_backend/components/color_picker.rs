@@ -162,12 +162,14 @@ impl ColorPickerConfig {
 #[derive(Clone, Copy, Debug, Default)]
 struct ColorPickerEventBindings {
     on_change: Option<HandlerId>,
+    on_value_change: Option<HandlerId>,
 }
 
 impl ColorPickerEventBindings {
     fn from_node(node: &RetainedNode) -> Self {
         Self {
             on_change: event_handler(node, "onChange"),
+            on_value_change: event_handler(node, "onValueChange"),
         }
     }
 
@@ -176,29 +178,38 @@ impl ColorPickerEventBindings {
         value: Option<Hsla>,
         runtime_commands: &ChannelSender<RuntimeCommand>,
     ) {
-        let Some(handler_id) = self.on_change else {
-            return;
-        };
+        let value_payload = value
+            .map(|color| NodeValue::String(color.to_hex().to_string()))
+            .unwrap_or(NodeValue::Null);
 
-        let payload = NodeValue::Object(
-            [(
-                "value".to_owned(),
-                value
-                    .map(|color| NodeValue::String(color.to_hex().to_string()))
-                    .unwrap_or(NodeValue::Null),
-            )]
-            .into_iter()
-            .collect::<BTreeMap<_, _>>(),
-        );
+        if let Some(handler_id) = self.on_change {
+            let payload = NodeValue::Object(
+                [("value".to_owned(), value_payload.clone())]
+                    .into_iter()
+                    .collect::<BTreeMap<_, _>>(),
+            );
 
-        if runtime_commands
-            .send(RuntimeCommand::InvokeEvent {
-                handler_id,
-                payload,
-            })
-            .is_err()
-        {
-            logger::error("failed to enqueue ColorPicker onChange event");
+            if runtime_commands
+                .send(RuntimeCommand::InvokeEvent {
+                    handler_id,
+                    payload,
+                })
+                .is_err()
+            {
+                logger::error("failed to enqueue ColorPicker onChange event");
+            }
+        }
+
+        if let Some(handler_id) = self.on_value_change {
+            if runtime_commands
+                .send(RuntimeCommand::InvokeEvent {
+                    handler_id,
+                    payload: value_payload,
+                })
+                .is_err()
+            {
+                logger::error("failed to enqueue ColorPicker onValueChange event");
+            }
         }
     }
 }
@@ -250,4 +261,61 @@ fn parse_anchor(value: &str) -> Option<Anchor> {
         "bottomRight" => Anchor::BottomRight,
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::channel::channel;
+
+    #[test]
+    fn dispatch_change_sends_payload_and_value_events() {
+        let (sender, receiver) = channel();
+        let bindings = ColorPickerEventBindings {
+            on_change: Some(HandlerId(1)),
+            on_value_change: Some(HandlerId(2)),
+        };
+        let color = parse_color("#ff0000").expect("valid color");
+        let expected = NodeValue::String(color.to_hex().to_string());
+
+        bindings.dispatch_change(Some(color), &sender);
+
+        let events = receiver.drain();
+        assert_eq!(events.len(), 2);
+        assert!(matches!(
+            &events[0],
+            RuntimeCommand::InvokeEvent {
+                handler_id: HandlerId(1),
+                payload: NodeValue::Object(payload),
+            } if payload.get("value") == Some(&expected)
+        ));
+        assert!(matches!(
+            &events[1],
+            RuntimeCommand::InvokeEvent {
+                handler_id: HandlerId(2),
+                payload,
+            } if payload == &expected
+        ));
+    }
+
+    #[test]
+    fn dispatch_change_sends_null_value_when_cleared() {
+        let (sender, receiver) = channel();
+        let bindings = ColorPickerEventBindings {
+            on_change: None,
+            on_value_change: Some(HandlerId(2)),
+        };
+
+        bindings.dispatch_change(None, &sender);
+
+        let events = receiver.drain();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            RuntimeCommand::InvokeEvent {
+                handler_id: HandlerId(2),
+                payload: NodeValue::Null,
+            }
+        ));
+    }
 }

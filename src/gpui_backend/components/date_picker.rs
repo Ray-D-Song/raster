@@ -196,6 +196,7 @@ impl DatePickerConfig {
 struct DatePickerEventBindings {
     mode: DateSelectionMode,
     on_change: Option<HandlerId>,
+    on_value_change: Option<HandlerId>,
 }
 
 impl DatePickerEventBindings {
@@ -203,32 +204,45 @@ impl DatePickerEventBindings {
         Self {
             mode,
             on_change: event_handler(node, "onChange"),
+            on_value_change: event_handler(node, "onValueChange"),
         }
     }
 
     fn dispatch_change(&self, date: Date, runtime_commands: &ChannelSender<RuntimeCommand>) {
-        let Some(handler_id) = self.on_change else {
-            return;
-        };
+        let value_payload = date_to_value(date, self.mode);
 
-        let payload = NodeValue::Object(
-            [
-                (
-                    "mode".to_owned(),
-                    NodeValue::String(self.mode.as_str().to_owned()),
-                ),
-                ("value".to_owned(), date_to_value(date, self.mode)),
-            ]
-            .into(),
-        );
-        if runtime_commands
-            .send(RuntimeCommand::InvokeEvent {
-                handler_id,
-                payload,
-            })
-            .is_err()
-        {
-            logger::error("failed to enqueue DatePicker onChange event");
+        if let Some(handler_id) = self.on_change {
+            let payload = NodeValue::Object(
+                [
+                    (
+                        "mode".to_owned(),
+                        NodeValue::String(self.mode.as_str().to_owned()),
+                    ),
+                    ("value".to_owned(), value_payload.clone()),
+                ]
+                .into(),
+            );
+            if runtime_commands
+                .send(RuntimeCommand::InvokeEvent {
+                    handler_id,
+                    payload,
+                })
+                .is_err()
+            {
+                logger::error("failed to enqueue DatePicker onChange event");
+            }
+        }
+
+        if let Some(handler_id) = self.on_value_change {
+            if runtime_commands
+                .send(RuntimeCommand::InvokeEvent {
+                    handler_id,
+                    payload: value_payload,
+                })
+                .is_err()
+            {
+                logger::error("failed to enqueue DatePicker onValueChange event");
+            }
         }
     }
 }
@@ -383,6 +397,7 @@ fn parse_day_of_week(value: &NodeValue) -> Option<Vec<u32>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::channel::channel;
 
     #[test]
     fn single_value_round_trips_iso_date() {
@@ -436,5 +451,67 @@ mod tests {
         assert!(matcher.is_match(&Date::Single(Some(sunday))));
         assert!(matcher.is_match(&Date::Single(Some(exact))));
         assert!(!matcher.is_match(&Date::Single(Some(allowed))));
+    }
+
+    #[test]
+    fn dispatch_change_sends_single_payload_and_value_events() {
+        let (sender, receiver) = channel();
+        let bindings = DatePickerEventBindings {
+            mode: DateSelectionMode::Single,
+            on_change: Some(HandlerId(1)),
+            on_value_change: Some(HandlerId(2)),
+        };
+        let date = Date::Single(Some(
+            NaiveDate::parse_from_str("2026-05-23", "%Y-%m-%d").unwrap(),
+        ));
+
+        bindings.dispatch_change(date, &sender);
+
+        let events = receiver.drain();
+        assert_eq!(events.len(), 2);
+        assert!(matches!(
+            &events[0],
+            RuntimeCommand::InvokeEvent {
+                handler_id: HandlerId(1),
+                payload: NodeValue::Object(payload),
+            } if payload.get("mode") == Some(&NodeValue::String("single".to_owned()))
+                && payload.get("value") == Some(&NodeValue::String("2026-05-23".to_owned()))
+        ));
+        assert!(matches!(
+            &events[1],
+            RuntimeCommand::InvokeEvent {
+                handler_id: HandlerId(2),
+                payload: NodeValue::String(value),
+            } if value == "2026-05-23"
+        ));
+    }
+
+    #[test]
+    fn dispatch_change_sends_range_value_event() {
+        let (sender, receiver) = channel();
+        let bindings = DatePickerEventBindings {
+            mode: DateSelectionMode::Range,
+            on_change: None,
+            on_value_change: Some(HandlerId(2)),
+        };
+        let date = Date::Range(
+            Some(NaiveDate::parse_from_str("2026-05-01", "%Y-%m-%d").unwrap()),
+            None,
+        );
+
+        bindings.dispatch_change(date, &sender);
+
+        let events = receiver.drain();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            RuntimeCommand::InvokeEvent {
+                handler_id: HandlerId(2),
+                payload: NodeValue::Array(values),
+            } if values == &vec![
+                NodeValue::String("2026-05-01".to_owned()),
+                NodeValue::Null,
+            ]
+        ));
     }
 }
