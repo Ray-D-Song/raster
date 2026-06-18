@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use gpui::{App, SharedString, WindowAppearance, px};
+use gpui::{App, SharedString, px};
 use gpui_component::{Theme, ThemeMode};
 
 use crate::{
@@ -56,11 +56,10 @@ pub(in crate::gpui_backend) fn find_config_provider_theme(
 
 pub(in crate::gpui_backend) fn apply_theme_snapshot(snapshot: &RasterThemeSnapshot, cx: &mut App) {
     match snapshot.mode {
-        Some(RasterThemeMode::Light) => apply_raster_theme_mode(ResolvedThemeMode::Light, cx),
-        Some(RasterThemeMode::Dark) => apply_raster_theme_mode(ResolvedThemeMode::Dark, cx),
+        Some(RasterThemeMode::Light) => Theme::change(ThemeMode::Light, None, cx),
+        Some(RasterThemeMode::Dark) => Theme::change(ThemeMode::Dark, None, cx),
         Some(RasterThemeMode::System) => {
-            let mode = ResolvedThemeMode::from_window_appearance(cx.window_appearance());
-            apply_raster_theme_mode(mode, cx);
+            Theme::change(cx.window_appearance(), None, cx);
         }
         None => {}
     }
@@ -118,154 +117,11 @@ pub(in crate::gpui_backend) fn apply_theme_snapshot(snapshot: &RasterThemeSnapsh
 }
 
 pub(in crate::gpui_backend) fn apply_raster_default_theme(cx: &mut App) {
-    let mode = ResolvedThemeMode::from_window_appearance(cx.window_appearance());
-    apply_raster_theme_mode(mode, cx);
-}
-
-fn apply_raster_theme_mode(mode: ResolvedThemeMode, cx: &mut App) {
-    match mode {
-        ResolvedThemeMode::Light => apply_raster_light_theme(cx),
-        ResolvedThemeMode::Dark => apply_raster_dark_theme(cx),
-    }
-}
-
-fn apply_raster_light_theme(cx: &mut App) {
-    Theme::change(ThemeMode::Light, None, cx);
-    let theme = Theme::global_mut(cx);
-    theme.radius = px(8.0);
-    theme.radius_lg = px(8.0);
-    theme.sheet.margin_top = px(0.0);
-
-    set_theme_color(&mut theme.background, "#faf9f8");
-    set_theme_color(&mut theme.foreground, "#1b1a19");
-    set_theme_color(&mut theme.border, "#c8c6c4");
-    set_theme_color(&mut theme.input, "#8a8886");
-    set_theme_color(&mut theme.primary, "#0078d4");
-    set_theme_color(&mut theme.primary_foreground, "#ffffff");
-    set_theme_color(&mut theme.primary_hover, "#106ebe");
-    set_theme_color(&mut theme.primary_active, "#005a9e");
-    set_theme_color(&mut theme.button_primary, "#0078d4");
-    set_theme_color(&mut theme.button_primary_foreground, "#ffffff");
-    set_theme_color(&mut theme.button_primary_hover, "#106ebe");
-    set_theme_color(&mut theme.button_primary_active, "#005a9e");
-    set_theme_color(&mut theme.secondary, "#edebe9");
-    set_theme_color(&mut theme.secondary_foreground, "#1b1a19");
-    set_theme_color(&mut theme.secondary_hover, "#e1dfdd");
-    set_theme_color(&mut theme.secondary_active, "#d2d0ce");
-    set_theme_color(&mut theme.accent, "#106ebe");
-    set_theme_color(&mut theme.accent_foreground, "#ffffff");
-    set_theme_color(&mut theme.muted, "#edebe9");
-    set_theme_color(&mut theme.muted_foreground, "#605e5c");
-    set_theme_color(&mut theme.popover, "#ffffff");
-    set_theme_color(&mut theme.popover_foreground, "#1b1a19");
-    set_theme_color(&mut theme.ring, "#2899f5");
-    set_theme_color(&mut theme.info, "#0078d4");
-    set_theme_color(&mut theme.info_foreground, "#ffffff");
-    set_theme_color(&mut theme.success, "#107c10");
-    set_theme_color(&mut theme.success_foreground, "#ffffff");
-    set_theme_color(&mut theme.warning, "#fce100");
-    set_theme_color(&mut theme.warning_foreground, "#1b1a19");
-    set_theme_color(&mut theme.danger, "#d13438");
-    set_theme_color(&mut theme.danger_foreground, "#ffffff");
-    set_theme_color(&mut theme.selection, "#c7e0f4");
-    set_theme_color(&mut theme.link, "#0078d4");
-    set_theme_color(&mut theme.link_hover, "#005a9e");
-    set_theme_color(&mut theme.switch, "#605e5c");
-    set_theme_color(&mut theme.switch_thumb, "#ffffff");
-    set_theme_color(&mut theme.slider_bar, "#0078d4");
-    set_theme_color(&mut theme.slider_thumb, "#ffffff");
-    set_theme_color(&mut theme.tab, "#faf9f8");
-    set_theme_color(&mut theme.tab_active, "#faf9f8");
-    set_theme_color(&mut theme.tab_active_foreground, "#1b1a19");
-    set_theme_color(&mut theme.tab_bar, "#faf9f8");
-    set_theme_color(&mut theme.tab_bar_segmented, "#edebe9");
-    set_theme_color(&mut theme.tab_foreground, "#605e5c");
-    set_theme_color(&mut theme.title_bar, "#faf9f8");
-    set_theme_color(&mut theme.title_bar_border, "#c8c6c4");
-
-    cx.refresh_windows();
-}
-
-fn apply_raster_dark_theme(cx: &mut App) {
-    Theme::change(ThemeMode::Dark, None, cx);
-    let theme = Theme::global_mut(cx);
-    theme.radius = px(8.0);
-    theme.radius_lg = px(8.0);
-    theme.sheet.margin_top = px(0.0);
-
-    set_theme_color(&mut theme.background, "#202020");
-    set_theme_color(&mut theme.foreground, "#f3f2f1");
-    set_theme_color(&mut theme.border, "#3b3a39");
-    set_theme_color(&mut theme.input, "#605e5c");
-    set_theme_color(&mut theme.primary, "#0078d4");
-    set_theme_color(&mut theme.primary_foreground, "#ffffff");
-    set_theme_color(&mut theme.primary_hover, "#106ebe");
-    set_theme_color(&mut theme.primary_active, "#005a9e");
-    set_theme_color(&mut theme.button_primary, "#0078d4");
-    set_theme_color(&mut theme.button_primary_foreground, "#ffffff");
-    set_theme_color(&mut theme.button_primary_hover, "#106ebe");
-    set_theme_color(&mut theme.button_primary_active, "#005a9e");
-    set_theme_color(&mut theme.secondary, "#2b2b2b");
-    set_theme_color(&mut theme.secondary_foreground, "#f3f2f1");
-    set_theme_color(&mut theme.secondary_hover, "#323130");
-    set_theme_color(&mut theme.secondary_active, "#3b3a39");
-    set_theme_color(&mut theme.accent, "#106ebe");
-    set_theme_color(&mut theme.accent_foreground, "#ffffff");
-    set_theme_color(&mut theme.muted, "#2d2d2d");
-    set_theme_color(&mut theme.muted_foreground, "#c8c6c4");
-    set_theme_color(&mut theme.popover, "#252423");
-    set_theme_color(&mut theme.popover_foreground, "#f3f2f1");
-    set_theme_color(&mut theme.ring, "#2899f5");
-    set_theme_color(&mut theme.info, "#2899f5");
-    set_theme_color(&mut theme.info_foreground, "#ffffff");
-    set_theme_color(&mut theme.success, "#107c10");
-    set_theme_color(&mut theme.success_foreground, "#ffffff");
-    set_theme_color(&mut theme.warning, "#fce100");
-    set_theme_color(&mut theme.warning_foreground, "#1b1a19");
-    set_theme_color(&mut theme.danger, "#d13438");
-    set_theme_color(&mut theme.danger_foreground, "#ffffff");
-    set_theme_color(&mut theme.selection, "#0078d4");
-    set_theme_color(&mut theme.link, "#2899f5");
-    set_theme_color(&mut theme.link_hover, "#60cdff");
-    set_theme_color(&mut theme.switch, "#605e5c");
-    set_theme_color(&mut theme.switch_thumb, "#202020");
-    set_theme_color(&mut theme.slider_bar, "#0078d4");
-    set_theme_color(&mut theme.slider_thumb, "#ffffff");
-    set_theme_color(&mut theme.tab, "#202020");
-    set_theme_color(&mut theme.tab_active, "#202020");
-    set_theme_color(&mut theme.tab_active_foreground, "#f3f2f1");
-    set_theme_color(&mut theme.tab_bar, "#202020");
-    set_theme_color(&mut theme.tab_bar_segmented, "#2b2b2b");
-    set_theme_color(&mut theme.tab_foreground, "#c8c6c4");
-    set_theme_color(&mut theme.title_bar, "#202020");
-    set_theme_color(&mut theme.title_bar_border, "#3b3a39");
-
-    cx.refresh_windows();
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ResolvedThemeMode {
-    Light,
-    Dark,
-}
-
-impl ResolvedThemeMode {
-    fn from_window_appearance(appearance: WindowAppearance) -> Self {
-        match appearance {
-            WindowAppearance::Light | WindowAppearance::VibrantLight => Self::Light,
-            WindowAppearance::Dark | WindowAppearance::VibrantDark => Self::Dark,
-        }
-    }
+    Theme::change(cx.window_appearance(), None, cx);
 }
 
 pub(in crate::gpui_backend) fn reset_theme_snapshot(cx: &mut App) {
     apply_raster_default_theme(cx);
-}
-
-fn set_theme_color(target: &mut gpui::Hsla, value: &str) {
-    if let Some(color) = parse_color(value) {
-        *target = color;
-    }
 }
 
 fn collect_config_provider_themes(
