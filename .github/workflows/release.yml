@@ -15,6 +15,7 @@ on:
 permissions:
   actions: write
   contents: write
+  pull-requests: write
 
 concurrency:
   group: release-${{ inputs.version || github.ref_name }}
@@ -634,6 +635,104 @@ jobs:
         run: node scripts/release.mjs js
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Cancel workflow on failure
+        if: failure() && !cancelled()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel "${{ github.run_id }}" --repo "${{ github.repository }}" || true
+
+  open-template-version-pr:
+    name: Open template version PR
+    needs:
+      - prepare
+      - publish-js
+    if: needs.prepare.outputs.dry_run != 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Update template platform versions
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require("node:fs");
+          const version = process.env.VERSION;
+
+          if (!version) {
+            throw new Error("VERSION is required");
+          }
+
+          const packagePath = "packages/cli/templates/default/package.json";
+          const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+          packageJson.dependencies ??= {};
+          packageJson.devDependencies ??= {};
+          packageJson.dependencies["raster-js"] = version;
+          packageJson.devDependencies["raster-cli"] = version;
+          packageJson.devDependencies["unplugin-raster"] = version;
+          fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
+
+          const androidPath = "packages/cli/templates/platforms/android/app/build.gradle.kts";
+          const androidSource = fs.readFileSync(androidPath, "utf8");
+          const androidPattern = /implementation\("io\.github\.ray-d-song:raster-android:[^"]+"\)/;
+          if (!androidPattern.test(androidSource)) {
+            throw new Error(`${androidPath} does not contain the Raster Android dependency`);
+          }
+          fs.writeFileSync(
+            androidPath,
+            androidSource.replace(
+              androidPattern,
+              `implementation("io.github.ray-d-song:raster-android:${version}")`,
+            ),
+          );
+
+          const iosPath = "packages/cli/templates/platforms/ios/RasterIOS.xcodeproj/project.pbxproj";
+          const iosSource = fs.readFileSync(iosPath, "utf8");
+          const iosPattern = /version = "[^"]+";/;
+          if (!iosPattern.test(iosSource)) {
+            throw new Error(`${iosPath} does not contain a Swift Package exact version`);
+          }
+          fs.writeFileSync(iosPath, iosSource.replace(iosPattern, `version = "${version}";`));
+          NODE
+
+      - name: Create pull request
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "Template versions already match ${VERSION}; no PR needed."
+            exit 0
+          fi
+
+          branch="post-release/sync-template-versions-${VERSION}"
+          title="release: sync template versions for ${VERSION}"
+          body="Updates the Raster app template, Android platform template, and iOS platform template to use ${VERSION} after the release completed successfully."
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin "refs/heads/${branch}:refs/remotes/origin/${branch}" || true
+          git checkout -B "${branch}"
+          git add \
+            packages/cli/templates/default/package.json \
+            packages/cli/templates/platforms/android/app/build.gradle.kts \
+            packages/cli/templates/platforms/ios/RasterIOS.xcodeproj/project.pbxproj
+          git commit -m "${title}"
+          git push --force-with-lease origin "HEAD:${branch}"
+
+          if gh pr view "${branch}" --json url >/dev/null 2>&1; then
+            gh pr edit "${branch}" --title "${title}" --body "${body}" --base main
+          else
+            gh pr create --base main --head "${branch}" --title "${title}" --body "${body}"
+          fi
 
       - name: Cancel workflow on failure
         if: failure() && !cancelled()
