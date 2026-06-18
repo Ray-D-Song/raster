@@ -6,7 +6,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "build": "vite build",
-    "dev": "vite build --watch",
+    "dev": "vite dev",
     "dev:android": "raster dev android",
     "android": "raster build android",
     "build:android": "raster build android",

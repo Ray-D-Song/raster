@@ -2,7 +2,13 @@ import path from "node:path";
 
 import { createUnplugin } from "unplugin";
 
-import { buildRasterExecutable, startRasterDev } from "./binary.ts";
+import {
+  buildRasterExecutable,
+  isViteDevChild,
+  startRasterDev,
+  startViteBuildWatchForRasterDev,
+  stopRasterDev,
+} from "./binary.ts";
 import {
   mergeRollupExternal,
   normalizeRasterOptions,
@@ -15,6 +21,7 @@ import {
 
 export const rasterUnplugin = createUnplugin<RasterPluginOptions>((rawOptions = {}) => {
   let options = normalizeRasterOptions(rawOptions);
+  let viteCommand: "build" | "serve" | undefined;
   let viteWatchMode = false;
   let esbuildWatchMode = false;
   let bundleValidated = false;
@@ -22,7 +29,8 @@ export const rasterUnplugin = createUnplugin<RasterPluginOptions>((rawOptions = 
   return {
     name: "unplugin-raster",
     vite: {
-      config(config) {
+      config(config, env) {
+        viteCommand = env.command;
         const root = path.resolve(config.root ?? process.cwd());
         options = resolveRasterOptions(normalizeRasterOptions(rawOptions), root);
         bundleValidated = false;
@@ -49,6 +57,15 @@ export const rasterUnplugin = createUnplugin<RasterPluginOptions>((rawOptions = 
       },
       configResolved(config) {
         viteWatchMode = Boolean(config.build.watch);
+      },
+      configureServer(server) {
+        if (viteCommand !== "serve" || isViteDevChild()) {
+          return;
+        }
+        startViteBuildWatchForRasterDev(options);
+        server.httpServer?.once("close", () => {
+          stopRasterDev();
+        });
       },
       generateBundle(outputOptions, bundle) {
         validateRollupBundle(outputOptions, bundle, options);
@@ -116,7 +133,10 @@ export const rasterUnplugin = createUnplugin<RasterPluginOptions>((rawOptions = 
     },
     esbuild: {
       config(buildOptions) {
-        options = normalizeRasterOptions(rawOptions);
+        const root = path.resolve(
+          (buildOptions as { absWorkingDir?: string }).absWorkingDir ?? process.cwd()
+        );
+        options = resolveRasterOptions(normalizeRasterOptions(rawOptions), root);
         esbuildWatchMode = options.watch || Boolean((buildOptions as { watch?: unknown }).watch);
         buildOptions.entryPoints = [options.entry];
         buildOptions.outfile = options.outfile;

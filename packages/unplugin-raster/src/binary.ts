@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 import type { NormalizedRasterPluginOptions } from "./core.ts";
 
 const require = createRequire(import.meta.url);
+const VITE_DEV_CHILD_ENV = "RASTER_UNPLUGIN_VITE_DEV_CHILD";
 
 const PLATFORM_PACKAGES: Record<string, string> = {
   "darwin-arm64": "raster-bin-darwin-arm64",
@@ -16,6 +17,7 @@ const PLATFORM_PACKAGES: Record<string, string> = {
 };
 
 let devProcess: ChildProcess | undefined;
+let viteWatchProcess: ChildProcess | undefined;
 let cleanupInstalled = false;
 
 export function buildRasterExecutable(options: NormalizedRasterPluginOptions): Promise<void> {
@@ -45,13 +47,44 @@ export function startRasterDev(options: NormalizedRasterPluginOptions): void {
   });
 }
 
+export function startViteBuildWatchForRasterDev(options: NormalizedRasterPluginOptions): void {
+  if (skipRasterBinary() || isViteDevChild()) {
+    return;
+  }
+  if (viteWatchProcess && !viteWatchProcess.killed && viteWatchProcess.exitCode == null) {
+    return;
+  }
+
+  const vite = resolveViteBinary();
+  installDevProcessCleanup();
+  viteWatchProcess = spawn(vite, ["build", "--watch"], {
+    cwd: options.root ?? process.cwd(),
+    env: {
+      ...process.env,
+      [VITE_DEV_CHILD_ENV]: "1",
+    },
+    stdio: "inherit",
+    shell: process.platform === "win32",
+  });
+  viteWatchProcess.on("exit", () => {
+    viteWatchProcess = undefined;
+  });
+}
+
 export function stopRasterDev(): void {
   if (!devProcess || devProcess.killed || devProcess.exitCode != null) {
     devProcess = undefined;
+  } else {
+    devProcess.kill();
+    devProcess = undefined;
+  }
+
+  if (!viteWatchProcess || viteWatchProcess.killed || viteWatchProcess.exitCode != null) {
+    viteWatchProcess = undefined;
     return;
   }
-  devProcess.kill();
-  devProcess = undefined;
+  viteWatchProcess.kill();
+  viteWatchProcess = undefined;
 }
 
 function runRaster(args: string[], context: { mode: "build" }): Promise<void> {
@@ -73,6 +106,10 @@ function runRaster(args: string[], context: { mode: "build" }): Promise<void> {
 }
 
 function resolveRasterBinary(): string {
+  if (process.env.RASTER_UNPLUGIN_BINARY) {
+    return process.env.RASTER_UNPLUGIN_BINARY;
+  }
+
   const platformKey = `${process.platform}-${process.arch}`;
   const packageName = PLATFORM_PACKAGES[platformKey];
   if (!packageName) {
@@ -96,8 +133,19 @@ function resolveRasterBinary(): string {
   return binaryPath;
 }
 
+function resolveViteBinary(): string {
+  if (process.env.RASTER_UNPLUGIN_VITE_BIN) {
+    return process.env.RASTER_UNPLUGIN_VITE_BIN;
+  }
+  return require.resolve("vite/bin/vite.js");
+}
+
 function skipRasterBinary(): boolean {
   return process.env.RASTER_UNPLUGIN_SKIP_BINARY === "1";
+}
+
+export function isViteDevChild(): boolean {
+  return process.env[VITE_DEV_CHILD_ENV] === "1";
 }
 
 function installDevProcessCleanup(): void {

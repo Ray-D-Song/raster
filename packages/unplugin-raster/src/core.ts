@@ -16,6 +16,7 @@ export type NormalizedRasterPluginOptions = {
   entry: string;
   outfile: string;
   out: string;
+  root?: string;
   watch: boolean;
   target: string;
   sourcemap: boolean;
@@ -119,6 +120,7 @@ export function normalizeRasterOptions(
     entry,
     outfile,
     out,
+    root: process.cwd(),
     watch: options.watch ?? DEFAULT_RASTER_PLUGIN_OPTIONS.watch,
     target,
     sourcemap: options.sourcemap ?? DEFAULT_RASTER_PLUGIN_OPTIONS.sourcemap,
@@ -135,6 +137,7 @@ export function resolveRasterOptions(
 ): NormalizedRasterPluginOptions {
   return {
     ...options,
+    root,
     entry: resolveFromRoot(options.entry, root),
     outfile: resolveFromRoot(options.outfile, root),
     out: resolveFromRoot(options.out, root),

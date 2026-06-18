@@ -15,6 +15,7 @@ test("normalizes default Raster plugin options", () => {
   assert.equal(options.entry, "src/main.tsx");
   assert.equal(options.outfile, "target/raster/app.js");
   assert.equal(options.out, "target/raster/app");
+  assert.equal(options.root, process.cwd());
   assert.equal(options.target, "es2022");
   assert.equal(options.sourcemap, true);
   assert.equal(options.minify, false);
