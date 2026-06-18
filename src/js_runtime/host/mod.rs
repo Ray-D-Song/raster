@@ -47,6 +47,8 @@ struct NativeHostState {
 
 #[derive(Debug, Clone, Default)]
 pub struct SurfaceOptions {
+    pub width: Option<u32>,
+    pub height: Option<u32>,
     pub perfdetect: bool,
 }
 
@@ -129,6 +131,20 @@ impl NativeBinding {
             .lock()
             .ok()
             .and_then(|state| state.surfaces.get(&surface_id).cloned())
+            .unwrap_or_default()
+    }
+
+    pub fn root_surface_options(&self) -> SurfaceOptions {
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|state| {
+                state
+                    .surfaces
+                    .iter()
+                    .next()
+                    .map(|(_, options)| options.clone())
+            })
             .unwrap_or_default()
     }
 
@@ -1155,6 +1171,8 @@ fn surface_options_from_js<'js>(value: Value<'js>) -> JsResult<SurfaceOptions> {
         return Ok(SurfaceOptions::default());
     };
     Ok(SurfaceOptions {
+        width: object.get::<_, Option<u32>>("width")?,
+        height: object.get::<_, Option<u32>>("height")?,
         perfdetect: object
             .get::<_, Option<bool>>("perfdetect")?
             .unwrap_or(false),

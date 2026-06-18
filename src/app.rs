@@ -54,6 +54,9 @@ pub async fn prepare_raster_app(options: &RasterRunOptions) -> anyhow::Result<Pr
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn run_desktop_raster_app(options: RasterRunOptions) -> anyhow::Result<()> {
     let prepared = pollster::block_on(prepare_raster_app(&options))?;
+    let root_surface_options = prepared.native_binding.root_surface_options();
+    let width = root_surface_options.width.unwrap_or(options.width);
+    let height = root_surface_options.height.unwrap_or(options.height);
     let dev_reload = match &options.bundle {
         RasterBundle::Path(path) if options.dev_mode => Some(gpui_backend::DevReloadConfig {
             demo_bundle_path: path.clone(),
@@ -62,8 +65,8 @@ pub fn run_desktop_raster_app(options: RasterRunOptions) -> anyhow::Result<()> {
     };
 
     gpui_backend::start_desktop(
-        options.width,
-        options.height,
+        width,
+        height,
         dev_reload,
         prepared.native_binding,
         prepared.runtime_commands,

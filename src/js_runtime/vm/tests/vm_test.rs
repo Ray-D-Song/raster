@@ -29,6 +29,12 @@ fn runtime_bundle_reconciles_view_text_app() {
     println!("runtime bundle reconcile result: {result}");
     assert_eq!(result, "rendered");
 
+    let surface_options = runtime
+        .native_binding()
+        .surface_options(crate::common::ids::SurfaceId(1));
+    assert_eq!(surface_options.width, Some(320));
+    assert_eq!(surface_options.height, Some(240));
+
     let batches = runtime.native_binding().drain_commits();
     assert_eq!(batches.len(), 1);
 
