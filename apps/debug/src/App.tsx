@@ -1,14 +1,13 @@
 import { useMemo, useState } from "react";
-import { Alert, Dialog, Text, View } from "raster-js/components";
+import { Alert, AppShell, AppShellTab, AppShellTabBar, Dialog, Text, View } from "raster-js/components";
 import { AddTransactionDialog } from "./components/AddTransactionDialog";
-import { BottomTabs } from "./components/BottomTabs";
 import { defaultDraft, defaultSettings, seedBudgets, seedTransactions } from "./data";
 import { categoryById, formatMoney, makeTransaction } from "./model";
 import { Budget } from "./pages/Budget";
 import { Overview } from "./pages/Overview";
 import { Settings } from "./pages/Settings";
 import { Transactions } from "./pages/Transactions";
-import { appBackground, borderColor, colors, panelBackground, secondaryText, textColor } from "./styles";
+import { borderColor, colors, panelBackground, secondaryText, textColor } from "./styles";
 import type { AppTab, NewTransactionDraft, Transaction, UserSettings } from "./types";
 
 export function App() {
@@ -102,25 +101,18 @@ export function App() {
   };
 
   return (
-    <View
-      style={{
-        width: "100%",
-        height: "100%",
-        backgroundColor: appBackground(theme),
-      }}
+    <AppShell
+      theme={theme}
+      tabBar={
+        <AppShellTabBar value={tab} onValueChange={(value) => setTab(value as AppTab)}>
+          <AppShellTab value="overview" label="Overview" icon="layout-dashboard" />
+          <AppShellTab value="transactions" label="Activity" icon="file" />
+          <AppShellTab value="budget" label="Budget" icon="chart-pie" />
+          <AppShellTab value="settings" label="Settings" icon="circle-user" />
+        </AppShellTabBar>
+      }
     >
-      <View
-        style={{
-          flex: 1,
-          overflow: "auto",
-          borderBottomWidth: 1,
-          borderColor: borderColor(theme),
-        }}
-      >
-        {activePage}
-      </View>
-      <BottomTabs tab={tab} onTabChange={setTab} theme={theme} />
-
+      {activePage}
       <AddTransactionDialog
         open={addOpen}
         draft={draft}
@@ -195,6 +187,6 @@ export function App() {
           </View>
         ) : null}
       </Dialog>
-    </View>
+    </AppShell>
   );
 }

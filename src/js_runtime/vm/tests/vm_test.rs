@@ -75,7 +75,8 @@ fn runtime_bundle_flattens_style_arrays() {
           style: [
             { gap: 8, backgroundColor: "#ffffff" },
             null,
-            [{ gap: 12 }],
+            undefined,
+            [{ gap: 12 }, undefined],
           ],
           children: null,
         }));

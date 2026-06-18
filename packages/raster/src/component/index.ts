@@ -1,5 +1,5 @@
-import type { ComponentType, MutableRefObject, ReactElement } from "react";
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import type { ComponentType, MutableRefObject, ReactElement, ReactNode } from "react";
+import { Children, forwardRef, isValidElement, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { jsx } from "react/jsx-runtime";
 
 import { ConfigProvider, Input, Label, Text, Textarea, View, Widget } from "../core/index.js";
@@ -163,6 +163,26 @@ export interface AvatarGroupProps extends ComponentBaseProps {
   limit?: number;
   ellipsis?: boolean;
   size?: ComponentSize;
+}
+
+export interface AppShellProps {
+  children?: ReactNode;
+  tabBar?: ReactNode;
+  theme?: "light" | "dark";
+  style?: RasterStyleInput;
+  contentStyle?: RasterStyleInput;
+}
+
+export interface AppShellTabBarProps {
+  value: string;
+  onValueChange?: RasterEventHandler<string>;
+  children?: ReactNode;
+}
+
+export interface AppShellTabProps {
+  value: string;
+  label: string;
+  icon?: IconName;
 }
 
 export interface ButtonProps extends ComponentBaseProps {
@@ -648,6 +668,117 @@ export const Checkbox = createComponent<CheckboxProps>("Checkbox");
 export const ColorPicker = createComponent<ColorPickerProps>("ColorPicker");
 export const DatePicker = createComponent<DatePickerProps>("DatePicker");
 export const Dialog = createComponent<DialogProps>("Dialog");
+
+export function AppShell({ children, tabBar, theme = "light", style, contentStyle }: AppShellProps): ReactElement {
+  const dark = theme === "dark";
+  return jsx(View, {
+    style: [
+      {
+        width: "100%",
+        height: "100%",
+        backgroundColor: dark ? "#111827" : "#f8fafc",
+      },
+      style,
+    ],
+    children: [
+      jsx(
+        View,
+        {
+          style: [
+            {
+              flex: 1,
+              overflow: "auto",
+              borderBottomWidth: 1,
+              borderColor: dark ? "#374151" : "#e5e7eb",
+            },
+            contentStyle,
+          ],
+          children,
+        },
+        "content"
+      ),
+      tabBar == null
+        ? null
+        : jsx(
+            View,
+            {
+              style: {
+                borderTopWidth: 1,
+                borderColor: dark ? "#374151" : "#e5e7eb",
+                backgroundColor: dark ? "#111827" : "#ffffff",
+                padding: { top: 6, right: 10, bottom: 8, left: 10 },
+              },
+              children: tabBar,
+            },
+            "tabBar"
+          ),
+    ],
+  });
+}
+
+export function AppShellTabBar({ value, onValueChange, children }: AppShellTabBarProps): ReactElement {
+  const tabs = Children.toArray(children).filter(isAppShellTabElement);
+  return jsx(View, {
+    style: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 6,
+    },
+    children: tabs.map((tab) => {
+      const selected = tab.props.value === value;
+      return jsx(
+        View,
+        {
+          onClick: () => onValueChange?.(tab.props.value),
+          style: {
+            flex: 1,
+            height: 52,
+            borderRadius: 8,
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 3,
+            backgroundColor: selected ? "#f3f4f6" : "#ffffff",
+          },
+          children: [
+            tab.props.icon == null
+              ? null
+              : jsx(
+                  Icon,
+                  {
+                    name: tab.props.icon,
+                    size: "small",
+                    color: selected ? "#111827" : "#6b7280",
+                  },
+                  "icon"
+                ),
+            jsx(
+              Text,
+              {
+                style: {
+                  fontSize: 10,
+                  fontWeight: selected ? "700" : "normal",
+                  color: selected ? "#111827" : "#6b7280",
+                },
+                children: tab.props.label,
+              },
+              "label"
+            ),
+          ],
+        },
+        tab.props.value
+      );
+    }),
+  });
+}
+
+export function AppShellTab(_props: AppShellTabProps): null {
+  return null;
+}
+
+function isAppShellTabElement(node: ReactNode): node is ReactElement<AppShellTabProps> {
+  return isValidElement<AppShellTabProps>(node) && node.type === AppShellTab;
+}
 
 type RasterNativeHandleRef = {
   handle?: {

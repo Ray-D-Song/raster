@@ -309,7 +309,9 @@ function normalizeJsonValue(value: unknown, path: string, label: string): JsonVa
     return value;
   }
   if (Array.isArray(value)) {
-    return value.map((child, index) => normalizeJsonValue(child, `${path}[${index}]`, label));
+    return value.flatMap((child, index) =>
+      child === undefined ? [] : [normalizeJsonValue(child, `${path}[${index}]`, label)]
+    );
   }
   if (typeof value === "object") {
     return normalizeJsonObject(value as object, path, label);
