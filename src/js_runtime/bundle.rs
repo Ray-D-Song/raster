@@ -6,6 +6,9 @@ use llrt_utils::module::ModuleInfo;
 
 const RASTER_COMPONENT_EXPORTS: &[&str] = &[
     "createComponent",
+    "AppShell",
+    "AppShellTab",
+    "AppShellTabBar",
     "Avatar",
     "AvatarGroup",
     "Alert",
@@ -84,6 +87,7 @@ const REACT_EXPORTS: &[&str] = &[
 ];
 
 const REACT_JSX_RUNTIME_EXPORTS: &[&str] = &["Fragment", "jsx", "jsxs"];
+const REACT_JSX_DEV_RUNTIME_EXPORTS: &[&str] = &["Fragment", "jsxDEV"];
 
 pub fn install_runtime_bundle<'js>(ctx: Ctx<'js>) -> Result<()> {
     ctx.eval::<(), _>(include_str!("../runtime/js/generated/runtime_bundle.js"))?;
@@ -233,6 +237,32 @@ impl From<ReactJsxRuntimeModule> for ModuleInfo<ReactJsxRuntimeModule> {
     fn from(val: ReactJsxRuntimeModule) -> Self {
         Self {
             name: "react/jsx-runtime",
+            module: val,
+        }
+    }
+}
+
+pub struct ReactJsxDevRuntimeModule;
+
+impl ModuleDef for ReactJsxDevRuntimeModule {
+    fn declare(declare: &Declarations) -> Result<()> {
+        for name in REACT_JSX_DEV_RUNTIME_EXPORTS {
+            declare.declare(*name)?;
+        }
+        Ok(())
+    }
+
+    fn evaluate<'js>(ctx: &Ctx<'js>, exports: &Exports<'js>) -> Result<()> {
+        let bundle = runtime_bundle(ctx)?;
+        export_bundle_values(&bundle, exports, REACT_JSX_DEV_RUNTIME_EXPORTS)?;
+        Ok(())
+    }
+}
+
+impl From<ReactJsxDevRuntimeModule> for ModuleInfo<ReactJsxDevRuntimeModule> {
+    fn from(val: ReactJsxDevRuntimeModule) -> Self {
+        Self {
+            name: "react/jsx-dev-runtime",
             module: val,
         }
     }

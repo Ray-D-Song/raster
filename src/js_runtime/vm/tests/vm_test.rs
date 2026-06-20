@@ -5,6 +5,40 @@ fn runtime_bundle_loads() {
 }
 
 #[test]
+fn raster_components_module_exports_app_shell() {
+    let runtime = pollster::block_on(super::super::start()).expect("start js runtime");
+    pollster::block_on(runtime.eval_app_bundle_source(
+        "test:app-shell-exports",
+        r#"
+        import { AppShell, AppShellTab, AppShellTabBar } from "raster-js/components";
+        if (typeof AppShell !== "function" || typeof AppShellTab !== "function" || typeof AppShellTabBar !== "function") {
+          throw new Error("missing AppShell exports");
+        }
+        "#
+        .to_owned(),
+    ))
+    .expect("raster-js/components should export AppShell components");
+}
+
+#[test]
+fn react_jsx_dev_runtime_module_exports_jsx_dev() {
+    let runtime = pollster::block_on(super::super::start()).expect("start js runtime");
+    pollster::block_on(
+        runtime.eval_app_bundle_source(
+            "test:jsx-dev-runtime-exports",
+            r#"
+        import { Fragment, jsxDEV } from "react/jsx-dev-runtime";
+        if (typeof Fragment !== "symbol" || typeof jsxDEV !== "function") {
+          throw new Error("missing react/jsx-dev-runtime exports");
+        }
+        "#
+            .to_owned(),
+        ),
+    )
+    .expect("react/jsx-dev-runtime should export Fragment and jsxDEV");
+}
+
+#[test]
 fn runtime_bundle_reconciles_view_text_app() {
     let runtime = pollster::block_on(super::super::start()).expect("start js runtime");
     let result = pollster::block_on(runtime.eval_runtime_script_to_string(

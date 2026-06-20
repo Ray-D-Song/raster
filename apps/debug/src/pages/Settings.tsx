@@ -1,8 +1,9 @@
 import { Button, Icon, Select, Switch, Text, View } from "raster-js/components";
 import { Card } from "../components/Card";
 import { SectionHeader } from "../components/SectionHeader";
+import { themePresetOptions } from "../data";
 import { type AppTheme, pagePadding, row, secondaryText, spaceBetween } from "../styles";
-import type { CurrencyCode, ThemePreference, UserSettings } from "../types";
+import type { CurrencyCode, ThemePreference, ThemePresetChoice, UserSettings } from "../types";
 
 interface SettingsProps {
   settings: UserSettings;
@@ -68,6 +69,16 @@ export function Settings({ settings, theme, onChange, transactionCount }: Settin
               value={settings.theme}
               options={themeOptions}
               onValueChange={(value) => onChange({ ...settings, theme: String(value ?? "light") as ThemePreference })}
+            />
+          </View>
+          <View style={{ gap: 6 }}>
+            <Text style={{ fontSize: 13, fontWeight: "700" }}>Preset</Text>
+            <Select
+              value={settings.themePreset}
+              options={themePresetOptions}
+              onValueChange={(value) =>
+                onChange({ ...settings, themePreset: String(value ?? "macos-classic") as ThemePresetChoice })
+              }
             />
           </View>
         </Card>

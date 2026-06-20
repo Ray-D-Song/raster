@@ -71,6 +71,7 @@ export function startViteBuildWatchForRasterDev(
     env: {
       ...process.env,
       [VITE_DEV_CHILD_ENV]: "1",
+      NODE_ENV: "production",
     },
     stdio: "inherit",
     shell: process.platform === "win32",

@@ -1,4 +1,6 @@
-import type { Budget, Category, NewTransactionDraft, Transaction, UserSettings } from "./types";
+import { ThemePreset } from "raster-js/components";
+import type { RasterThemePresetPair } from "raster-js/components";
+import type { Budget, Category, NewTransactionDraft, ThemePresetChoice, Transaction, UserSettings } from "./types";
 
 export const categories: Category[] = [
   { id: "groceries", name: "Groceries", color: "#0069a8", icon: "inbox" },
@@ -87,9 +89,46 @@ export const seedBudgets: Budget[] = [
 export const defaultSettings: UserSettings = {
   currency: "USD",
   theme: "light",
+  themePreset: "macos-classic",
   budgetAlerts: true,
   monthlyReports: false,
   budgetCycle: "monthly",
+};
+
+export const themePresetOptions = [
+  { id: "macos-classic", label: "macOS Classic", value: "macos-classic" },
+  { id: "ayu", label: "Ayu", value: "ayu" },
+  { id: "catppuccin", label: "Catppuccin", value: "catppuccin" },
+  { id: "everforest", label: "Everforest", value: "everforest" },
+  { id: "gruvbox", label: "Gruvbox", value: "gruvbox" },
+  { id: "solarized", label: "Solarized", value: "solarized" },
+];
+
+export const themePresetPairs: Record<ThemePresetChoice, RasterThemePresetPair> = {
+  "macos-classic": {
+    light: ThemePreset.MacOSClassicLight,
+    dark: ThemePreset.MacOSClassicDark,
+  },
+  ayu: {
+    light: ThemePreset.AyuLight,
+    dark: ThemePreset.AyuDark,
+  },
+  catppuccin: {
+    light: ThemePreset.CatppuccinLatte,
+    dark: ThemePreset.CatppuccinMocha,
+  },
+  everforest: {
+    light: ThemePreset.EverforestLight,
+    dark: ThemePreset.EverforestDark,
+  },
+  gruvbox: {
+    light: ThemePreset.GruvboxLight,
+    dark: ThemePreset.GruvboxDark,
+  },
+  solarized: {
+    light: ThemePreset.SolarizedLight,
+    dark: ThemePreset.SolarizedDark,
+  },
 };
 
 export const defaultDraft: NewTransactionDraft = {

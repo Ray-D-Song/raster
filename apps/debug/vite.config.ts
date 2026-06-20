@@ -7,7 +7,6 @@ export default defineConfig({
       outfile: "target/raster/app.js",
       minify: false,
       sourcemap: true,
-      hostExternal: false,
     }),
   ],
 });

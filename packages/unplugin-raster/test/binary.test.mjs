@@ -25,6 +25,7 @@ test("Vite dev child watch starts once and does not recurse", async () => {
         assert.deepEqual(calls.map((call) => call.args), [["build", "--watch"]]);
         assert.equal(calls[0].cwd, await realpath(root));
         assert.equal(calls[0].env.RASTER_UNPLUGIN_VITE_DEV_CHILD, "1");
+        assert.equal(calls[0].env.NODE_ENV, "production");
         stopRasterDev();
       }
     );
@@ -144,7 +145,6 @@ function rasterOptions(root) {
     sourcemap: true,
     minify: false,
     external: [],
-    hostExternal: [],
     allExternal: [],
   };
 }

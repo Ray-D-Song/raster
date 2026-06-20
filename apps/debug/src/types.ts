@@ -2,6 +2,8 @@ export type TransactionType = "expense" | "income";
 
 export type ThemePreference = "light" | "dark";
 
+export type ThemePresetChoice = "macos-classic" | "ayu" | "catppuccin" | "everforest" | "gruvbox" | "solarized";
+
 export type CurrencyCode = "USD" | "EUR" | "CNY";
 
 export interface Category {
@@ -31,6 +33,7 @@ export interface Budget {
 export interface UserSettings {
   currency: CurrencyCode;
   theme: ThemePreference;
+  themePreset: ThemePresetChoice;
   budgetAlerts: boolean;
   monthlyReports: boolean;
   budgetCycle: "monthly";

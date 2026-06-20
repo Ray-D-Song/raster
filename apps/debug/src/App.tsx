@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Alert, AppShell, AppShellTab, AppShellTabBar, ConfigProvider, Dialog, Text, View, useTheme } from "raster-js/components";
 import { AddTransactionDialog } from "./components/AddTransactionDialog";
-import { defaultDraft, defaultSettings, seedBudgets, seedTransactions } from "./data";
+import { defaultDraft, defaultSettings, seedBudgets, seedTransactions, themePresetPairs } from "./data";
 import { categoryById, formatMoney, makeTransaction } from "./model";
 import { Budget } from "./pages/Budget";
 import { Overview } from "./pages/Overview";
@@ -24,6 +24,7 @@ export function App() {
 
   const currency = settings.currency;
   const theme = settings.theme;
+  const themePreset = themePresetPairs[settings.themePreset];
   const nativeTheme = useTheme();
   const appTheme = nativeTheme?.colors ?? null;
   const selectedCategory = selectedTransaction ? categoryById(selectedTransaction.category) : null;
@@ -104,7 +105,7 @@ export function App() {
   };
 
   return (
-    <ConfigProvider theme={{ mode: theme }}>
+    <ConfigProvider theme={{ mode: theme, preset: themePreset }}>
       <AppShell
         theme={theme}
         tabBar={
@@ -154,8 +155,6 @@ export function App() {
             <View style={{ gap: 12 }}>
               <View
                 style={{
-                  backgroundColor: panelBackground(appTheme),
-                  borderColor: borderColor(appTheme),
                   borderWidth: 1,
                   borderRadius: 8,
                   padding: 12,

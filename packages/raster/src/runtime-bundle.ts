@@ -1,6 +1,7 @@
 export { createRoot, createRoot as createRasterRoot } from "./react/index.js";
 export { ConfigProvider, Input, Label, Slot, Text, Textarea, ThemePreset, View, Widget, useTheme } from "./core/index.js";
 import ReactDefault, * as React from "react";
+import { jsx, jsxs } from "react/jsx-runtime";
 
 const ReactRuntime = React as typeof React & Record<string, unknown>;
 export type {
@@ -55,7 +56,8 @@ export type {
   StyleDimension,
 } from "./core/types/style.js";
 export * from "./component/index.js";
-export { jsx, jsxs } from "react/jsx-runtime";
+export { jsx, jsxs };
+export const jsxDEV = jsx;
 
 export const Activity = React.Activity;
 export const Children = React.Children;

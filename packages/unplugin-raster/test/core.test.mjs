@@ -20,7 +20,6 @@ test("normalizes default Raster plugin options", () => {
   assert.equal(options.sourcemap, true);
   assert.equal(options.minify, false);
   assert.deepEqual(options.external, []);
-  assert.deepEqual(options.hostExternal, [...HOST_EXTERNALS]);
   assert.deepEqual(options.allExternal, [...HOST_EXTERNALS]);
 });
 
@@ -33,15 +32,13 @@ test("appends user externals without removing host externals", () => {
   assert.deepEqual(options.allExternal, [...HOST_EXTERNALS, "node:fs"]);
 });
 
-test("can disable host externals for local debug bundles", () => {
+test("deduplicates user externals against fixed host externals", () => {
   const options = normalizeRasterOptions({
-    hostExternal: false,
-    external: ["node:fs", "node:fs"],
+    external: ["react", "react/jsx-runtime", "node:fs", "node:fs"],
   });
 
-  assert.deepEqual(options.hostExternal, []);
-  assert.deepEqual(options.external, ["node:fs"]);
-  assert.deepEqual(options.allExternal, ["node:fs"]);
+  assert.deepEqual(options.external, ["react", "react/jsx-runtime", "node:fs"]);
+  assert.deepEqual(options.allExternal, [...HOST_EXTERNALS, "node:fs"]);
 });
 
 test("rejects Rollup-like bundles with multiple JS chunks", () => {

@@ -8,7 +8,6 @@ export type RasterPluginOptions = {
   target?: string;
   sourcemap?: boolean;
   minify?: boolean;
-  hostExternal?: boolean;
   external?: string[];
 };
 
@@ -22,7 +21,6 @@ export type NormalizedRasterPluginOptions = {
   sourcemap: boolean;
   minify: boolean;
   external: string[];
-  hostExternal: string[];
   allExternal: string[];
 };
 
@@ -68,6 +66,7 @@ export type EsbuildLikeBuildResult = {
 export const HOST_EXTERNALS = [
   "react",
   "react/jsx-runtime",
+  "react/jsx-dev-runtime",
   "react-raster",
   "raster-js",
   "raster-js/core",
@@ -114,7 +113,6 @@ export function normalizeRasterOptions(
   );
   const out = nonEmptyString(options.out, "out", DEFAULT_RASTER_PLUGIN_OPTIONS.out);
   const userExternal = uniqueStrings(options.external ?? [], "external");
-  const hostExternal = options.hostExternal === false ? [] : [...HOST_EXTERNALS];
 
   return {
     entry,
@@ -126,8 +124,7 @@ export function normalizeRasterOptions(
     sourcemap: options.sourcemap ?? DEFAULT_RASTER_PLUGIN_OPTIONS.sourcemap,
     minify: options.minify ?? DEFAULT_RASTER_PLUGIN_OPTIONS.minify,
     external: userExternal,
-    hostExternal,
-    allExternal: unique([...hostExternal, ...userExternal]),
+    allExternal: unique([...HOST_EXTERNALS, ...userExternal]),
   };
 }
 
