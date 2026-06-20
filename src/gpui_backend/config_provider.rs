@@ -9,6 +9,7 @@ use crate::{
     common::{mount::NodeValue, utils::logger},
     gpui_backend::{
         components::helper::props,
+        embedded_themes::{default_theme_name, registry_theme},
         render_model::style::parse_color,
         retained_tree::{node::RetainedNode, tree::RetainedTree},
     },
@@ -16,6 +17,7 @@ use crate::{
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub(in crate::gpui_backend) struct RasterThemeSnapshot {
+    preset: Option<RasterThemePreset>,
     mode: Option<RasterThemeMode>,
     radius: Option<f32>,
     radius_lg: Option<f32>,
@@ -24,6 +26,15 @@ pub(in crate::gpui_backend) struct RasterThemeSnapshot {
     mono_font_size: Option<f32>,
     mono_font_family: Option<String>,
     colors: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RasterThemePreset {
+    Name(String),
+    Pair {
+        light: Option<String>,
+        dark: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,13 +66,16 @@ pub(in crate::gpui_backend) fn find_config_provider_theme(
 }
 
 pub(in crate::gpui_backend) fn apply_theme_snapshot(snapshot: &RasterThemeSnapshot, cx: &mut App) {
-    match snapshot.mode {
-        Some(RasterThemeMode::Light) => Theme::change(ThemeMode::Light, None, cx),
-        Some(RasterThemeMode::Dark) => Theme::change(ThemeMode::Dark, None, cx),
-        Some(RasterThemeMode::System) => {
-            Theme::change(cx.window_appearance(), None, cx);
-        }
-        None => {}
+    let target_mode = match snapshot.mode {
+        Some(RasterThemeMode::Light) => Some(ThemeMode::Light),
+        Some(RasterThemeMode::Dark) => Some(ThemeMode::Dark),
+        Some(RasterThemeMode::System) => Some(cx.window_appearance().into()),
+        None => snapshot.preset.as_ref().map(|_| Theme::global(cx).mode),
+    };
+
+    if let Some(mode) = target_mode {
+        apply_theme_preset(snapshot.preset.as_ref(), mode, cx);
+        Theme::change(mode, None, cx);
     }
 
     let theme = Theme::global_mut(cx);
@@ -117,6 +131,7 @@ pub(in crate::gpui_backend) fn apply_theme_snapshot(snapshot: &RasterThemeSnapsh
 }
 
 pub(in crate::gpui_backend) fn apply_raster_default_theme(cx: &mut App) {
+    apply_default_theme_pair(cx);
     Theme::change(cx.window_appearance(), None, cx);
 }
 
@@ -145,6 +160,7 @@ fn collect_config_provider_themes(
 fn parse_theme_snapshot(node: &RetainedNode) -> Option<RasterThemeSnapshot> {
     let theme = object_prop(&node.payload.props, "theme")?;
     let mut snapshot = RasterThemeSnapshot {
+        preset: parse_preset(theme),
         mode: props::string_prop(theme, "mode")
             .as_deref()
             .and_then(parse_mode),
@@ -168,6 +184,28 @@ fn parse_theme_snapshot(node: &RetainedNode) -> Option<RasterThemeSnapshot> {
     Some(snapshot)
 }
 
+fn parse_preset(object: &BTreeMap<String, NodeValue>) -> Option<RasterThemePreset> {
+    match object.get("preset") {
+        Some(NodeValue::String(value)) => Some(RasterThemePreset::Name(value.clone())),
+        Some(NodeValue::Object(value)) => Some(RasterThemePreset::Pair {
+            light: string_value(value, "light"),
+            dark: string_value(value, "dark"),
+        }),
+        Some(_) => {
+            logger::warn("unsupported ConfigProvider theme preset");
+            None
+        }
+        None => None,
+    }
+}
+
+fn string_value(object: &BTreeMap<String, NodeValue>, key: &str) -> Option<String> {
+    match object.get(key) {
+        Some(NodeValue::String(value)) => Some(value.clone()),
+        _ => None,
+    }
+}
+
 fn object_prop<'a>(
     object: &'a BTreeMap<String, NodeValue>,
     key: &str,
@@ -175,6 +213,53 @@ fn object_prop<'a>(
     match object.get(key) {
         Some(NodeValue::Object(value)) => Some(value),
         _ => None,
+    }
+}
+
+fn apply_theme_preset(preset: Option<&RasterThemePreset>, target_mode: ThemeMode, cx: &mut App) {
+    apply_default_theme_pair(cx);
+
+    match preset {
+        Some(RasterThemePreset::Name(name)) => set_theme_for_mode(target_mode, name, cx),
+        Some(RasterThemePreset::Pair { light, dark }) => {
+            if let Some(name) = light {
+                set_theme_for_mode(ThemeMode::Light, name, cx);
+            }
+            if let Some(name) = dark {
+                set_theme_for_mode(ThemeMode::Dark, name, cx);
+            }
+        }
+        None => {}
+    }
+}
+
+fn apply_default_theme_pair(cx: &mut App) {
+    set_theme_for_mode(ThemeMode::Light, default_theme_name(ThemeMode::Light), cx);
+    set_theme_for_mode(ThemeMode::Dark, default_theme_name(ThemeMode::Dark), cx);
+}
+
+fn set_theme_for_mode(mode: ThemeMode, name: &str, cx: &mut App) {
+    let resolved = registry_theme(cx, name).or_else(|| {
+        logger::warn(format!(
+            "unknown ConfigProvider theme preset `{name}`; using `{}`",
+            default_theme_name(mode)
+        ));
+        registry_theme(cx, default_theme_name(mode))
+    });
+
+    let Some(config) = resolved else {
+        logger::warn(format!(
+            "default Raster theme preset `{}` is not loaded",
+            default_theme_name(mode)
+        ));
+        return;
+    };
+
+    let theme = Theme::global_mut(cx);
+    if mode.is_dark() {
+        theme.dark_theme = config;
+    } else {
+        theme.light_theme = config;
     }
 }
 
@@ -210,7 +295,14 @@ mod tests {
         );
 
         let mut theme = BTreeMap::new();
+        let mut preset = BTreeMap::new();
+        preset.insert(
+            "light".to_owned(),
+            NodeValue::String("macOS Classic Light".to_owned()),
+        );
+        preset.insert("dark".to_owned(), NodeValue::String("Ayu Dark".to_owned()));
         theme.insert("mode".to_owned(), NodeValue::String("dark".to_owned()));
+        theme.insert("preset".to_owned(), NodeValue::Object(preset));
         theme.insert("radius".to_owned(), NodeValue::Number(8.0));
         theme.insert("colors".to_owned(), NodeValue::Object(colors));
 
@@ -231,6 +323,13 @@ mod tests {
 
         let snapshot = parse_theme_snapshot(&node).expect("theme snapshot");
         assert_eq!(snapshot.mode, Some(RasterThemeMode::Dark));
+        assert_eq!(
+            snapshot.preset,
+            Some(RasterThemePreset::Pair {
+                light: Some("macOS Classic Light".to_owned()),
+                dark: Some("Ayu Dark".to_owned())
+            })
+        );
         assert_eq!(snapshot.radius, Some(8.0));
         assert_eq!(
             snapshot.colors.get("primary").map(String::as_str),

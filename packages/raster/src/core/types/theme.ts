@@ -1,5 +1,51 @@
 export type RasterThemeMode = "light" | "dark" | "system";
 
+export enum ThemePreset {
+  Adventure = "Adventure",
+  AdventureTime = "Adventure Time",
+  Alduin = "Alduin",
+  Asciinema = "Asciinema",
+  AyuLight = "Ayu Light",
+  AyuDark = "Ayu Dark",
+  CatppuccinLatte = "Catppuccin Latte",
+  CatppuccinFrappe = "Catppuccin Frappe",
+  CatppuccinMacchiato = "Catppuccin Macchiato",
+  CatppuccinMocha = "Catppuccin Mocha",
+  EverforestLight = "Everforest Light",
+  EverforestDark = "Everforest Dark",
+  Fahrenheit = "Fahrenheit",
+  FlexokiLight = "Flexoki Light",
+  FlexokiDark = "Flexoki Dark",
+  GruvboxLight = "Gruvbox Light",
+  GruvboxDark = "Gruvbox Dark",
+  Harper = "Harper",
+  HybridLight = "Hybrid Light",
+  HybridDark = "Hybrid Dark",
+  Jellybeans = "Jellybeans",
+  Kibble = "Kibble",
+  MacOSClassicLight = "macOS Classic Light",
+  MacOSClassicDark = "macOS Classic Dark",
+  Matrix = "Matrix",
+  MellifluousLight = "Mellifluous Light",
+  MellifluousDark = "Mellifluous Dark",
+  MolokaiLight = "Molokai Light",
+  MolokaiDark = "Molokai Dark",
+  SolarizedLight = "Solarized Light",
+  SolarizedDark = "Solarized Dark",
+  Spaceduck = "Spaceduck",
+  TokyoNight = "Tokyo Night",
+  TokyoStorm = "Tokyo Storm",
+  TokyoMoon = "Tokyo Moon",
+  Twilight = "Twilight",
+}
+
+export interface RasterThemePresetPair {
+  light?: ThemePreset | `${ThemePreset}`;
+  dark?: ThemePreset | `${ThemePreset}`;
+}
+
+export type RasterThemePreset = ThemePreset | `${ThemePreset}` | RasterThemePresetPair;
+
 export interface RasterThemeColors {
   background?: string;
   foreground?: string;
@@ -23,6 +69,7 @@ export interface RasterThemeColors {
 }
 
 export interface RasterThemeConfig {
+  preset?: RasterThemePreset;
   mode?: RasterThemeMode;
   radius?: number;
   radiusLg?: number;

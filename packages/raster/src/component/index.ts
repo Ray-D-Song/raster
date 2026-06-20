@@ -33,6 +33,8 @@ import type {
   RasterStyleInput,
   RasterThemeConfigColorsSnapshot,
   RasterThemeConfigSnapshot,
+  RasterThemePreset,
+  RasterThemePresetPair,
   RasterThemeColors,
   RasterThemeConfig,
   RasterThemeMode,
@@ -72,6 +74,8 @@ export type {
   RasterStyleInput,
   RasterThemeConfigColorsSnapshot,
   RasterThemeConfigSnapshot,
+  RasterThemePreset,
+  RasterThemePresetPair,
   RasterThemeColors,
   RasterThemeConfig,
   RasterThemeMode,
@@ -85,7 +89,7 @@ export type {
 } from "../core/types/index.js";
 
 export { ConfigProvider, Input, Label, Text, Textarea, View } from "../core/components/index.js";
-export { useTheme } from "../core/index.js";
+export { ThemePreset, useTheme } from "../core/index.js";
 
 type RasterRuntimeGlobal = typeof globalThis & {
   __rasterNative?: {

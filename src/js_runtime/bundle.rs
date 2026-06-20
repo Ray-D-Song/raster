@@ -30,6 +30,7 @@ const RASTER_COMPONENT_EXPORTS: &[&str] = &[
     "Switch",
     "Tab",
     "TabBar",
+    "ThemePreset",
     "VirtualList",
     "useTheme",
 ];
@@ -129,6 +130,7 @@ fn declare_raster_core(declare: &Declarations) -> Result<()> {
     declare.declare("Textarea")?;
     declare.declare("View")?;
     declare.declare("Widget")?;
+    declare.declare("ThemePreset")?;
     declare.declare("useTheme")?;
     Ok(())
 }
@@ -146,6 +148,7 @@ fn evaluate_raster_core<'js>(ctx: &Ctx<'js>, exports: &Exports<'js>) -> Result<(
     exports.export("Textarea", bundle.get::<_, String>("Textarea")?)?;
     exports.export("View", bundle.get::<_, String>("View")?)?;
     exports.export("Widget", bundle.get::<_, Function<'js>>("Widget")?)?;
+    exports.export("ThemePreset", bundle.get::<_, Object<'js>>("ThemePreset")?)?;
     exports.export("useTheme", bundle.get::<_, Function<'js>>("useTheme")?)?;
     Ok(())
 }

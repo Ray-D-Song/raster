@@ -70,6 +70,7 @@ use crate::{
             RasterThemeSnapshot, apply_raster_default_theme, apply_theme_snapshot,
             find_config_provider_theme, is_config_provider_node, reset_theme_snapshot,
         },
+        embedded_themes::load_embedded_themes,
         notification::RasterNotificationCenter,
         perf::{PerfMonitor, decorate_refresh},
         render_model::{
@@ -139,6 +140,7 @@ pub fn open_raster_window(
     runtime_commands: ChannelSender<RuntimeCommand>,
 ) {
     gpui_component::init(cx);
+    load_embedded_themes(cx);
     apply_raster_default_theme(cx);
     native_binding.set_theme_snapshot_json(theme_snapshot_json(cx));
 

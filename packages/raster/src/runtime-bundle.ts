@@ -1,5 +1,5 @@
 export { createRoot, createRoot as createRasterRoot } from "./react/index.js";
-export { ConfigProvider, Input, Label, Slot, Text, Textarea, View, Widget, useTheme } from "./core/index.js";
+export { ConfigProvider, Input, Label, Slot, Text, Textarea, ThemePreset, View, Widget, useTheme } from "./core/index.js";
 import ReactDefault, * as React from "react";
 
 const ReactRuntime = React as typeof React & Record<string, unknown>;
@@ -25,6 +25,8 @@ export type {
   RasterSyntaxColorsSnapshot,
   RasterThemeConfigColorsSnapshot,
   RasterThemeConfigSnapshot,
+  RasterThemePreset,
+  RasterThemePresetPair,
   RasterThemeStyleSnapshot,
   RasterThemeColors,
   RasterThemeConfig,

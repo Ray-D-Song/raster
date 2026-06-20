@@ -42,6 +42,8 @@ export type {
   RasterSyntaxColorsSnapshot,
   RasterThemeConfigColorsSnapshot,
   RasterThemeConfigSnapshot,
+  RasterThemePreset,
+  RasterThemePresetPair,
   RasterThemeStyleSnapshot,
   RasterThemeColors,
   RasterThemeConfig,

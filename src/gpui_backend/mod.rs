@@ -6,6 +6,7 @@
 pub mod app;
 pub mod components;
 pub mod config_provider;
+pub mod embedded_themes;
 pub mod notification;
 pub mod perf;
 pub mod render_model;

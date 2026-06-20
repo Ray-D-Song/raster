@@ -1,4 +1,5 @@
 export { ConfigProvider, Input, Label, Slot, Text, Textarea, View, Widget } from "./components/index.js";
+export { ThemePreset } from "./types/theme.js";
 export type * from "./types/index.js";
 export { useTheme } from "./theme.js";
 export { createFabricContainer, getRasterNativeBinding, type RasterFabricContainer } from "./runtime/index.js";
