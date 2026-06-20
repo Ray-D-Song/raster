@@ -1,12 +1,12 @@
 import { Button, Icon, Select, Switch, Text, View } from "raster-js/components";
 import { Card } from "../components/Card";
 import { SectionHeader } from "../components/SectionHeader";
-import { colors, pagePadding, row, secondaryText, spaceBetween, textColor } from "../styles";
+import { type AppTheme, pagePadding, row, secondaryText, spaceBetween } from "../styles";
 import type { CurrencyCode, ThemePreference, UserSettings } from "../types";
 
 interface SettingsProps {
   settings: UserSettings;
-  theme: ThemePreference;
+  theme: AppTheme;
   onChange: (settings: UserSettings) => void;
   transactionCount: number;
 }
@@ -27,7 +27,7 @@ export function Settings({ settings, theme, onChange, transactionCount }: Settin
     <View style={[pagePadding, { gap: 12 }]}>
       <View style={{ gap: 3 }}>
         <Text style={{ color: secondaryText(theme), fontSize: 12 }}>Personal workspace</Text>
-        <Text style={{ color: textColor(theme), fontSize: 24, fontWeight: "800" }}>Settings</Text>
+        <Text style={{ fontSize: 24, fontWeight: "800" }}>Settings</Text>
       </View>
 
       <Card theme={theme}>
@@ -37,15 +37,15 @@ export function Settings({ settings, theme, onChange, transactionCount }: Settin
               width: 48,
               height: 48,
               borderRadius: 8,
-              backgroundColor: "#dbeafe",
+              backgroundColor: theme.accent,
               alignItems: "center",
               justifyContent: "center",
             }}
           >
-            <Icon name="circle-user" color={colors.blue} />
+            <Icon name="circle-user" color={theme.primary} />
           </View>
           <View style={{ flex: 1, gap: 3 }}>
-            <Text style={{ color: textColor(theme), fontSize: 17, fontWeight: "800" }}>Ray Song</Text>
+            <Text style={{ fontSize: 17, fontWeight: "800" }}>Ray Song</Text>
             <Text style={{ color: secondaryText(theme), fontSize: 12 }}>Individual plan · Offline debug profile</Text>
           </View>
         </View>
@@ -55,7 +55,7 @@ export function Settings({ settings, theme, onChange, transactionCount }: Settin
         <SectionHeader title="Preferences" theme={theme} />
         <Card theme={theme} style={{ gap: 12 }}>
           <View style={{ gap: 6 }}>
-            <Text style={{ color: textColor(theme), fontSize: 13, fontWeight: "700" }}>Currency</Text>
+            <Text style={{ fontSize: 13, fontWeight: "700" }}>Currency</Text>
             <Select
               value={settings.currency}
               options={currencyOptions}
@@ -63,7 +63,7 @@ export function Settings({ settings, theme, onChange, transactionCount }: Settin
             />
           </View>
           <View style={{ gap: 6 }}>
-            <Text style={{ color: textColor(theme), fontSize: 13, fontWeight: "700" }}>Theme</Text>
+            <Text style={{ fontSize: 13, fontWeight: "700" }}>Theme</Text>
             <Select
               value={settings.theme}
               options={themeOptions}
@@ -78,7 +78,7 @@ export function Settings({ settings, theme, onChange, transactionCount }: Settin
         <Card theme={theme} style={{ gap: 14 }}>
           <View style={spaceBetween}>
             <View style={{ gap: 3 }}>
-              <Text style={{ color: textColor(theme), fontSize: 14, fontWeight: "700" }}>Budget alerts</Text>
+              <Text style={{ fontSize: 14, fontWeight: "700" }}>Budget alerts</Text>
               <Text style={{ color: secondaryText(theme), fontSize: 11 }}>Warn when a category crosses its limit.</Text>
             </View>
             <Switch
@@ -88,7 +88,7 @@ export function Settings({ settings, theme, onChange, transactionCount }: Settin
           </View>
           <View style={spaceBetween}>
             <View style={{ gap: 3 }}>
-              <Text style={{ color: textColor(theme), fontSize: 14, fontWeight: "700" }}>Monthly report</Text>
+              <Text style={{ fontSize: 14, fontWeight: "700" }}>Monthly report</Text>
               <Text style={{ color: secondaryText(theme), fontSize: 11 }}>Summarize spending at month end.</Text>
             </View>
             <Switch
@@ -101,8 +101,8 @@ export function Settings({ settings, theme, onChange, transactionCount }: Settin
 
       <Card theme={theme} style={{ gap: 10 }}>
         <View style={row}>
-          <Icon name="info" color={colors.blue} size="small" />
-          <Text style={{ color: textColor(theme), fontSize: 14, fontWeight: "700" }}>Debug data</Text>
+          <Icon name="info" color={theme.primary} size="small" />
+          <Text style={{ fontSize: 14, fontWeight: "700" }}>Debug data</Text>
         </View>
         <Text style={{ color: secondaryText(theme), fontSize: 12 }}>
           This build keeps {transactionCount} transactions in memory. Restarting the app restores the seed ledger.

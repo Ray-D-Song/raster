@@ -4,13 +4,13 @@ import { Card } from "../components/Card";
 import { SectionHeader } from "../components/SectionHeader";
 import { TransactionRow } from "../components/TransactionRow";
 import { categoryById, totalExpenses, totalIncome } from "../model";
-import { colors, pagePadding, secondaryText, spaceBetween, textColor } from "../styles";
-import type { CurrencyCode, ThemePreference, Transaction } from "../types";
+import { type AppTheme, pagePadding, secondaryText, spaceBetween } from "../styles";
+import type { CurrencyCode, Transaction } from "../types";
 
 interface TransactionsProps {
   transactions: Transaction[];
   currency: CurrencyCode;
-  theme: ThemePreference;
+  theme: AppTheme;
   search: string;
   categoryFilter: string;
   onSearchChange: (value: string) => void;
@@ -50,7 +50,7 @@ export function Transactions({
       <View style={spaceBetween}>
         <View style={{ gap: 3 }}>
           <Text style={{ color: secondaryText(theme), fontSize: 12 }}>Activity</Text>
-          <Text style={{ color: textColor(theme), fontSize: 24, fontWeight: "800" }}>Transactions</Text>
+          <Text style={{ fontSize: 24, fontWeight: "800" }}>Transactions</Text>
         </View>
         <Button label="Add" icon="plus" variant="primary" size="small" onClick={onAdd} />
       </View>
@@ -67,13 +67,13 @@ export function Transactions({
       <View style={{ flexDirection: "row", gap: 8 }}>
         <Card theme={theme} style={{ flex: 1, gap: 3 }}>
           <Text style={{ color: secondaryText(theme), fontSize: 11 }}>Income</Text>
-          <Text style={{ color: colors.green, fontSize: 16, fontWeight: "800" }}>
+          <Text style={{ color: theme.success, fontSize: 16, fontWeight: "800" }}>
             {currency === "USD" ? "$" : currency} {Math.round(income).toLocaleString("en-US")}
           </Text>
         </Card>
         <Card theme={theme} style={{ flex: 1, gap: 3 }}>
           <Text style={{ color: secondaryText(theme), fontSize: 11 }}>Expenses</Text>
-          <Text style={{ color: colors.red, fontSize: 16, fontWeight: "800" }}>
+          <Text style={{ color: theme.danger, fontSize: 16, fontWeight: "800" }}>
             {currency === "USD" ? "$" : currency} {Math.round(expenses).toLocaleString("en-US")}
           </Text>
         </Card>

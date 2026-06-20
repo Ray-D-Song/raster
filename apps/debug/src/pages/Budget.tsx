@@ -3,14 +3,14 @@ import { BudgetRow } from "../components/BudgetRow";
 import { Card } from "../components/Card";
 import { SectionHeader } from "../components/SectionHeader";
 import { formatMoney, spentForCategory } from "../model";
-import { colors, pagePadding, secondaryText, spaceBetween, textColor } from "../styles";
-import type { Budget as BudgetModel, CurrencyCode, ThemePreference, Transaction } from "../types";
+import { type AppTheme, pagePadding, secondaryText, spaceBetween } from "../styles";
+import type { Budget as BudgetModel, CurrencyCode, Transaction } from "../types";
 
 interface BudgetProps {
   budgets: BudgetModel[];
   transactions: Transaction[];
   currency: CurrencyCode;
-  theme: ThemePreference;
+  theme: AppTheme;
   alertsEnabled: boolean;
   onAlertsChange: (value: boolean) => void;
 }
@@ -32,18 +32,24 @@ export function Budget({
     <View style={[pagePadding, { gap: 12 }]}>
       <View style={{ gap: 3 }}>
         <Text style={{ color: secondaryText(theme), fontSize: 12 }}>Monthly plan</Text>
-        <Text style={{ color: textColor(theme), fontSize: 24, fontWeight: "800" }}>Budget</Text>
+        <Text style={{ fontSize: 24, fontWeight: "800" }}>Budget</Text>
       </View>
 
       <Card theme={theme} style={{ gap: 12 }}>
         <View style={spaceBetween}>
           <View style={{ gap: 3 }}>
             <Text style={{ color: secondaryText(theme), fontSize: 12 }}>Remaining this cycle</Text>
-            <Text style={{ color: remaining < 0 ? colors.red : textColor(theme), fontSize: 28, fontWeight: "800" }}>
+            <Text
+              style={
+                remaining < 0
+                  ? { color: theme.danger, fontSize: 28, fontWeight: "800" }
+                  : { fontSize: 28, fontWeight: "800" }
+              }
+            >
               {formatMoney(remaining, currency)}
             </Text>
           </View>
-          <Icon name={remaining < 0 ? "warning" : "circle-check"} color={remaining < 0 ? colors.red : colors.green} />
+          <Icon name={remaining < 0 ? "warning" : "circle-check"} color={remaining < 0 ? theme.danger : theme.success} />
         </View>
         <Text style={{ color: secondaryText(theme), fontSize: 12 }}>
           {formatMoney(totalSpent, currency)} spent from {formatMoney(totalLimit, currency)} planned.
@@ -53,7 +59,7 @@ export function Budget({
       <Card theme={theme}>
         <View style={spaceBetween}>
           <View style={{ gap: 3 }}>
-            <Text style={{ color: textColor(theme), fontSize: 14, fontWeight: "700" }}>Smart budget alerts</Text>
+            <Text style={{ fontSize: 14, fontWeight: "700" }}>Smart budget alerts</Text>
             <Text style={{ color: secondaryText(theme), fontSize: 11 }}>
               {overCount > 0 ? `${overCount} category needs attention` : "All tracked categories are on plan"}
             </Text>

@@ -1,12 +1,12 @@
 import { Button, Input, Select, Sheet, Text, View } from "raster-js/components";
 import { categories, defaultDraft } from "../data";
-import { colors, secondaryText, textColor } from "../styles";
-import type { NewTransactionDraft, ThemePreference, TransactionType } from "../types";
+import { type AppTheme, secondaryText } from "../styles";
+import type { NewTransactionDraft, TransactionType } from "../types";
 
 interface AddTransactionDialogProps {
   open: boolean;
   draft: NewTransactionDraft;
-  theme: ThemePreference;
+  theme: AppTheme;
   onChange: (draft: NewTransactionDraft) => void;
   onCancel: () => void;
   onSubmit: () => void;
@@ -71,10 +71,10 @@ export function AddTransactionDialog({
           <Button label="Cancel" variant="secondary" onClick={onCancel} />
           <Button label="Add" variant="primary" onClick={onSubmit} />
         </View>
-        <Text style={{ color: textColor(theme), fontSize: 11 }}>
+        <Text style={{ fontSize: 11 }}>
           Expenses affect category budgets. Income updates the balance summary.
         </Text>
-        <Text style={{ color: colors.faint, fontSize: 10 }}>Data resets when the debug app restarts.</Text>
+        <Text style={{ color: secondaryText(theme), fontSize: 10 }}>Data resets when the debug app restarts.</Text>
       </View>
     </Sheet>
   );

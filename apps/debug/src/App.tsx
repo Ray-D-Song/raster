@@ -7,7 +7,7 @@ import { Budget } from "./pages/Budget";
 import { Overview } from "./pages/Overview";
 import { Settings } from "./pages/Settings";
 import { Transactions } from "./pages/Transactions";
-import { borderColor, colors, panelBackground, rasterTheme, secondaryText, textColor } from "./styles";
+import { borderColor, panelBackground, secondaryText } from "./styles";
 import type { AppTab, NewTransactionDraft, Transaction, UserSettings } from "./types";
 
 export function App() {
@@ -25,15 +25,17 @@ export function App() {
   const currency = settings.currency;
   const theme = settings.theme;
   const nativeTheme = useTheme();
+  const appTheme = nativeTheme?.colors ?? null;
   const selectedCategory = selectedTransaction ? categoryById(selectedTransaction.category) : null;
 
   const activePage = useMemo(() => {
+    if (appTheme == null) return null;
     if (tab === "transactions") {
       return (
         <Transactions
           transactions={transactions}
           currency={currency}
-          theme={theme}
+          theme={appTheme}
           search={search}
           categoryFilter={categoryFilter}
           onSearchChange={setSearch}
@@ -49,7 +51,7 @@ export function App() {
           budgets={seedBudgets}
           transactions={transactions}
           currency={currency}
-          theme={theme}
+          theme={appTheme}
           alertsEnabled={settings.budgetAlerts}
           onAlertsChange={(budgetAlerts) => setSettings((current) => ({ ...current, budgetAlerts }))}
         />
@@ -59,7 +61,7 @@ export function App() {
       return (
         <Settings
           settings={settings}
-          theme={theme}
+          theme={appTheme}
           onChange={setSettings}
           transactionCount={transactions.length}
         />
@@ -70,13 +72,13 @@ export function App() {
         transactions={transactions}
         budgets={seedBudgets}
         currency={currency}
-        theme={theme}
+        theme={appTheme}
         onAdd={() => setAddOpen(true)}
         onOpenTransaction={setSelectedTransaction}
         onNavigate={setTab}
       />
     );
-  }, [categoryFilter, currency, search, settings, tab, theme, transactions]);
+  }, [appTheme, categoryFilter, currency, search, settings, tab, transactions]);
 
   const closeAdd = () => {
     setAddOpen(false);
@@ -102,7 +104,7 @@ export function App() {
   };
 
   return (
-    <ConfigProvider theme={rasterTheme(theme)}>
+    <ConfigProvider theme={{ mode: theme }}>
       <AppShell
         theme={theme}
         tabBar={
@@ -115,14 +117,16 @@ export function App() {
         }
       >
         {activePage}
-        <AddTransactionDialog
-          open={addOpen}
-          draft={draft}
-          theme={theme}
-          onChange={setDraft}
-          onCancel={closeAdd}
-          onSubmit={submitDraft}
-        />
+        {appTheme ? (
+          <AddTransactionDialog
+            open={addOpen}
+            draft={draft}
+            theme={appTheme}
+            onChange={setDraft}
+            onCancel={closeAdd}
+            onSubmit={submitDraft}
+          />
+        ) : null}
 
         <Alert
           open={error.length > 0}
@@ -146,22 +150,22 @@ export function App() {
             if (!event.open) setSelectedTransaction(null);
           }}
         >
-          {selectedTransaction && selectedCategory ? (
+          {selectedTransaction && selectedCategory && appTheme ? (
             <View style={{ gap: 12 }}>
               <View
                 style={{
-                  backgroundColor: nativeTheme?.colors.background ?? panelBackground(theme),
-                  borderColor: nativeTheme?.colors.border ?? borderColor(theme),
+                  backgroundColor: panelBackground(appTheme),
+                  borderColor: borderColor(appTheme),
                   borderWidth: 1,
                   borderRadius: 8,
                   padding: 12,
                   gap: 8,
                 }}
               >
-                <Text style={{ color: nativeTheme?.colors.mutedForeground ?? secondaryText(theme), fontSize: 12 }}>{selectedTransaction.merchant}</Text>
+                <Text style={{ color: secondaryText(appTheme), fontSize: 12 }}>{selectedTransaction.merchant}</Text>
                 <Text
                   style={{
-                    color: selectedTransaction.type === "income" ? colors.green : colors.red,
+                    color: selectedTransaction.type === "income" ? appTheme.success : appTheme.danger,
                     fontSize: 28,
                     fontWeight: "800",
                   }}
@@ -173,17 +177,17 @@ export function App() {
                 </Text>
               </View>
               <View style={{ gap: 6 }}>
-                <Text style={{ color: textColor(theme), fontSize: 13, fontWeight: "700" }}>Category</Text>
-                <Text style={{ color: secondaryText(theme), fontSize: 13 }}>{selectedCategory.name}</Text>
+                <Text style={{ fontSize: 13, fontWeight: "700" }}>Category</Text>
+                <Text style={{ color: secondaryText(appTheme), fontSize: 13 }}>{selectedCategory.name}</Text>
               </View>
               <View style={{ gap: 6 }}>
-                <Text style={{ color: textColor(theme), fontSize: 13, fontWeight: "700" }}>Date</Text>
-                <Text style={{ color: secondaryText(theme), fontSize: 13 }}>{selectedTransaction.date}</Text>
+                <Text style={{ fontSize: 13, fontWeight: "700" }}>Date</Text>
+                <Text style={{ color: secondaryText(appTheme), fontSize: 13 }}>{selectedTransaction.date}</Text>
               </View>
               {selectedTransaction.note ? (
                 <View style={{ gap: 6 }}>
-                  <Text style={{ color: textColor(theme), fontSize: 13, fontWeight: "700" }}>Note</Text>
-                  <Text style={{ color: secondaryText(theme), fontSize: 13 }}>{selectedTransaction.note}</Text>
+                  <Text style={{ fontSize: 13, fontWeight: "700" }}>Note</Text>
+                  <Text style={{ color: secondaryText(appTheme), fontSize: 13 }}>{selectedTransaction.note}</Text>
                 </View>
               ) : null}
             </View>

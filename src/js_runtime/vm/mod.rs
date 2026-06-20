@@ -328,6 +328,23 @@ impl JsRuntime {
             RuntimeCommand::ReloadAppBundleSource { name, source } => {
                 self.reload_app_bundle_source(name, source).await
             }
+            RuntimeCommand::EmitRuntimeEvent { name, payload } => {
+                let name_arg = serde_json::to_string(&name)?;
+                let payload_json = serde_json::to_string(&payload.to_json_value())?;
+                let payload_arg = serde_json::to_string(&payload_json)?;
+                let script = format!(
+                    "globalThis.__rasterDispatchRuntimeEventJson?.({}, {}); globalThis.__rasterFlushSyncWork?.();",
+                    name_arg, payload_arg
+                );
+                self.vm
+                    .ctx
+                    .with(|ctx| {
+                        ctx.eval::<(), _>(script).catch(&ctx).map_err(|error| {
+                            anyhow::anyhow!("failed to dispatch JS runtime event: {error:?}")
+                        })
+                    })
+                    .await
+            }
             RuntimeCommand::Shutdown => Ok(()),
         }
     }

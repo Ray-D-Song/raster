@@ -12,14 +12,14 @@ import {
   totalExpenses,
   totalIncome,
 } from "../model";
-import { colors, pagePadding, row, secondaryText, spaceBetween, textColor } from "../styles";
-import type { AppTab, Budget, CurrencyCode, ThemePreference, Transaction } from "../types";
+import { type AppTheme, pagePadding, row, secondaryText, spaceBetween } from "../styles";
+import type { AppTab, Budget, CurrencyCode, Transaction } from "../types";
 
 interface OverviewProps {
   transactions: Transaction[];
   budgets: Budget[];
   currency: CurrencyCode;
-  theme: ThemePreference;
+  theme: AppTheme;
   onAdd: () => void;
   onOpenTransaction: (transaction: Transaction) => void;
   onNavigate: (tab: AppTab) => void;
@@ -53,7 +53,7 @@ export function Overview({
       <View style={spaceBetween}>
         <View style={{ gap: 3 }}>
           <Text style={{ color: secondaryText(theme), fontSize: 12 }}>Thursday, June 18</Text>
-          <Text style={{ color: textColor(theme), fontSize: 24, fontWeight: "800" }}>Pocket Ledger</Text>
+          <Text style={{ fontSize: 24, fontWeight: "800" }}>Pocket Ledger</Text>
         </View>
         <Button label="Add" icon="plus" variant="primary" size="small" onClick={onAdd} />
       </View>
@@ -62,7 +62,7 @@ export function Overview({
         <View style={spaceBetween}>
           <View style={{ gap: 3 }}>
             <Text style={{ color: secondaryText(theme), fontSize: 12 }}>June balance</Text>
-            <Text style={{ color: textColor(theme), fontSize: 32, fontWeight: "800" }}>
+            <Text style={{ fontSize: 32, fontWeight: "800" }}>
               {formatMoney(balance, currency)}
             </Text>
           </View>
@@ -71,12 +71,12 @@ export function Overview({
               width: 44,
               height: 44,
               borderRadius: 8,
-              backgroundColor: "#dbeafe",
+              backgroundColor: theme.accent,
               alignItems: "center",
               justifyContent: "center",
             }}
           >
-            <Icon name="chart-pie" color={colors.blue} size="medium" />
+            <Icon name="chart-pie" color={theme.primary} size="medium" />
           </View>
         </View>
         <View style={{ flexDirection: "row", gap: 10 }}>
@@ -133,7 +133,7 @@ export function Overview({
       </View>
 
       <View style={[row, { gap: 6, justifyContent: "center" }]}>
-        <Icon name="circle-check" color={colors.green} size="small" />
+        <Icon name="circle-check" color={theme.success} size="small" />
         <Text style={{ color: secondaryText(theme), fontSize: 11 }}>Offline data. No bank connection required.</Text>
       </View>
     </View>

@@ -365,6 +365,17 @@ impl RasterRootView {
         }
         self.native_binding
             .set_theme_snapshot_json(theme_snapshot_json(cx));
+        if let Err(error) = self
+            .runtime_commands
+            .send(RuntimeCommand::EmitRuntimeEvent {
+                name: "themechange".to_owned(),
+                payload: NodeValue::Null,
+            })
+        {
+            logger::error(format!(
+                "failed to enqueue themechange runtime event: {error}"
+            ));
+        }
         self.applied_theme = snapshot;
         true
     }

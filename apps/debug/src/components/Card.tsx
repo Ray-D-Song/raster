@@ -1,12 +1,12 @@
 import type { ReactNode } from "react";
 import { View } from "raster-js/components";
 import type { RasterStyle } from "raster-js/components";
-import { borderColor, panelBackground } from "../styles";
-import type { ThemePreference } from "../types";
+import { type AppTheme, borderColor, panelBackground } from "../styles";
+
 
 interface CardProps {
   children: ReactNode;
-  theme: ThemePreference;
+  theme: AppTheme;
   style?: RasterStyle;
 }
 

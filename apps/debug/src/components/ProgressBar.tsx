@@ -1,11 +1,11 @@
 import { View } from "raster-js/components";
-import { borderColor } from "../styles";
-import type { ThemePreference } from "../types";
+import { type AppTheme, borderColor } from "../styles";
+
 
 interface ProgressBarProps {
   value: number;
   color: string;
-  theme: ThemePreference;
+  theme: AppTheme;
 }
 
 export function ProgressBar({ value, color, theme }: ProgressBarProps) {

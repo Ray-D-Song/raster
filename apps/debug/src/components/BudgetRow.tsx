@@ -2,14 +2,14 @@ import { Icon, Text, View } from "raster-js/components";
 import { Card } from "./Card";
 import { ProgressBar } from "./ProgressBar";
 import { categoryById, formatMoney, spentForCategory } from "../model";
-import { colors, secondaryText, spaceBetween, textColor } from "../styles";
-import type { Budget, CurrencyCode, ThemePreference, Transaction } from "../types";
+import { type AppTheme, secondaryText, spaceBetween } from "../styles";
+import type { Budget, CurrencyCode, Transaction } from "../types";
 
 interface BudgetRowProps {
   budget: Budget;
   transactions: Transaction[];
   currency: CurrencyCode;
-  theme: ThemePreference;
+  theme: AppTheme;
 }
 
 export function BudgetRow({ budget, transactions, currency, theme }: BudgetRowProps) {
@@ -25,16 +25,16 @@ export function BudgetRow({ budget, transactions, currency, theme }: BudgetRowPr
         <View style={spaceBetween}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
             <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: budget.color }} />
-            <Text style={{ color: textColor(theme), fontSize: 14, fontWeight: "700" }}>{category.name}</Text>
+            <Text style={{ fontSize: 14, fontWeight: "700" }}>{category.name}</Text>
           </View>
-          {over ? <Icon name="warning" color={colors.red} size="small" /> : null}
+          {over ? <Icon name="warning" color={theme.danger} size="small" /> : null}
         </View>
-        <ProgressBar value={progress} color={over ? colors.red : budget.color} theme={theme} />
+        <ProgressBar value={progress} color={over ? theme.danger : budget.color} theme={theme} />
         <View style={spaceBetween}>
           <Text style={{ color: secondaryText(theme), fontSize: 12 }}>
             {formatMoney(spent, currency)} of {formatMoney(budget.limit, currency)}
           </Text>
-          <Text style={{ color: over ? colors.red : colors.green, fontSize: 12, fontWeight: "700" }}>
+          <Text style={{ color: over ? theme.danger : theme.success, fontSize: 12, fontWeight: "700" }}>
             {over ? `${formatMoney(Math.abs(remaining), currency)} over` : `${formatMoney(remaining, currency)} left`}
           </Text>
         </View>

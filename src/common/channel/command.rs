@@ -27,6 +27,10 @@ pub enum RuntimeCommand {
         name: String,
         source: String,
     },
+    EmitRuntimeEvent {
+        name: String,
+        payload: NodeValue,
+    },
     Shutdown,
 }
 

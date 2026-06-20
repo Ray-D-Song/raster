@@ -1,3 +1,6 @@
+import { useSyncExternalStore } from "react";
+
+import { addRasterRuntimeEventListener } from "./runtime-events.js";
 import type { RasterResolvedTheme } from "./types/index.js";
 
 type RasterThemeRuntimeGlobal = typeof globalThis & {
@@ -7,13 +10,31 @@ type RasterThemeRuntimeGlobal = typeof globalThis & {
 };
 
 export function useTheme(): RasterResolvedTheme | null {
+  const nativeTheme = useSyncExternalStore(subscribeThemeChange, readNativeThemeSnapshot, readServerThemeSnapshot);
+  return parseNativeTheme(nativeTheme);
+}
+
+function subscribeThemeChange(onChange: () => void): () => void {
+  return addRasterRuntimeEventListener("themechange", onChange);
+}
+
+function readServerThemeSnapshot(): string {
+  return "";
+}
+
+function readNativeThemeSnapshot(): string {
   const nativeTheme = (globalThis as RasterThemeRuntimeGlobal).__rasterNative?.getTheme?.();
   if (nativeTheme == null) {
-    return null;
+    return "";
   }
   if (typeof nativeTheme !== "string") {
-    return isResolvedTheme(nativeTheme) ? nativeTheme : null;
+    return JSON.stringify(nativeTheme);
   }
+  return nativeTheme;
+}
+
+function parseNativeTheme(nativeTheme: string): RasterResolvedTheme | null {
+  if (nativeTheme.length === 0) return null;
   try {
     const theme = JSON.parse(nativeTheme);
     return isResolvedTheme(theme) ? theme : null;

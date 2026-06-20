@@ -2,13 +2,13 @@ import { Text, View } from "raster-js/components";
 import { AmountText } from "./AmountText";
 import { Card } from "./Card";
 import { categoryById } from "../model";
-import { colors, row, secondaryText, textColor } from "../styles";
-import type { CurrencyCode, ThemePreference, Transaction } from "../types";
+import { type AppTheme, row, secondaryText } from "../styles";
+import type { CurrencyCode, Transaction } from "../types";
 
 interface TransactionRowProps {
   transaction: Transaction;
   currency: CurrencyCode;
-  theme: ThemePreference;
+  theme: AppTheme;
   compact?: boolean;
   onClick?: () => void;
 }
@@ -28,19 +28,19 @@ export function TransactionRow({ transaction, currency, theme, compact = false, 
             justifyContent: "center",
           }}
         >
-          <Text style={{ color: "#ffffff", fontWeight: "700", fontSize: 13 }}>
+          <Text style={{ color: theme.primaryForeground, fontWeight: "700", fontSize: 13 }}>
             {category.name.slice(0, 1)}
           </Text>
         </View>
         <View style={{ flex: 1, gap: 2 }}>
-          <Text style={{ color: textColor(theme), fontWeight: "700", fontSize: compact ? 13 : 14 }}>
+          <Text style={{ fontWeight: "700", fontSize: compact ? 13 : 14 }}>
             {transaction.title}
           </Text>
           <View style={row}>
             <Text style={{ color: secondaryText(theme), fontSize: 11 }}>
               {transaction.merchant}
             </Text>
-            <Text style={{ color: colors.faint, fontSize: 11 }}> · {category.name}</Text>
+            <Text style={{ color: secondaryText(theme), fontSize: 11 }}> · {category.name}</Text>
           </View>
         </View>
         <View style={{ alignItems: "flex-end", gap: 2 }}>

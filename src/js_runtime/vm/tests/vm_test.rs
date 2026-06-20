@@ -111,3 +111,33 @@ fn runtime_bundle_flattens_style_arrays() {
         ))
     );
 }
+
+#[test]
+fn runtime_command_emits_runtime_event() {
+    let runtime = pollster::block_on(super::super::start()).expect("start js runtime");
+    pollster::block_on(runtime.eval_runtime_script_to_string(
+        r#"
+        globalThis.__rasterRuntimeEventTest = [];
+        globalThis.__rasterDispatchRuntimeEventJson = (name, payloadJson) => {
+          globalThis.__rasterRuntimeEventTest.push([name, JSON.parse(payloadJson)]);
+        };
+        "ready";
+        "#,
+    ))
+    .expect("install runtime event test dispatcher");
+
+    pollster::block_on(runtime.handle_runtime_command(
+        crate::common::channel::RuntimeCommand::EmitRuntimeEvent {
+            name: "themechange".to_owned(),
+            payload: crate::common::mount::NodeValue::Null,
+        },
+    ))
+    .expect("emit runtime event");
+
+    let result =
+        pollster::block_on(runtime.eval_runtime_script_to_string(
+            r#"JSON.stringify(globalThis.__rasterRuntimeEventTest)"#,
+        ))
+        .expect("read runtime event result");
+    assert_eq!(result, r#"[["themechange",null]]"#);
+}
