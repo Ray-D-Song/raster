@@ -25,6 +25,7 @@ pub struct NativeBinding {
     commits: Mutex<CommitQueue>,
     ui_commands: Mutex<UiCommandQueue>,
     wake: Mutex<Arc<dyn WakeSignal>>,
+    theme_snapshot_json: Mutex<String>,
 }
 
 #[derive(Debug)]
@@ -86,6 +87,7 @@ pub fn new_native_binding_state() -> NativeBindingState {
         commits: Mutex::new(commits),
         ui_commands: Mutex::new(ui_commands),
         wake: Mutex::new(Arc::new(NoopWakeSignal)),
+        theme_snapshot_json: Mutex::new("{}".to_owned()),
     })
 }
 
@@ -153,6 +155,19 @@ impl NativeBinding {
             .lock()
             .map(|commands| commands.drain())
             .unwrap_or_default()
+    }
+
+    pub fn set_theme_snapshot_json(&self, snapshot: String) {
+        if let Ok(mut current) = self.theme_snapshot_json.lock() {
+            *current = snapshot;
+        }
+    }
+
+    fn theme_snapshot_json(&self) -> String {
+        self.theme_snapshot_json
+            .lock()
+            .map(|snapshot| snapshot.clone())
+            .unwrap_or_else(|_| "{}".to_owned())
     }
 
     fn submit_ui_command(&self, command: UiCommand) -> anyhow::Result<()> {
@@ -617,8 +632,21 @@ pub fn install_native_binding<'js>(ctx: Ctx<'js>, state: NativeBindingState) -> 
     install_handler_functions(ctx.clone(), state.clone(), &binding)?;
     install_notification_functions(ctx.clone(), state.clone(), &binding)?;
     install_chart_functions(ctx.clone(), state.clone(), &binding)?;
+    install_theme_functions(ctx.clone(), state.clone(), &binding)?;
 
     ctx.globals().set("__rasterNative", binding)
+}
+
+fn install_theme_functions<'js>(
+    ctx: Ctx<'js>,
+    state: NativeBindingState,
+    binding: &Object<'js>,
+) -> JsResult<()> {
+    binding.set(
+        "getTheme",
+        Function::new(ctx, move || state.theme_snapshot_json())?,
+    )?;
+    Ok(())
 }
 
 fn install_chart_functions<'js>(

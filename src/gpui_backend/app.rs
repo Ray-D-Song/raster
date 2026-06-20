@@ -81,6 +81,7 @@ use crate::{
         },
         retained_tree::mutation::{ApplyOutcome, OwnerId},
         retained_tree::tree::RetainedTree,
+        theme_snapshot::theme_snapshot_json,
     },
     js_runtime::host::NativeBindingState,
 };
@@ -139,6 +140,7 @@ pub fn open_raster_window(
 ) {
     gpui_component::init(cx);
     apply_raster_default_theme(cx);
+    native_binding.set_theme_snapshot_json(theme_snapshot_json(cx));
 
     cx.on_window_closed(|cx, _| {
         if cx.windows().is_empty() {
@@ -359,6 +361,8 @@ impl RasterRootView {
             None if self.applied_theme.is_some() => reset_theme_snapshot(cx),
             None => {}
         }
+        self.native_binding
+            .set_theme_snapshot_json(theme_snapshot_json(cx));
         self.applied_theme = snapshot;
         true
     }

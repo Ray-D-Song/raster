@@ -1,5 +1,6 @@
 export { ConfigProvider, Input, Label, Slot, Text, Textarea, View, Widget } from "./components/index.js";
 export type * from "./types/index.js";
+export { useTheme } from "./theme.js";
 export { createFabricContainer, getRasterNativeBinding, type RasterFabricContainer } from "./runtime/index.js";
 export {
   appendFabricChild,
@@ -28,4 +29,3 @@ export {
   updateFabricTextNode,
   type RasterFabricMaterializeDiagnostics,
 } from "./renderer/index.js";
-

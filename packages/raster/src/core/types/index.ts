@@ -33,7 +33,20 @@ export type {
   RasterShadowNodePayload,
   RasterShadowNodeUpdatePayload,
 } from "./native.js";
-export type { RasterThemeColors, RasterThemeConfig, RasterThemeMode } from "./theme.js";
+export type {
+  RasterResolvedTheme,
+  RasterResolvedThemeColors,
+  RasterResolvedThemeEdges,
+  RasterHighlightThemeSnapshot,
+  RasterHighlightThemeStyleSnapshot,
+  RasterSyntaxColorsSnapshot,
+  RasterThemeConfigColorsSnapshot,
+  RasterThemeConfigSnapshot,
+  RasterThemeStyleSnapshot,
+  RasterThemeColors,
+  RasterThemeConfig,
+  RasterThemeMode,
+} from "./theme.js";
 export type {
   AlignContentValue,
   AlignValue,
@@ -50,4 +63,3 @@ export type {
   StyleDimension,
 } from "./style.js";
 export type * from "./components.js";
-

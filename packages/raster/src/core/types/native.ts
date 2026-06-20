@@ -181,6 +181,7 @@ export interface RasterNativeBinding {
   chartAppendData?(handle: RasterNativeNodeHandle, rows: JsonValue[]): void;
   chartReplaceData?(handle: RasterNativeNodeHandle, rows: JsonValue[]): void;
   chartClearData?(handle: RasterNativeNodeHandle): void;
+  getTheme?(): string;
 }
 
 export type RasterNotificationType = "info" | "success" | "warning" | "error";
@@ -195,5 +196,4 @@ export interface RasterNotificationShowOptions {
 
 export type NativeNodeHandle = RasterNativeNodeHandle;
 export type NativeChildSetHandle = RasterNativeChildSetHandle;
-
 

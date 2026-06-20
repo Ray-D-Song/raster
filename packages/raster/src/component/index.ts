@@ -23,11 +23,20 @@ import type {
   RasterNotificationShowOptions,
   RasterNotificationType,
   RasterQueryHandler,
+  RasterHighlightThemeSnapshot,
+  RasterHighlightThemeStyleSnapshot,
+  RasterResolvedTheme,
+  RasterResolvedThemeColors,
+  RasterResolvedThemeEdges,
+  RasterSyntaxColorsSnapshot,
   RasterStyle,
   RasterStyleInput,
+  RasterThemeConfigColorsSnapshot,
+  RasterThemeConfigSnapshot,
   RasterThemeColors,
   RasterThemeConfig,
   RasterThemeMode,
+  RasterThemeStyleSnapshot,
   StyleDimension,
   TabVariant,
   TextChangePayload,
@@ -53,11 +62,20 @@ export type {
   RasterNotificationShowOptions,
   RasterNotificationType,
   RasterQueryHandler,
+  RasterHighlightThemeSnapshot,
+  RasterHighlightThemeStyleSnapshot,
+  RasterResolvedTheme,
+  RasterResolvedThemeColors,
+  RasterResolvedThemeEdges,
+  RasterSyntaxColorsSnapshot,
   RasterStyle,
   RasterStyleInput,
+  RasterThemeConfigColorsSnapshot,
+  RasterThemeConfigSnapshot,
   RasterThemeColors,
   RasterThemeConfig,
   RasterThemeMode,
+  RasterThemeStyleSnapshot,
   StyleDimension,
   TabVariant,
   TextChangePayload,
@@ -67,6 +85,7 @@ export type {
 } from "../core/types/index.js";
 
 export { ConfigProvider, Input, Label, Text, Textarea, View } from "../core/components/index.js";
+export { useTheme } from "../core/index.js";
 
 type RasterRuntimeGlobal = typeof globalThis & {
   __rasterNative?: {

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Alert, AppShell, AppShellTab, AppShellTabBar, ConfigProvider, Dialog, Text, View } from "raster-js/components";
+import { Alert, AppShell, AppShellTab, AppShellTabBar, ConfigProvider, Dialog, Text, View, useTheme } from "raster-js/components";
 import { AddTransactionDialog } from "./components/AddTransactionDialog";
 import { defaultDraft, defaultSettings, seedBudgets, seedTransactions } from "./data";
 import { categoryById, formatMoney, makeTransaction } from "./model";
@@ -24,6 +24,7 @@ export function App() {
 
   const currency = settings.currency;
   const theme = settings.theme;
+  const nativeTheme = useTheme();
   const selectedCategory = selectedTransaction ? categoryById(selectedTransaction.category) : null;
 
   const activePage = useMemo(() => {
@@ -149,15 +150,15 @@ export function App() {
             <View style={{ gap: 12 }}>
               <View
                 style={{
-                  backgroundColor: panelBackground(theme),
-                  borderColor: borderColor(theme),
+                  backgroundColor: nativeTheme?.colors.background ?? panelBackground(theme),
+                  borderColor: nativeTheme?.colors.border ?? borderColor(theme),
                   borderWidth: 1,
                   borderRadius: 8,
                   padding: 12,
                   gap: 8,
                 }}
               >
-                <Text style={{ color: secondaryText(theme), fontSize: 12 }}>{selectedTransaction.merchant}</Text>
+                <Text style={{ color: nativeTheme?.colors.mutedForeground ?? secondaryText(theme), fontSize: 12 }}>{selectedTransaction.merchant}</Text>
                 <Text
                   style={{
                     color: selectedTransaction.type === "income" ? colors.green : colors.red,

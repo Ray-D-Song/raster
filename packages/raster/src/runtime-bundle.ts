@@ -1,5 +1,5 @@
 export { createRoot, createRoot as createRasterRoot } from "./react/index.js";
-export { ConfigProvider, Input, Label, Slot, Text, Textarea, View, Widget } from "./core/index.js";
+export { ConfigProvider, Input, Label, Slot, Text, Textarea, View, Widget, useTheme } from "./core/index.js";
 import ReactDefault, * as React from "react";
 
 const ReactRuntime = React as typeof React & Record<string, unknown>;
@@ -14,9 +14,18 @@ export type {
   JsonValue,
   LabelProps,
   RasterEventHandler,
+  RasterHighlightThemeSnapshot,
+  RasterHighlightThemeStyleSnapshot,
   RasterQueryHandler,
   RasterRoot,
   RasterRootOptions,
+  RasterResolvedTheme,
+  RasterResolvedThemeColors,
+  RasterResolvedThemeEdges,
+  RasterSyntaxColorsSnapshot,
+  RasterThemeConfigColorsSnapshot,
+  RasterThemeConfigSnapshot,
+  RasterThemeStyleSnapshot,
   RasterThemeColors,
   RasterThemeConfig,
   RasterThemeMode,

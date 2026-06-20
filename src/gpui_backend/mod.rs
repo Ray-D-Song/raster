@@ -10,6 +10,7 @@ pub mod notification;
 pub mod perf;
 pub mod render_model;
 pub mod retained_tree;
+pub mod theme_snapshot;
 
 pub use app::{DevReloadConfig, open_raster_window};
 
