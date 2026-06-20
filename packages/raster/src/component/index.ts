@@ -3,6 +3,7 @@ import { Children, forwardRef, isValidElement, useEffect, useImperativeHandle, u
 import { jsx } from "react/jsx-runtime";
 
 import { ConfigProvider, Input, Label, Text, Textarea, View, Widget } from "../core/components/index.js";
+import { useTheme } from "../core/theme.js";
 import type {
   ButtonCustomVariant,
   ButtonRounded,
@@ -89,7 +90,8 @@ export type {
 } from "../core/types/index.js";
 
 export { ConfigProvider, Input, Label, Text, Textarea, View } from "../core/components/index.js";
-export { ThemePreset, useTheme } from "../core/index.js";
+export { ThemePreset } from "../core/index.js";
+export { useTheme } from "../core/theme.js";
 
 type RasterRuntimeGlobal = typeof globalThis & {
   __rasterNative?: {
@@ -694,13 +696,19 @@ export const DatePicker = createComponent<DatePickerProps>("DatePicker");
 export const Dialog = createComponent<DialogProps>("Dialog");
 
 export function AppShell({ children, tabBar, theme = "light", style, contentStyle }: AppShellProps): ReactElement {
-  const dark = theme === "dark";
+  const nativeTheme = useTheme();
+  const colors = nativeTheme?.colors;
+  const dark = (nativeTheme?.mode ?? theme) === "dark";
+  const backgroundColor = colors?.background ?? (dark ? "#09090b" : "#ffffff");
+  const borderColor = colors?.border ?? (dark ? "rgba(255, 255, 255, 0.1)" : "#e4e4e7");
+  const tabBarColor = colors?.tabBar ?? backgroundColor;
+
   return jsx(View, {
     style: [
       {
         width: "100%",
         height: "100%",
-        backgroundColor: dark ? "#09090b" : "#ffffff",
+        backgroundColor,
       },
       style,
     ],
@@ -713,7 +721,7 @@ export function AppShell({ children, tabBar, theme = "light", style, contentStyl
               flex: 1,
               overflow: "auto",
               borderBottomWidth: 1,
-              borderColor: dark ? "rgba(255, 255, 255, 0.1)" : "#e4e4e7",
+              borderColor,
             },
             contentStyle,
           ],
@@ -728,8 +736,8 @@ export function AppShell({ children, tabBar, theme = "light", style, contentStyl
             {
               style: {
                 borderTopWidth: 1,
-                borderColor: dark ? "rgba(255, 255, 255, 0.1)" : "#e4e4e7",
-                backgroundColor: dark ? "#18181b" : "#ffffff",
+                borderColor,
+                backgroundColor: tabBarColor,
               },
               children: tabBar,
             },
@@ -741,15 +749,19 @@ export function AppShell({ children, tabBar, theme = "light", style, contentStyl
 
 export function AppShellTabBar({ value, theme = "light", onValueChange, children }: AppShellTabBarProps): ReactElement {
   const tabs = Children.toArray(children).filter(isAppShellTabElement);
-  const dark = theme === "dark";
-  const activeColor = dark ? "#00a6f4" : "#0069a8";
-  const inactiveColor = dark ? "#9f9fa9" : "#71717b";
+  const nativeTheme = useTheme();
+  const colors = nativeTheme?.colors;
+  const dark = (nativeTheme?.mode ?? theme) === "dark";
+  const backgroundColor = colors?.tabBar ?? colors?.background ?? (dark ? "#18181b" : "#ffffff");
+  const activeColor = colors?.primary ?? (dark ? "#00a6f4" : "#0069a8");
+  const inactiveColor = colors?.mutedForeground ?? colors?.tabForeground ?? (dark ? "#9f9fa9" : "#71717b");
+
   return jsx(View, {
     style: {
       flexDirection: "row",
       alignItems: "center",
-      height: 50,
-      backgroundColor: dark ? "#18181b" : "#ffffff",
+      height: 56,
+      backgroundColor,
     },
     children: tabs.map((tab) => {
       const selected = tab.props.value === value;
@@ -759,11 +771,11 @@ export function AppShellTabBar({ value, theme = "light", onValueChange, children
           onClick: () => onValueChange?.(tab.props.value),
           style: {
             flex: 1,
-            height: 50,
+            height: 56,
             alignItems: "center",
             justifyContent: "center",
-            gap: 2,
-            backgroundColor: dark ? "#18181b" : "#ffffff",
+            gap: 1,
+            backgroundColor,
           },
           children: [
             tab.props.icon == null
@@ -772,7 +784,7 @@ export function AppShellTabBar({ value, theme = "light", onValueChange, children
                   Icon,
                   {
                     name: tab.props.icon,
-                    size: "small",
+                    size: "medium",
                     color: selected ? activeColor : inactiveColor,
                   },
                   "icon"
@@ -781,7 +793,7 @@ export function AppShellTabBar({ value, theme = "light", onValueChange, children
               Text,
               {
                 style: {
-                  fontSize: 10,
+                  fontSize: 9,
                   fontWeight: selected ? "600" : "normal",
                   color: selected ? activeColor : inactiveColor,
                 },

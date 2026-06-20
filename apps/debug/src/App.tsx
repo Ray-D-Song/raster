@@ -7,7 +7,7 @@ import { Budget } from "./pages/Budget";
 import { Overview } from "./pages/Overview";
 import { Settings } from "./pages/Settings";
 import { Transactions } from "./pages/Transactions";
-import { borderColor, panelBackground, secondaryText } from "./styles";
+import { secondaryText } from "./styles";
 import type { AppTab, NewTransactionDraft, Transaction, UserSettings } from "./types";
 
 export function App() {
@@ -176,16 +176,16 @@ export function App() {
                 </Text>
               </View>
               <View style={{ gap: 6 }}>
-                <Text style={{ fontSize: 13, fontWeight: "700" }}>Category</Text>
+                <Text style={{ fontSize: 13 }}>Category</Text>
                 <Text style={{ color: secondaryText(appTheme), fontSize: 13 }}>{selectedCategory.name}</Text>
               </View>
               <View style={{ gap: 6 }}>
-                <Text style={{ fontSize: 13, fontWeight: "700" }}>Date</Text>
+                <Text style={{ fontSize: 13 }}>Date</Text>
                 <Text style={{ color: secondaryText(appTheme), fontSize: 13 }}>{selectedTransaction.date}</Text>
               </View>
               {selectedTransaction.note ? (
                 <View style={{ gap: 6 }}>
-                  <Text style={{ fontSize: 13, fontWeight: "700" }}>Note</Text>
+                  <Text style={{ fontSize: 13 }}>Note</Text>
                   <Text style={{ color: secondaryText(appTheme), fontSize: 13 }}>{selectedTransaction.note}</Text>
                 </View>
               ) : null}
