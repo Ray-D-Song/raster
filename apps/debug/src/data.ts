@@ -1,12 +1,12 @@
 import type { Budget, Category, NewTransactionDraft, Transaction, UserSettings } from "./types";
 
 export const categories: Category[] = [
-  { id: "groceries", name: "Groceries", color: "#2563eb", icon: "inbox" },
-  { id: "dining", name: "Dining", color: "#dc2626", icon: "heart" },
-  { id: "transport", name: "Transport", color: "#0891b2", icon: "map" },
-  { id: "home", name: "Home", color: "#7c3aed", icon: "building" },
-  { id: "wellness", name: "Wellness", color: "#16a34a", icon: "circle-check" },
-  { id: "income", name: "Income", color: "#15803d", icon: "check" },
+  { id: "groceries", name: "Groceries", color: "#0069a8", icon: "inbox" },
+  { id: "dining", name: "Dining", color: "#e7000b", icon: "heart" },
+  { id: "transport", name: "Transport", color: "#71717b", icon: "map" },
+  { id: "home", name: "Home", color: "#52525c", icon: "building" },
+  { id: "wellness", name: "Wellness", color: "#0084d1", icon: "circle-check" },
+  { id: "income", name: "Income", color: "#0084d1", icon: "check" },
 ];
 
 export const seedTransactions: Transaction[] = [
@@ -77,11 +77,11 @@ export const seedTransactions: Transaction[] = [
 ];
 
 export const seedBudgets: Budget[] = [
-  { category: "groceries", limit: 520, color: "#2563eb" },
-  { category: "dining", limit: 360, color: "#dc2626" },
-  { category: "transport", limit: 180, color: "#0891b2" },
-  { category: "home", limit: 1600, color: "#7c3aed" },
-  { category: "wellness", limit: 220, color: "#16a34a" },
+  { category: "groceries", limit: 520, color: "#0069a8" },
+  { category: "dining", limit: 360, color: "#e7000b" },
+  { category: "transport", limit: 180, color: "#71717b" },
+  { category: "home", limit: 1600, color: "#52525c" },
+  { category: "wellness", limit: 220, color: "#0084d1" },
 ];
 
 export const defaultSettings: UserSettings = {

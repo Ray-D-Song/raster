@@ -7,7 +7,7 @@ import type {
   TextareaProps,
   ViewProps,
   WidgetProps,
-} from "./types.js";
+} from "./types/index.js";
 
 declare module "react" {
   namespace JSX {

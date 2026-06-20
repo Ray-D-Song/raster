@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Alert, AppShell, AppShellTab, AppShellTabBar, Dialog, Text, View } from "raster-js/components";
+import { Alert, AppShell, AppShellTab, AppShellTabBar, ConfigProvider, Dialog, Text, View } from "raster-js/components";
 import { AddTransactionDialog } from "./components/AddTransactionDialog";
 import { defaultDraft, defaultSettings, seedBudgets, seedTransactions } from "./data";
 import { categoryById, formatMoney, makeTransaction } from "./model";
@@ -7,7 +7,7 @@ import { Budget } from "./pages/Budget";
 import { Overview } from "./pages/Overview";
 import { Settings } from "./pages/Settings";
 import { Transactions } from "./pages/Transactions";
-import { borderColor, colors, panelBackground, secondaryText, textColor } from "./styles";
+import { borderColor, colors, panelBackground, rasterTheme, secondaryText, textColor } from "./styles";
 import type { AppTab, NewTransactionDraft, Transaction, UserSettings } from "./types";
 
 export function App() {
@@ -101,92 +101,94 @@ export function App() {
   };
 
   return (
-    <AppShell
-      theme={theme}
-      tabBar={
-        <AppShellTabBar value={tab} onValueChange={(value) => setTab(value as AppTab)}>
-          <AppShellTab value="overview" label="Overview" icon="layout-dashboard" />
-          <AppShellTab value="transactions" label="Activity" icon="file" />
-          <AppShellTab value="budget" label="Budget" icon="chart-pie" />
-          <AppShellTab value="settings" label="Settings" icon="circle-user" />
-        </AppShellTabBar>
-      }
-    >
-      {activePage}
-      <AddTransactionDialog
-        open={addOpen}
-        draft={draft}
+    <ConfigProvider theme={rasterTheme(theme)}>
+      <AppShell
         theme={theme}
-        onChange={setDraft}
-        onCancel={closeAdd}
-        onSubmit={submitDraft}
-      />
-
-      <Alert
-        open={error.length > 0}
-        title="Check transaction"
-        description={error}
-        icon="warning"
-        okText="Got it"
-        onOk={() => setError("")}
-        onOpenChange={(event) => {
-          if (!event.open) setError("");
-        }}
-      />
-
-      <Dialog
-        open={selectedTransaction != null}
-        title={selectedTransaction?.title ?? "Transaction"}
-        width={340}
-        closeButton
-        onCancel={() => setSelectedTransaction(null)}
-        onOpenChange={(event) => {
-          if (!event.open) setSelectedTransaction(null);
-        }}
+        tabBar={
+          <AppShellTabBar value={tab} theme={theme} onValueChange={(value) => setTab(value as AppTab)}>
+            <AppShellTab value="overview" label="Overview" icon="layout-dashboard" />
+            <AppShellTab value="transactions" label="Activity" icon="file" />
+            <AppShellTab value="budget" label="Budget" icon="chart-pie" />
+            <AppShellTab value="settings" label="Settings" icon="circle-user" />
+          </AppShellTabBar>
+        }
       >
-        {selectedTransaction && selectedCategory ? (
-          <View style={{ gap: 12 }}>
-            <View
-              style={{
-                backgroundColor: panelBackground(theme),
-                borderColor: borderColor(theme),
-                borderWidth: 1,
-                borderRadius: 8,
-                padding: 12,
-                gap: 8,
-              }}
-            >
-              <Text style={{ color: secondaryText(theme), fontSize: 12 }}>{selectedTransaction.merchant}</Text>
-              <Text
+        {activePage}
+        <AddTransactionDialog
+          open={addOpen}
+          draft={draft}
+          theme={theme}
+          onChange={setDraft}
+          onCancel={closeAdd}
+          onSubmit={submitDraft}
+        />
+
+        <Alert
+          open={error.length > 0}
+          title="Check transaction"
+          description={error}
+          icon="warning"
+          okText="Got it"
+          onOk={() => setError("")}
+          onOpenChange={(event) => {
+            if (!event.open) setError("");
+          }}
+        />
+
+        <Dialog
+          open={selectedTransaction != null}
+          title={selectedTransaction?.title ?? "Transaction"}
+          width={340}
+          closeButton
+          onCancel={() => setSelectedTransaction(null)}
+          onOpenChange={(event) => {
+            if (!event.open) setSelectedTransaction(null);
+          }}
+        >
+          {selectedTransaction && selectedCategory ? (
+            <View style={{ gap: 12 }}>
+              <View
                 style={{
-                  color: selectedTransaction.type === "income" ? colors.green : colors.red,
-                  fontSize: 28,
-                  fontWeight: "800",
+                  backgroundColor: panelBackground(theme),
+                  borderColor: borderColor(theme),
+                  borderWidth: 1,
+                  borderRadius: 8,
+                  padding: 12,
+                  gap: 8,
                 }}
               >
-                {formatMoney(
-                  selectedTransaction.type === "expense" ? -selectedTransaction.amount : selectedTransaction.amount,
-                  currency
-                )}
-              </Text>
-            </View>
-            <View style={{ gap: 6 }}>
-              <Text style={{ color: textColor(theme), fontSize: 13, fontWeight: "700" }}>Category</Text>
-              <Text style={{ color: secondaryText(theme), fontSize: 13 }}>{selectedCategory.name}</Text>
-            </View>
-            <View style={{ gap: 6 }}>
-              <Text style={{ color: textColor(theme), fontSize: 13, fontWeight: "700" }}>Date</Text>
-              <Text style={{ color: secondaryText(theme), fontSize: 13 }}>{selectedTransaction.date}</Text>
-            </View>
-            {selectedTransaction.note ? (
-              <View style={{ gap: 6 }}>
-                <Text style={{ color: textColor(theme), fontSize: 13, fontWeight: "700" }}>Note</Text>
-                <Text style={{ color: secondaryText(theme), fontSize: 13 }}>{selectedTransaction.note}</Text>
+                <Text style={{ color: secondaryText(theme), fontSize: 12 }}>{selectedTransaction.merchant}</Text>
+                <Text
+                  style={{
+                    color: selectedTransaction.type === "income" ? colors.green : colors.red,
+                    fontSize: 28,
+                    fontWeight: "800",
+                  }}
+                >
+                  {formatMoney(
+                    selectedTransaction.type === "expense" ? -selectedTransaction.amount : selectedTransaction.amount,
+                    currency
+                  )}
+                </Text>
               </View>
-            ) : null}
-          </View>
-        ) : null}
-      </Dialog>
-    </AppShell>
+              <View style={{ gap: 6 }}>
+                <Text style={{ color: textColor(theme), fontSize: 13, fontWeight: "700" }}>Category</Text>
+                <Text style={{ color: secondaryText(theme), fontSize: 13 }}>{selectedCategory.name}</Text>
+              </View>
+              <View style={{ gap: 6 }}>
+                <Text style={{ color: textColor(theme), fontSize: 13, fontWeight: "700" }}>Date</Text>
+                <Text style={{ color: secondaryText(theme), fontSize: 13 }}>{selectedTransaction.date}</Text>
+              </View>
+              {selectedTransaction.note ? (
+                <View style={{ gap: 6 }}>
+                  <Text style={{ color: textColor(theme), fontSize: 13, fontWeight: "700" }}>Note</Text>
+                  <Text style={{ color: secondaryText(theme), fontSize: 13 }}>{selectedTransaction.note}</Text>
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+        </Dialog>
+      </AppShell>
+    </ConfigProvider>
   );
 }

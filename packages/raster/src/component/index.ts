@@ -2,7 +2,7 @@ import type { ComponentType, MutableRefObject, ReactElement, ReactNode } from "r
 import { Children, forwardRef, isValidElement, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { jsx } from "react/jsx-runtime";
 
-import { ConfigProvider, Input, Label, Text, Textarea, View, Widget } from "../core/index.js";
+import { ConfigProvider, Input, Label, Text, Textarea, View, Widget } from "../core/components/index.js";
 import type {
   ButtonCustomVariant,
   ButtonRounded,
@@ -34,7 +34,7 @@ import type {
   TextareaProps,
   TextProps,
   ViewProps,
-} from "../core/types.js";
+} from "../core/types/index.js";
 
 export type {
   ButtonCustomVariant,
@@ -64,9 +64,9 @@ export type {
   TextareaProps,
   TextProps,
   ViewProps,
-} from "../core/types.js";
+} from "../core/types/index.js";
 
-export { ConfigProvider, Input, Label, Text, Textarea, View } from "../core/index.js";
+export { ConfigProvider, Input, Label, Text, Textarea, View } from "../core/components/index.js";
 
 type RasterRuntimeGlobal = typeof globalThis & {
   __rasterNative?: {
@@ -175,6 +175,7 @@ export interface AppShellProps {
 
 export interface AppShellTabBarProps {
   value: string;
+  theme?: "light" | "dark";
   onValueChange?: RasterEventHandler<string>;
   children?: ReactNode;
 }
@@ -676,7 +677,7 @@ export function AppShell({ children, tabBar, theme = "light", style, contentStyl
       {
         width: "100%",
         height: "100%",
-        backgroundColor: dark ? "#111827" : "#f8fafc",
+        backgroundColor: dark ? "#09090b" : "#ffffff",
       },
       style,
     ],
@@ -689,7 +690,7 @@ export function AppShell({ children, tabBar, theme = "light", style, contentStyl
               flex: 1,
               overflow: "auto",
               borderBottomWidth: 1,
-              borderColor: dark ? "#374151" : "#e5e7eb",
+              borderColor: dark ? "rgba(255, 255, 255, 0.1)" : "#e4e4e7",
             },
             contentStyle,
           ],
@@ -704,9 +705,8 @@ export function AppShell({ children, tabBar, theme = "light", style, contentStyl
             {
               style: {
                 borderTopWidth: 1,
-                borderColor: dark ? "#374151" : "#e5e7eb",
-                backgroundColor: dark ? "#111827" : "#ffffff",
-                padding: { top: 6, right: 10, bottom: 8, left: 10 },
+                borderColor: dark ? "rgba(255, 255, 255, 0.1)" : "#e4e4e7",
+                backgroundColor: dark ? "#18181b" : "#ffffff",
               },
               children: tabBar,
             },
@@ -716,14 +716,17 @@ export function AppShell({ children, tabBar, theme = "light", style, contentStyl
   });
 }
 
-export function AppShellTabBar({ value, onValueChange, children }: AppShellTabBarProps): ReactElement {
+export function AppShellTabBar({ value, theme = "light", onValueChange, children }: AppShellTabBarProps): ReactElement {
   const tabs = Children.toArray(children).filter(isAppShellTabElement);
+  const dark = theme === "dark";
+  const activeColor = dark ? "#00a6f4" : "#0069a8";
+  const inactiveColor = dark ? "#9f9fa9" : "#71717b";
   return jsx(View, {
     style: {
       flexDirection: "row",
       alignItems: "center",
-      justifyContent: "space-between",
-      gap: 6,
+      height: 50,
+      backgroundColor: dark ? "#18181b" : "#ffffff",
     },
     children: tabs.map((tab) => {
       const selected = tab.props.value === value;
@@ -733,12 +736,11 @@ export function AppShellTabBar({ value, onValueChange, children }: AppShellTabBa
           onClick: () => onValueChange?.(tab.props.value),
           style: {
             flex: 1,
-            height: 52,
-            borderRadius: 8,
+            height: 50,
             alignItems: "center",
             justifyContent: "center",
-            gap: 3,
-            backgroundColor: selected ? "#f3f4f6" : "#ffffff",
+            gap: 2,
+            backgroundColor: dark ? "#18181b" : "#ffffff",
           },
           children: [
             tab.props.icon == null
@@ -748,7 +750,7 @@ export function AppShellTabBar({ value, onValueChange, children }: AppShellTabBa
                   {
                     name: tab.props.icon,
                     size: "small",
-                    color: selected ? "#111827" : "#6b7280",
+                    color: selected ? activeColor : inactiveColor,
                   },
                   "icon"
                 ),
@@ -757,8 +759,8 @@ export function AppShellTabBar({ value, onValueChange, children }: AppShellTabBa
               {
                 style: {
                   fontSize: 10,
-                  fontWeight: selected ? "700" : "normal",
-                  color: selected ? "#111827" : "#6b7280",
+                  fontWeight: selected ? "600" : "normal",
+                  color: selected ? activeColor : inactiveColor,
                 },
                 children: tab.props.label,
               },

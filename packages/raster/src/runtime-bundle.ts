@@ -27,7 +27,7 @@ export type {
   TextChangePayload,
   ViewProps,
   WidgetProps,
-} from "./core/types.js";
+} from "./core/types/index.js";
 export type {
   AlignContentValue,
   AlignValue,
@@ -42,7 +42,7 @@ export type {
   RasterStyle,
   RasterStyleInput,
   StyleDimension,
-} from "./core/style.js";
+} from "./core/types/style.js";
 export * from "./component/index.js";
 export { jsx, jsxs } from "react/jsx-runtime";
 

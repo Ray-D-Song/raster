@@ -27,20 +27,20 @@ import {
   updateFabricHostNode,
   updateFabricTextNode,
   type RasterFabricContainer,
-} from "../core/raster-core.js";
+} from "../core/renderer/index.js";
 import type {
   RasterEventHandler,
   RasterNativeChildSet,
   RasterNativeNode,
   RasterRoot,
   RasterRootOptions,
-} from "../core/types.js";
+} from "../core/types/index.js";
 
 export {
   readRasterFabricMaterializeDiagnostics,
   resetRasterFabricMaterializeDiagnostics,
   type RasterFabricMaterializeDiagnostics,
-} from "../core/raster-core.js";
+} from "../core/renderer/index.js";
 
 type HostType = string;
 type HostProps = Record<string, unknown>;
