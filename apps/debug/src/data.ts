@@ -5,6 +5,8 @@ export const vitalityColors = {
   primaryContainer: "#2dd4bf",
   onPrimaryContainer: "#00574d",
   secondary: "#0058be",
+  secondaryHover: "#004395",
+  secondaryActive: "#003d7a",
   background: "#f8f9ff",
   surface: "#f8f9ff",
   surfaceContainer: "#e5eeff",

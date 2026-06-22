@@ -17,6 +17,8 @@ export const vitalityTheme: RasterThemeConfig = {
     primaryForeground: "#ffffff",
     secondary: vitalityColors.secondary,
     secondaryForeground: "#ffffff",
+    secondaryHover: vitalityColors.secondaryHover,
+    secondaryActive: vitalityColors.secondaryActive,
     accent: vitalityColors.primaryContainer,
     accentForeground: vitalityColors.onPrimaryContainer,
     muted: vitalityColors.surfaceContainerLow,

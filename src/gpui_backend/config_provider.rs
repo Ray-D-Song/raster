@@ -112,6 +112,8 @@ pub(in crate::gpui_backend) fn apply_theme_snapshot(snapshot: &RasterThemeSnapsh
             "primaryForeground" => theme.primary_foreground = color,
             "secondary" => theme.secondary = color,
             "secondaryForeground" => theme.secondary_foreground = color,
+            "secondaryHover" => theme.secondary_hover = color,
+            "secondaryActive" => theme.secondary_active = color,
             "accent" => theme.accent = color,
             "accentForeground" => theme.accent_foreground = color,
             "muted" => theme.muted = color,

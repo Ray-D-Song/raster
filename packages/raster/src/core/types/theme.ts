@@ -55,6 +55,8 @@ export interface RasterThemeColors {
   primaryForeground?: string;
   secondary?: string;
   secondaryForeground?: string;
+  secondaryHover?: string;
+  secondaryActive?: string;
   accent?: string;
   accentForeground?: string;
   muted?: string;
