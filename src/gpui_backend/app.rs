@@ -76,7 +76,7 @@ use crate::{
         render_model::{
             model::RenderModel,
             style::{
-                apply_style, apply_text_style, has_horizontal_scroll_overflow,
+                apply_style, apply_view_style, has_horizontal_scroll_overflow,
                 has_scroll_overflow, has_vertical_scroll_overflow,
             },
         },
@@ -1033,7 +1033,7 @@ fn render_node_inline(
     match model {
         RenderModel::View(view) => {
             if has_scroll_overflow(&view.style) {
-                let mut element = apply_style(
+                let mut element = apply_view_style(
                     div().id(("raster-scroll-view", id.0)).flex().flex_col(),
                     &view.style,
                 )
@@ -1073,7 +1073,7 @@ fn render_node_inline(
                 }
                 return element.into_any_element();
             } else {
-                let mut element = apply_style(
+                let mut element = apply_view_style(
                     div().id(("raster-view", id.0)).flex().flex_col(),
                     &view.style,
                 );
@@ -1107,7 +1107,7 @@ fn render_node_inline(
                 return element.into_any_element();
             }
         }
-        RenderModel::Label(label) => apply_text_style(div(), &label.style)
+        RenderModel::Label(label) => apply_style(div(), &label.style)
             .child(label.text)
             .into_any_element(),
         RenderModel::Widget(widget) => {

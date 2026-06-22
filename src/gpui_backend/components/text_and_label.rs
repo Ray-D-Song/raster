@@ -4,7 +4,7 @@ use gpui_component::label::Label;
 use crate::gpui_backend::{
     app::NodeOwnerView,
     components::internal::{rich_text::render_rich_text_from_node, text::render_label_from_node},
-    render_model::{model::RenderModel, style::apply_text_style},
+    render_model::{model::RenderModel, style::apply_style},
     retained_tree::node::RetainedNode,
 };
 
@@ -21,8 +21,8 @@ pub fn render_text_label_element_from_node<'a>(
 ) -> Option<AnyElement> {
     let label = render_label_from_node(node, child_text)?;
     match &node.render_model {
-        RenderModel::Label(model) => Some(apply_text_style(label, &model.style).into_any_element()),
-        RenderModel::Widget(model) => Some(apply_text_style(label, &model.style).into_any_element()),
+        RenderModel::Label(model) => Some(apply_style(label, &model.style).into_any_element()),
+        RenderModel::Widget(model) => Some(apply_style(label, &model.style).into_any_element()),
         _ => Some(label.into_any_element()),
     }
 }

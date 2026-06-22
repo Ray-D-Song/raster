@@ -332,13 +332,13 @@ pub fn apply_style<T: Styled>(mut element: T, style: &RenderStyle) -> T {
     element
 }
 
-/// Apply styles for text wrapper elements.
+/// Apply styles for View wrapper elements.
 ///
-/// Flex children default to `min-width: auto`, which prevents wrapped text from
-/// shrinking below its single-line width. Default `minWidth: 0` lets long text
-/// wrap inside flex layouts unless the caller sets an explicit `minWidth`.
-pub fn apply_text_style<T: Styled>(element: T, style: &RenderStyle) -> T {
-    let element = if style.min_width.is_none() {
+/// Flex items with `flex-grow` default to `min-width: auto`, which prevents
+/// them from shrinking below their content width. Default `minWidth: 0` on
+/// growing flex children lets nested long text wrap instead of overflowing.
+pub fn apply_view_style<T: Styled>(element: T, style: &RenderStyle) -> T {
+    let element = if style.min_width.is_none() && style.flex_grow.is_some() {
         element.min_w(px(0.))
     } else {
         element
