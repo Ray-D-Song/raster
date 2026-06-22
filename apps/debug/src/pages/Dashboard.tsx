@@ -40,7 +40,7 @@ export function Dashboard({ entries, settings, theme, onNavigate }: DashboardPro
 
   return (
     <View style={{ backgroundColor: theme.background }}>
-      <View style={[pagePadding, { gap: 32 }]}>
+      <View style={[pagePadding, { gap: 24 }]}>
         <View style={{ gap: 4 }}>
           <Text style={{ fontSize: 24, fontWeight: "600", color: vitalityColors.onSurface }}>
             Hello, {userProfile.displayName}

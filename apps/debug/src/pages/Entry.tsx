@@ -19,7 +19,7 @@ export function Entry({ draft, theme, error, onChange, onSubmit, onClearError }:
 
   return (
     <View style={{ backgroundColor: theme.background }}>
-      <View style={[pagePadding, { gap: 32 }]}>
+      <View style={[pagePadding, { gap: 16 }]}>
         <View style={{ gap: 8 }}>
           <Text style={{ fontSize: 24, fontWeight: "600", color: vitalityColors.onSurface }}>New Measurement</Text>
           <Text style={{ fontSize: 14, color: vitalityColors.onSurfaceVariant }}>
@@ -29,11 +29,11 @@ export function Entry({ draft, theme, error, onChange, onSubmit, onClearError }:
 
         <Card theme={theme} style={{ gap: 16 }}>
           <Text style={{ ...labelCaps, color: vitalityColors.outline }}>WEIGHT (KG)</Text>
-          <View style={{ flexDirection: "row", alignItems: "baseline", justifyContent: "center", gap: 8 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 }}>
             <Input
               value={draft.weight}
               placeholder="0.0"
-              style={{ fontSize: 40, fontWeight: "700", color: vitalityColors.primary, width: 160 }}
+              style={{ fontWeight: "700", color: vitalityColors.primary, width: 160 }}
               onChange={(event) => onChange({ ...draft, weight: event.value ?? "" })}
             />
             <Text style={{ fontSize: 20, fontWeight: "600", color: vitalityColors.onSurfaceVariant }}>kg</Text>

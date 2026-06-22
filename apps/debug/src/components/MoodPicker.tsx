@@ -1,7 +1,6 @@
 import { Icon, Text, View } from "raster-js/components";
 import type { IconName } from "raster-js/components";
 import { vitalityColors } from "../data";
-import { moodLabel } from "../model";
 import { row } from "../styles";
 import type { Mood } from "../types";
 
@@ -25,7 +24,9 @@ export function MoodPicker({ value, onChange }: MoodPickerProps) {
       <View
         style={{
           ...row,
+          display: "flex",
           justifyContent: "space-between",
+          alignItems: "center",
           backgroundColor: "#ffffff",
           borderRadius: 24,
           borderWidth: 1,
@@ -40,11 +41,10 @@ export function MoodPicker({ value, onChange }: MoodPickerProps) {
               key={option.id}
               onClick={() => onChange(option.id)}
               style={{
-                padding: 10,
+                padding: 12,
                 borderRadius: 16,
                 backgroundColor: selected ? vitalityColors.primaryContainer : "transparent",
                 alignItems: "center",
-                gap: 2,
               }}
             >
               <Icon
@@ -52,14 +52,6 @@ export function MoodPicker({ value, onChange }: MoodPickerProps) {
                 color={selected ? vitalityColors.primary : vitalityColors.outline}
                 size="large"
               />
-              <Text
-                style={{
-                  fontSize: 9,
-                  color: selected ? vitalityColors.onPrimaryContainer : vitalityColors.outline,
-                }}
-              >
-                {moodLabel(option.id)}
-              </Text>
             </View>
           );
         })}
