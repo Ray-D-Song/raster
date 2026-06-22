@@ -107,9 +107,8 @@ export function App() {
   return (
     <ConfigProvider theme={{ mode: theme, preset: themePreset }}>
       <AppShell
-        theme={theme}
         tabBar={
-          <AppShellTabBar value={tab} theme={theme} onValueChange={(value) => setTab(value as AppTab)}>
+          <AppShellTabBar value={tab} onValueChange={(value) => setTab(value as AppTab)}>
             <AppShellTab value="overview" label="Overview" icon="layout-dashboard" />
             <AppShellTab value="transactions" label="Activity" icon="file" />
             <AppShellTab value="budget" label="Budget" icon="chart-pie" />

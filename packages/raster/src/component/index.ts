@@ -201,6 +201,17 @@ export interface AppShellProps {
 export interface AppShellTabBarProps {
   value: string;
   theme?: "light" | "dark";
+  style?: RasterStyleInput;
+  itemStyle?: RasterStyleInput;
+  activeItemStyle?: RasterStyleInput;
+  labelStyle?: RasterStyleInput;
+  activeLabelStyle?: RasterStyleInput;
+  activeTintColor?: string;
+  inactiveTintColor?: string;
+  iconSize?: ComponentSize;
+  showLabel?: boolean;
+  renderIcon?: (props: AppShellTabRenderProps) => ReactNode;
+  renderLabel?: (props: AppShellTabRenderProps) => ReactNode;
   onValueChange?: RasterEventHandler<string>;
   children?: ReactNode;
 }
@@ -209,6 +220,19 @@ export interface AppShellTabProps {
   value: string;
   label: string;
   icon?: IconName;
+  activeIcon?: IconName;
+  inactiveIcon?: IconName;
+  disabled?: boolean;
+}
+
+export interface AppShellTabRenderProps {
+  value: string;
+  label: string;
+  icon?: IconName;
+  selected: boolean;
+  disabled: boolean;
+  color: string;
+  iconSize: ComponentSize;
 }
 
 export interface ButtonProps extends ComponentBaseProps {
@@ -704,27 +728,27 @@ export function AppShell({ children, tabBar, theme = "light", style, contentStyl
   const tabBarColor = colors?.tabBar ?? backgroundColor;
 
   return jsx(View, {
-    style: [
+    style: styleList(
       {
         width: "100%",
         height: "100%",
         backgroundColor,
       },
-      style,
-    ],
+      style
+    ),
     children: [
       jsx(
         View,
         {
-          style: [
+          style: styleList(
             {
               flex: 1,
               overflow: "auto",
               borderBottomWidth: 1,
               borderColor,
             },
-            contentStyle,
-          ],
+            contentStyle
+          ),
           children,
         },
         "content"
@@ -747,60 +771,81 @@ export function AppShell({ children, tabBar, theme = "light", style, contentStyl
   });
 }
 
-export function AppShellTabBar({ value, theme = "light", onValueChange, children }: AppShellTabBarProps): ReactElement {
+export function AppShellTabBar({
+  value,
+  theme = "light",
+  style,
+  itemStyle,
+  activeItemStyle,
+  labelStyle,
+  activeLabelStyle,
+  activeTintColor,
+  inactiveTintColor,
+  iconSize = "medium",
+  showLabel = true,
+  renderIcon,
+  renderLabel,
+  onValueChange,
+  children,
+}: AppShellTabBarProps): ReactElement {
   const tabs = Children.toArray(children).filter(isAppShellTabElement);
   const nativeTheme = useTheme();
   const colors = nativeTheme?.colors;
   const dark = (nativeTheme?.mode ?? theme) === "dark";
   const backgroundColor = colors?.tabBar ?? colors?.background ?? (dark ? "#18181b" : "#ffffff");
-  const activeColor = colors?.primary ?? (dark ? "#00a6f4" : "#0069a8");
-  const inactiveColor = colors?.mutedForeground ?? colors?.tabForeground ?? (dark ? "#9f9fa9" : "#71717b");
+  const activeColor = activeTintColor ?? colors?.primary ?? (dark ? "#00a6f4" : "#0069a8");
+  const inactiveColor = inactiveTintColor ?? colors?.mutedForeground ?? colors?.tabForeground ?? (dark ? "#9f9fa9" : "#71717b");
 
   return jsx(View, {
-    style: {
-      flexDirection: "row",
-      alignItems: "center",
-      height: 56,
-      backgroundColor,
-    },
+    style: styleList(
+      {
+        flexDirection: "row",
+        alignItems: "center",
+        height: 56,
+        backgroundColor,
+      },
+      style
+    ),
     children: tabs.map((tab) => {
       const selected = tab.props.value === value;
+      const disabled = tab.props.disabled === true;
+      const icon = selected ? tab.props.activeIcon ?? tab.props.icon : tab.props.inactiveIcon ?? tab.props.icon;
+      const color = disabled ? inactiveColor : selected ? activeColor : inactiveColor;
+      const renderProps: AppShellTabRenderProps = {
+        value: tab.props.value,
+        label: tab.props.label,
+        icon,
+        selected,
+        disabled,
+        color,
+        iconSize,
+      };
       return jsx(
         View,
         {
-          onClick: () => onValueChange?.(tab.props.value),
-          style: {
-            flex: 1,
-            height: 56,
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 1,
-            backgroundColor,
+          onClick: () => {
+            if (!disabled) onValueChange?.(tab.props.value);
           },
+          style: styleList(
+            {
+              flex: 1,
+              height: 56,
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 1,
+              backgroundColor,
+              opacity: disabled ? 0.45 : 1,
+            },
+            itemStyle,
+            selected ? activeItemStyle : null
+          ),
           children: [
-            tab.props.icon == null
-              ? null
-              : jsx(
-                  Icon,
-                  {
-                    name: tab.props.icon,
-                    size: "medium",
-                    color: selected ? activeColor : inactiveColor,
-                  },
-                  "icon"
-                ),
-            jsx(
-              Text,
-              {
-                style: {
-                  fontSize: 9,
-                  fontWeight: selected ? "600" : "normal",
-                  color: selected ? activeColor : inactiveColor,
-                },
-                children: tab.props.label,
-              },
-              "label"
-            ),
+            renderIcon == null ? renderDefaultAppShellTabIcon(renderProps) : renderIcon(renderProps),
+            showLabel
+              ? renderLabel == null
+                ? renderDefaultAppShellTabLabel(renderProps, labelStyle, activeLabelStyle)
+                : renderLabel(renderProps)
+              : null,
           ],
         },
         tab.props.value
@@ -811,6 +856,52 @@ export function AppShellTabBar({ value, theme = "light", onValueChange, children
 
 export function AppShellTab(_props: AppShellTabProps): null {
   return null;
+}
+
+function renderDefaultAppShellTabIcon({ icon, iconSize, color }: AppShellTabRenderProps): ReactNode {
+  if (icon == null) return null;
+  return jsx(Icon, { name: icon, size: iconSize, color }, "icon");
+}
+
+function renderDefaultAppShellTabLabel(
+  { label, selected, color }: AppShellTabRenderProps,
+  labelStyle: MaybeRasterStyleInput,
+  activeLabelStyle: MaybeRasterStyleInput
+): ReactNode {
+  return jsx(
+    Text,
+    {
+      style: styleList(
+        {
+          fontSize: 9,
+          fontWeight: selected ? "600" : "normal",
+          color,
+        },
+        labelStyle,
+        selected ? activeLabelStyle : null
+      ),
+      children: label,
+    },
+    "label"
+  );
+}
+
+type MaybeRasterStyleInput = RasterStyleInput | undefined;
+
+function styleList(...items: MaybeRasterStyleInput[]): Array<RasterStyle | null | undefined> {
+  const styles: Array<RasterStyle | null | undefined> = [];
+  for (const item of items) {
+    if (isStyleArray(item)) {
+      styles.push(...item);
+    } else {
+      styles.push(item);
+    }
+  }
+  return styles;
+}
+
+function isStyleArray(item: MaybeRasterStyleInput): item is ReadonlyArray<RasterStyle | null | undefined> {
+  return Array.isArray(item);
 }
 
 function isAppShellTabElement(node: ReactNode): node is ReactElement<AppShellTabProps> {
