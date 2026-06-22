@@ -1,8 +1,7 @@
 import { Alert, Button, Icon, Input, Text, Textarea, View } from "raster-js/components";
-import { AppHeader } from "../components/AppHeader";
 import { Card } from "../components/Card";
 import { MoodPicker } from "../components/MoodPicker";
-import { userProfile, vitalityColors } from "../data";
+import { vitalityColors } from "../data";
 import { type AppTheme, labelCaps, pagePadding } from "../styles";
 import type { NewEntryDraft } from "../types";
 
@@ -20,7 +19,6 @@ export function Entry({ draft, theme, error, onChange, onSubmit, onClearError }:
 
   return (
     <View style={{ backgroundColor: theme.background }}>
-      <AppHeader theme={theme} avatarUrl={userProfile.avatarUrl} compact />
       <View style={[pagePadding, { gap: 32 }]}>
         <View style={{ gap: 8 }}>
           <Text style={{ fontSize: 24, fontWeight: "600", color: vitalityColors.onSurface }}>New Measurement</Text>

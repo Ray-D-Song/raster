@@ -1,8 +1,7 @@
 import { Button, ButtonGroup, Icon, Text, View } from "raster-js/components";
-import { AppHeader } from "../components/AppHeader";
 import { Card } from "../components/Card";
 import { WeightEntryCard } from "../components/WeightEntryCard";
-import { userProfile, vitalityColors } from "../data";
+import { vitalityColors } from "../data";
 import { entriesForMonth, previousEntry, sortEntries } from "../model";
 import { type AppTheme, labelCaps, pagePadding, spaceBetween } from "../styles";
 import type { SortOrder, WeightEntry, WeightUnit } from "../types";
@@ -60,7 +59,6 @@ export function History({
 
   return (
     <View style={{ backgroundColor: theme.background }}>
-      <AppHeader theme={theme} avatarUrl={userProfile.avatarUrl} />
       <View style={[pagePadding, { gap: 32 }]}>
         <View style={{ gap: 8 }}>
           <Text style={{ fontSize: 24, fontWeight: "600", color: vitalityColors.onSurface }}>Weight Journey</Text>

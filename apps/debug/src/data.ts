@@ -21,7 +21,7 @@ export const vitalityColors = {
 
 export const userProfile: UserProfile = {
   name: "Alex Johnson",
-  displayName: "Jordan",
+  displayName: "Raymond",
   memberSince: "Jan 2024",
   heightCm: 180,
   avatarUrl:

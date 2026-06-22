@@ -1,5 +1,4 @@
 import { BarChart, Button, Icon, Text, View } from "raster-js/components";
-import { AppHeader } from "../components/AppHeader";
 import { Card } from "../components/Card";
 import { ProgressRing } from "../components/ProgressRing";
 import { activityStreakDays, dailyQuote, startWeight, userProfile, vitalityColors } from "../data";
@@ -41,7 +40,6 @@ export function Dashboard({ entries, settings, theme, onNavigate }: DashboardPro
 
   return (
     <View style={{ backgroundColor: theme.background }}>
-      <AppHeader theme={theme} avatarUrl={userProfile.avatarUrl} />
       <View style={[pagePadding, { gap: 32 }]}>
         <View style={{ gap: 4 }}>
           <Text style={{ fontSize: 24, fontWeight: "600", color: vitalityColors.onSurface }}>
@@ -118,13 +116,14 @@ export function Dashboard({ entries, settings, theme, onNavigate }: DashboardPro
         </View>
 
         <View style={{ flexDirection: "row", gap: 0 }}>
-          <View style={{ width: 4, backgroundColor: vitalityColors.primary, borderTopLeftRadius: 24, borderBottomLeftRadius: 24 }} />
-          <Card theme={theme} style={{ flex: 1, borderTopLeftRadius: 0, borderBottomLeftRadius: 0, gap: 8 }}>
-          <Icon name="info" color={vitalityColors.primary} size="medium" />
-          <Text style={{ fontSize: 20, fontWeight: "600", fontStyle: "italic", color: vitalityColors.onSurfaceVariant }}>
-            "{dailyQuote.text}"
-          </Text>
-          <Text style={{ ...labelCaps, color: vitalityColors.primary }}>— {dailyQuote.attribution}</Text>
+          <Card theme={theme} style={{ flex: 1, minWidth: 0, justifyContent: "space-between", flexDirection: "row", borderTopLeftRadius: 24, borderBottomLeftRadius: 24, gap: 8 }}>
+            <View style={{ width: 4, backgroundColor: vitalityColors.primary, borderTopLeftRadius: 24, borderBottomLeftRadius: 24 }} />
+            <View style={{ flex: 1, gap: 4, padding: 16, minWidth: 0 }}>
+              <Text style={{ fontSize: 20, fontWeight: "600", fontStyle: "italic", color: vitalityColors.onSurfaceVariant }}>
+                {dailyQuote.text}
+              </Text>
+              <Text style={{ ...labelCaps, color: vitalityColors.primary }}>— {dailyQuote.attribution}</Text>
+            </View>
           </Card>
         </View>
 

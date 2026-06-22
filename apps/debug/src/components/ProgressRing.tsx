@@ -36,6 +36,7 @@ export function ProgressRing({ current, target, progress, unit }: ProgressRingPr
           bottom: 0,
           left: 0,
           backgroundColor: vitalityColors.primaryContainer,
+          borderRadius: 24,
           opacity: 0.1,
         }}
       />

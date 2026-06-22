@@ -1,5 +1,4 @@
 import { Avatar, Button, ButtonGroup, Icon, Input, Switch, Text, View } from "raster-js/components";
-import { AppHeader } from "../components/AppHeader";
 import { Card } from "../components/Card";
 import { userProfile, vitalityColors } from "../data";
 import { type AppTheme, labelCaps, pagePadding, spaceBetween } from "../styles";
@@ -17,7 +16,6 @@ const weeklyGoalOptions: WeeklyGoal[] = [0.25, 0.5, 1.0];
 export function Settings({ settings, theme, entryCount, onChange }: SettingsProps) {
   return (
     <View style={{ backgroundColor: theme.background }}>
-      <AppHeader theme={theme} avatarUrl={userProfile.avatarUrl} />
       <View style={[pagePadding, { gap: 32 }]}>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 16 }}>
           <Card theme={theme} style={{ flex: 1, minWidth: 160, alignItems: "center", gap: 12 }}>
