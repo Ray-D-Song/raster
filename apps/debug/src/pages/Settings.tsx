@@ -1,125 +1,187 @@
-import { Button, Icon, Select, Switch, Text, View } from "raster-js/components";
+import { Avatar, Button, ButtonGroup, Icon, Input, Switch, Text, View } from "raster-js/components";
+import { AppHeader } from "../components/AppHeader";
 import { Card } from "../components/Card";
-import { SectionHeader } from "../components/SectionHeader";
-import { themePresetOptions } from "../data";
-import { type AppTheme, pagePadding, row, secondaryText, spaceBetween } from "../styles";
-import type { CurrencyCode, ThemePreference, ThemePresetChoice, UserSettings } from "../types";
+import { userProfile, vitalityColors } from "../data";
+import { type AppTheme, labelCaps, pagePadding, spaceBetween } from "../styles";
+import type { UserSettings, WeeklyGoal, WeightUnit } from "../types";
 
 interface SettingsProps {
   settings: UserSettings;
   theme: AppTheme;
+  entryCount: number;
   onChange: (settings: UserSettings) => void;
-  transactionCount: number;
 }
 
-const currencyOptions = [
-  { id: "USD", label: "USD - US Dollar", value: "USD" },
-  { id: "EUR", label: "EUR - Euro", value: "EUR" },
-  { id: "CNY", label: "CNY - Yuan", value: "CNY" },
-];
+const weeklyGoalOptions: WeeklyGoal[] = [0.25, 0.5, 1.0];
 
-const themeOptions = [
-  { id: "light", label: "Light", value: "light" },
-  { id: "dark", label: "Dark", value: "dark" },
-];
-
-export function Settings({ settings, theme, onChange, transactionCount }: SettingsProps) {
+export function Settings({ settings, theme, entryCount, onChange }: SettingsProps) {
   return (
-    <View style={[pagePadding, { gap: 12 }]}>
-      <View style={{ gap: 3 }}>
-        <Text style={{ color: secondaryText(theme), fontSize: 12 }}>Personal workspace</Text>
-        <Text style={{ fontSize: 24, fontWeight: "800" }}>Settings</Text>
-      </View>
+    <View style={{ backgroundColor: theme.background }}>
+      <AppHeader theme={theme} avatarUrl={userProfile.avatarUrl} />
+      <View style={[pagePadding, { gap: 32 }]}>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 16 }}>
+          <Card theme={theme} style={{ flex: 1, minWidth: 160, alignItems: "center", gap: 12 }}>
+            <Avatar src={userProfile.avatarUrl} size="large" />
+            <Text style={{ fontSize: 20, fontWeight: "600", color: vitalityColors.onSurface }}>{userProfile.name}</Text>
+            <Text style={{ fontSize: 14, color: vitalityColors.outline }}>Member since {userProfile.memberSince}</Text>
+          </Card>
 
-      <Card theme={theme}>
-        <View style={{ flexDirection: "row", gap: 12, alignItems: "center" }}>
-          <View
-            style={{
-              width: 48,
-              height: 48,
-              borderRadius: 8,
-              backgroundColor: theme.accent,
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <Icon name="circle-user" color={theme.primary} />
-          </View>
-          <View style={{ flex: 1, gap: 3 }}>
-            <Text style={{ fontSize: 17, fontWeight: "800" }}>Ray Song</Text>
-            <Text style={{ color: secondaryText(theme), fontSize: 12 }}>Individual plan · Offline debug profile</Text>
-          </View>
-        </View>
-      </Card>
-
-      <View style={{ gap: 8 }}>
-        <SectionHeader title="Preferences" theme={theme} />
-        <Card theme={theme} style={{ gap: 12 }}>
-          <View style={{ gap: 6 }}>
-            <Text style={{ fontSize: 13, fontWeight: "700" }}>Currency</Text>
-            <Select
-              value={settings.currency}
-              options={currencyOptions}
-              onValueChange={(value) => onChange({ ...settings, currency: String(value ?? "USD") as CurrencyCode })}
-            />
-          </View>
-          <View style={{ gap: 6 }}>
-            <Text style={{ fontSize: 13, fontWeight: "700" }}>Theme</Text>
-            <Select
-              value={settings.theme}
-              options={themeOptions}
-              onValueChange={(value) => onChange({ ...settings, theme: String(value ?? "light") as ThemePreference })}
-            />
-          </View>
-          <View style={{ gap: 6 }}>
-            <Text style={{ fontSize: 13, fontWeight: "700" }}>Preset</Text>
-            <Select
-              value={settings.themePreset}
-              options={themePresetOptions}
-              onValueChange={(value) =>
-                onChange({ ...settings, themePreset: String(value ?? "macos-classic") as ThemePresetChoice })
-              }
-            />
-          </View>
-        </Card>
-      </View>
-
-      <View style={{ gap: 8 }}>
-        <SectionHeader title="Notifications" theme={theme} />
-        <Card theme={theme} style={{ gap: 14 }}>
-          <View style={spaceBetween}>
-            <View style={{ gap: 3 }}>
-              <Text style={{ fontSize: 14, fontWeight: "700" }}>Budget alerts</Text>
-              <Text style={{ color: secondaryText(theme), fontSize: 11 }}>Warn when a category crosses its limit.</Text>
+          <Card theme={theme} tinted style={{ flex: 1, minWidth: 160, justifyContent: "space-between" }}>
+            <View style={{ gap: 8 }}>
+              <Text style={{ ...labelCaps, color: vitalityColors.primary }}>CURRENT HEIGHT</Text>
+              <View style={{ flexDirection: "row", alignItems: "baseline", gap: 4 }}>
+                <Text style={{ fontSize: 36, fontWeight: "700", color: vitalityColors.primary }}>
+                  {userProfile.heightCm}
+                </Text>
+                <Text style={{ fontSize: 20, color: "rgba(0, 107, 95, 0.7)" }}>cm</Text>
+              </View>
             </View>
-            <Switch
-              checked={settings.budgetAlerts}
-              onChange={(value) => onChange({ ...settings, budgetAlerts: value === true })}
-            />
-          </View>
-          <View style={spaceBetween}>
-            <View style={{ gap: 3 }}>
-              <Text style={{ fontSize: 14, fontWeight: "700" }}>Monthly report</Text>
-              <Text style={{ color: secondaryText(theme), fontSize: 11 }}>Summarize spending at month end.</Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 4, margin: { top: 12 } }}>
+              <Text style={{ fontSize: 16, fontWeight: "600", color: vitalityColors.primary }}>Edit Profile</Text>
+              <Icon name="settings" color={vitalityColors.primary} size="small" />
             </View>
-            <Switch
-              checked={settings.monthlyReports}
-              onChange={(value) => onChange({ ...settings, monthlyReports: value === true })}
-            />
-          </View>
-        </Card>
-      </View>
-
-      <Card theme={theme} style={{ gap: 10 }}>
-        <View style={row}>
-          <Icon name="info" color={theme.primary} size="small" />
-          <Text style={{ fontSize: 14, fontWeight: "700" }}>Debug data</Text>
+          </Card>
         </View>
-        <Text style={{ color: secondaryText(theme), fontSize: 12 }}>
-          This build keeps {transactionCount} transactions in memory. Restarting the app restores the seed ledger.
-        </Text>
-        <Button label="Export preview" variant="secondary" icon="external-link" size="small" />
-      </Card>
+
+        <View style={{ gap: 16 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <Icon name="chart-pie" color={vitalityColors.primary} size="medium" />
+            <Text style={{ fontSize: 20, fontWeight: "600", color: vitalityColors.onSurface }}>Goal Settings</Text>
+          </View>
+          <Card theme={theme} style={{ gap: 24 }}>
+            <View
+              style={{
+                ...spaceBetween,
+                padding: 16,
+                borderRadius: 12,
+                backgroundColor: vitalityColors.surfaceContainerLow,
+              }}
+            >
+              <View style={{ gap: 4 }}>
+                <Text style={{ fontSize: 20, fontWeight: "600", color: vitalityColors.onSurface }}>Target Weight</Text>
+                <Text style={{ fontSize: 14, color: vitalityColors.outline }}>Your ideal body mass</Text>
+              </View>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <Input
+                  value={String(settings.targetWeight)}
+                  style={{ width: 64, fontWeight: "600", color: vitalityColors.primary }}
+                  onChange={(event) =>
+                    onChange({ ...settings, targetWeight: Number(event.value ?? settings.targetWeight) })
+                  }
+                />
+                <Text style={{ fontSize: 16, color: vitalityColors.outline }}>kg</Text>
+              </View>
+            </View>
+
+            <View
+              style={{
+                ...spaceBetween,
+                padding: 16,
+                borderRadius: 12,
+                backgroundColor: vitalityColors.surfaceContainerLow,
+              }}
+            >
+              <View style={{ gap: 4 }}>
+                <Text style={{ fontSize: 20, fontWeight: "600", color: vitalityColors.onSurface }}>Target Date</Text>
+                <Text style={{ fontSize: 14, color: vitalityColors.outline }}>When to reach your goal</Text>
+              </View>
+              <Input
+                value={settings.targetDate}
+                onChange={(event) => onChange({ ...settings, targetDate: event.value ?? settings.targetDate })}
+              />
+            </View>
+
+            <View style={{ gap: 12 }}>
+              <Text style={{ fontSize: 20, fontWeight: "600", color: vitalityColors.onSurface }}>Weekly Goal</Text>
+              <View style={{ flexDirection: "row", gap: 8 }}>
+                {weeklyGoalOptions.map((goal) => {
+                  const selected = settings.weeklyGoal === goal;
+                  return (
+                    <View
+                      key={goal}
+                      onClick={() => onChange({ ...settings, weeklyGoal: goal })}
+                      style={{
+                        flex: 1,
+                        padding: 12,
+                        borderRadius: 12,
+                        borderWidth: 2,
+                        borderColor: selected ? vitalityColors.primaryContainer : vitalityColors.outlineVariant,
+                        backgroundColor: selected ? "rgba(45, 212, 191, 0.1)" : "transparent",
+                        alignItems: "center",
+                      }}
+                    >
+                      <Text
+                        style={{
+                          ...labelCaps,
+                          color: selected ? vitalityColors.primary : vitalityColors.outline,
+                        }}
+                      >
+                        {goal} kg/wk
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+            </View>
+          </Card>
+        </View>
+
+        <View style={{ gap: 16 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <Icon name="settings" color={vitalityColors.primary} size="medium" />
+            <Text style={{ fontSize: 20, fontWeight: "600", color: vitalityColors.onSurface }}>Preferences</Text>
+          </View>
+          <Card theme={theme} style={{ gap: 4 }}>
+            <View style={{ ...spaceBetween, padding: { top: 12, bottom: 12 } }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 16 }}>
+                <Icon name="bell" color={vitalityColors.outline} size="medium" />
+                <Text style={{ fontSize: 16 }}>Daily Reminders</Text>
+              </View>
+              <Switch
+                checked={settings.dailyReminders}
+                onChange={(value) => onChange({ ...settings, dailyReminders: value === true })}
+              />
+            </View>
+
+            <View style={{ ...spaceBetween, padding: { top: 12, bottom: 12 }, borderTopWidth: 1, borderColor: "rgba(186, 202, 197, 0.2)" }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 16 }}>
+                <Icon name="info" color={vitalityColors.outline} size="medium" />
+                <Text style={{ fontSize: 16 }}>Units of Measure</Text>
+              </View>
+              <ButtonGroup
+                value={settings.unit}
+                variant="secondary"
+                size="small"
+                onChange={(value) => onChange({ ...settings, unit: String(value ?? "kg") as WeightUnit })}
+              >
+                <Button label="KG" value="kg" />
+                <Button label="LB" value="lb" />
+              </ButtonGroup>
+            </View>
+
+            <View style={{ ...spaceBetween, padding: { top: 12, bottom: 12 }, borderTopWidth: 1, borderColor: "rgba(186, 202, 197, 0.2)" }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 16 }}>
+                <Icon name="moon" color={vitalityColors.outline} size="medium" />
+                <Text style={{ fontSize: 16 }}>Dark Mode</Text>
+              </View>
+              <Switch
+                checked={settings.darkMode}
+                onChange={(value) =>
+                  onChange({ ...settings, darkMode: value === true, theme: value === true ? "dark" : "light" })
+                }
+              />
+            </View>
+          </Card>
+        </View>
+
+        <View style={{ gap: 12 }}>
+          <Button label="Export CSV Data" icon="external-link" variant="secondary" />
+          <Button label="Delete All Data" icon="delete" variant="danger" />
+          <Text style={{ fontSize: 12, color: vitalityColors.onSurfaceVariant }}>
+            Debug build keeps {entryCount} weight entries in memory.
+          </Text>
+        </View>
+      </View>
     </View>
   );
 }

@@ -1,142 +1,70 @@
-import { ThemePreset } from "raster-js/components";
-import type { RasterThemePresetPair } from "raster-js/components";
-import type { Budget, Category, NewTransactionDraft, ThemePresetChoice, Transaction, UserSettings } from "./types";
+import type { NewEntryDraft, UserProfile, UserSettings, WeightEntry } from "./types";
 
-export const categories: Category[] = [
-  { id: "groceries", name: "Groceries", color: "#0069a8", icon: "inbox" },
-  { id: "dining", name: "Dining", color: "#e7000b", icon: "heart" },
-  { id: "transport", name: "Transport", color: "#71717b", icon: "map" },
-  { id: "home", name: "Home", color: "#52525c", icon: "building" },
-  { id: "wellness", name: "Wellness", color: "#0084d1", icon: "circle-check" },
-  { id: "income", name: "Income", color: "#0084d1", icon: "check" },
-];
+export const vitalityColors = {
+  primary: "#006b5f",
+  primaryContainer: "#2dd4bf",
+  onPrimaryContainer: "#00574d",
+  secondary: "#0058be",
+  background: "#f8f9ff",
+  surface: "#f8f9ff",
+  surfaceContainer: "#e5eeff",
+  surfaceContainerLow: "#eff4ff",
+  surfaceContainerHigh: "#dce9ff",
+  onSurface: "#0b1c30",
+  onSurfaceVariant: "#3c4a46",
+  outline: "#6b7a76",
+  outlineVariant: "#bacac5",
+  error: "#ba1a1a",
+  errorContainer: "#ffdad6",
+  onErrorContainer: "#93000a",
+} as const;
 
-export const seedTransactions: Transaction[] = [
-  {
-    id: "tx-001",
-    title: "Paycheck",
-    merchant: "Acme Studio",
-    amount: 4820,
-    type: "income",
-    category: "income",
-    date: "2026-06-15",
-    note: "June payroll",
-  },
-  {
-    id: "tx-002",
-    title: "Weekly groceries",
-    merchant: "Market Lane",
-    amount: 94.32,
-    type: "expense",
-    category: "groceries",
-    date: "2026-06-16",
-  },
-  {
-    id: "tx-003",
-    title: "Dinner with team",
-    merchant: "Juniper Table",
-    amount: 58.4,
-    type: "expense",
-    category: "dining",
-    date: "2026-06-14",
-  },
-  {
-    id: "tx-004",
-    title: "Metro card",
-    merchant: "City Transit",
-    amount: 36,
-    type: "expense",
-    category: "transport",
-    date: "2026-06-12",
-  },
-  {
-    id: "tx-005",
-    title: "Rent",
-    merchant: "Northline Homes",
-    amount: 1480,
-    type: "expense",
-    category: "home",
-    date: "2026-06-03",
-  },
-  {
-    id: "tx-006",
-    title: "Yoga membership",
-    merchant: "Breathe Club",
-    amount: 72,
-    type: "expense",
-    category: "wellness",
-    date: "2026-06-02",
-  },
-  {
-    id: "tx-007",
-    title: "Cafe",
-    merchant: "Little Owl",
-    amount: 12.8,
-    type: "expense",
-    category: "dining",
-    date: "2026-06-01",
-  },
-];
-
-export const seedBudgets: Budget[] = [
-  { category: "groceries", limit: 520, color: "#0069a8" },
-  { category: "dining", limit: 360, color: "#e7000b" },
-  { category: "transport", limit: 180, color: "#71717b" },
-  { category: "home", limit: 1600, color: "#52525c" },
-  { category: "wellness", limit: 220, color: "#0084d1" },
-];
+export const userProfile: UserProfile = {
+  name: "Alex Johnson",
+  displayName: "Jordan",
+  memberSince: "Jan 2024",
+  heightCm: 180,
+  avatarUrl:
+    "https://lh3.googleusercontent.com/aida-public/AB6AXuDP1Kbq-jDU1ghpl-sGpfNOxfm2pTYzv71vQoDi8UOQj_LcbyUr2gb-uu3x8fdTDoLHsXOyQo2XDKKd_4iSHpDFFVGPGLnXahFDfl5wTdkk6e_sej8lkKH-qHd2mTU-OqDUzrJZD_dfLmfdDVsQbOwHbz0aXzhINolXaOqXi-zAiwMq5L7GkavHc-VkfFxOnY8N6fIYzv5BmITFcWFvZmCCENvfhbzW9mkUGYlIdc3cQJs1EJjVemfl",
+};
 
 export const defaultSettings: UserSettings = {
-  currency: "USD",
   theme: "light",
-  themePreset: "macos-classic",
-  budgetAlerts: true,
-  monthlyReports: false,
-  budgetCycle: "monthly",
+  unit: "kg",
+  targetWeight: 71.6,
+  targetDate: "2026-12-31",
+  weeklyGoal: 0.25,
+  dailyReminders: true,
+  darkMode: false,
 };
 
-export const themePresetOptions = [
-  { id: "macos-classic", label: "macOS Classic", value: "macos-classic" },
-  { id: "ayu", label: "Ayu", value: "ayu" },
-  { id: "catppuccin", label: "Catppuccin", value: "catppuccin" },
-  { id: "everforest", label: "Everforest", value: "everforest" },
-  { id: "gruvbox", label: "Gruvbox", value: "gruvbox" },
-  { id: "solarized", label: "Solarized", value: "solarized" },
+export const seedEntries: WeightEntry[] = [
+  { id: "w-001", weight: 75.8, bodyFat: 18.2, date: "2026-06-22", time: "08:15", mood: "good", note: "Feeling lighter after morning walk." },
+  { id: "w-002", weight: 76.1, bodyFat: 18.4, date: "2026-06-21", time: "07:50", mood: "great" },
+  { id: "w-003", weight: 76.3, bodyFat: 18.5, date: "2026-06-20", time: "08:00", mood: "neutral" },
+  { id: "w-004", weight: 76.5, bodyFat: 18.6, date: "2026-06-19", time: "07:45", mood: "good" },
+  { id: "w-005", weight: 76.4, bodyFat: 18.7, date: "2026-06-18", time: "08:10", mood: "tired", note: "Late night, slightly bloated." },
+  { id: "w-006", weight: 76.6, bodyFat: 18.8, date: "2026-06-17", time: "07:55", mood: "good" },
+  { id: "w-007", weight: 76.6, bodyFat: 18.9, date: "2026-06-16", time: "08:05", mood: "neutral" },
+  { id: "w-008", weight: 82.4, bodyFat: 21.2, date: "2023-10-22", time: "07:45", mood: "bloated" },
+  { id: "w-009", weight: 82.0, bodyFat: 21.4, date: "2023-10-18", time: "08:12", mood: "good" },
+  { id: "w-010", weight: 82.8, bodyFat: 21.8, date: "2023-10-15", time: "07:50", mood: "neutral" },
 ];
 
-export const themePresetPairs: Record<ThemePresetChoice, RasterThemePresetPair> = {
-  "macos-classic": {
-    light: ThemePreset.MacOSClassicLight,
-    dark: ThemePreset.MacOSClassicDark,
-  },
-  ayu: {
-    light: ThemePreset.AyuLight,
-    dark: ThemePreset.AyuDark,
-  },
-  catppuccin: {
-    light: ThemePreset.CatppuccinLatte,
-    dark: ThemePreset.CatppuccinMocha,
-  },
-  everforest: {
-    light: ThemePreset.EverforestLight,
-    dark: ThemePreset.EverforestDark,
-  },
-  gruvbox: {
-    light: ThemePreset.GruvboxLight,
-    dark: ThemePreset.GruvboxDark,
-  },
-  solarized: {
-    light: ThemePreset.SolarizedLight,
-    dark: ThemePreset.SolarizedDark,
-  },
-};
-
-export const defaultDraft: NewTransactionDraft = {
-  title: "",
-  merchant: "",
-  amount: "",
-  type: "expense",
-  category: "groceries",
-  date: "2026-06-18",
+export const defaultDraft: NewEntryDraft = {
+  weight: "72.5",
+  bodyFat: "18.5",
+  date: "2026-06-22",
+  time: "08:30",
+  mood: null,
   note: "",
 };
+
+export const dailyQuote = {
+  text: "It's not about being perfect, it's about effort. And when you bring that effort every single day, that's where transformation happens.",
+  attribution: "VitalTrack Daily Motivation",
+};
+
+export const activityStreakDays = 12;
+
+export const startWeight = 80.0;

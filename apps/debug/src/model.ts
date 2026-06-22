@@ -1,73 +1,138 @@
-import { categories } from "./data";
-import type { Budget, Category, CurrencyCode, NewTransactionDraft, Transaction } from "./types";
+import type { Mood, NewEntryDraft, SortOrder, WeightEntry, WeightUnit } from "./types";
 
-const currencySymbols: Record<CurrencyCode, string> = {
-  USD: "$",
-  EUR: "€",
-  CNY: "¥",
+const moodLabels: Record<Mood, string> = {
+  great: "Great",
+  good: "Good",
+  neutral: "Neutral",
+  bloated: "Bloated",
+  tired: "Tired",
 };
 
-export function categoryById(categoryId: string): Category {
-  return categories.find((category) => category.id === categoryId) ?? categories[0];
+export function moodLabel(mood: Mood): string {
+  return moodLabels[mood];
 }
 
-export function formatMoney(amount: number, currency: CurrencyCode): string {
-  const symbol = currencySymbols[currency];
-  const absolute = Math.abs(amount);
-  const formatted =
-    absolute >= 1000
-      ? absolute.toLocaleString("en-US", { maximumFractionDigits: 0 })
-      : absolute.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return `${amount < 0 ? "-" : ""}${symbol}${formatted}`;
+export function formatWeight(value: number, unit: WeightUnit = "kg"): string {
+  const formatted = value.toFixed(1);
+  return unit === "kg" ? `${formatted} kg` : `${(value * 2.20462).toFixed(1)} lb`;
 }
 
-export function monthTransactions(transactions: Transaction[]): Transaction[] {
-  return transactions.filter((transaction) => transaction.date.startsWith("2026-06"));
+export function formatWeightDelta(delta: number, unit: WeightUnit = "kg"): string {
+  const value = unit === "kg" ? delta : delta * 2.20462;
+  const sign = value > 0 ? "+" : value < 0 ? "" : "";
+  const suffix = unit === "kg" ? "kg" : "lb";
+  return `${sign}${value.toFixed(1)} ${suffix}`;
 }
 
-export function totalIncome(transactions: Transaction[]): number {
-  return transactions
-    .filter((transaction) => transaction.type === "income")
-    .reduce((total, transaction) => total + transaction.amount, 0);
+export function formatDateLabel(date: string): string {
+  const parsed = new Date(`${date}T12:00:00`);
+  return parsed.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }).toUpperCase();
 }
 
-export function totalExpenses(transactions: Transaction[]): number {
-  return transactions
-    .filter((transaction) => transaction.type === "expense")
-    .reduce((total, transaction) => total + transaction.amount, 0);
+export function formatTimeLabel(time: string): string {
+  const [hours, minutes] = time.split(":").map(Number);
+  const period = hours >= 12 ? "PM" : "AM";
+  const hour12 = hours % 12 || 12;
+  return `${hour12}:${String(minutes).padStart(2, "0")} ${period}`;
 }
 
-export function spentForCategory(transactions: Transaction[], categoryId: string): number {
-  return transactions
-    .filter((transaction) => transaction.type === "expense" && transaction.category === categoryId)
-    .reduce((total, transaction) => total + transaction.amount, 0);
+export function computeBmi(weightKg: number, heightCm: number): number {
+  const heightM = heightCm / 100;
+  return weightKg / (heightM * heightM);
 }
 
-export function budgetProgress(budget: Budget, transactions: Transaction[]): number {
-  return Math.min(1, spentForCategory(transactions, budget.category) / budget.limit);
+export function bmiCategory(bmi: number): string {
+  if (bmi < 18.5) return "Underweight";
+  if (bmi < 25) return "Healthy Range";
+  if (bmi < 30) return "Overweight";
+  return "High";
 }
 
-export function spendingByCategory(transactions: Transaction[]) {
-  return categories
-    .filter((category) => category.id !== "income")
-    .map((category) => ({
-      category,
-      spent: spentForCategory(transactions, category.id),
-    }))
-    .filter((row) => row.spent > 0)
-    .sort((a, b) => b.spent - a.spent);
+export function sortEntries(entries: WeightEntry[], order: SortOrder): WeightEntry[] {
+  const sorted = [...entries].sort((a, b) => {
+    const aKey = `${a.date}T${a.time}`;
+    const bKey = `${b.date}T${b.time}`;
+    return aKey < bKey ? -1 : aKey > bKey ? 1 : 0;
+  });
+  return order === "newest" ? sorted.reverse() : sorted;
 }
 
-export function makeTransaction(draft: NewTransactionDraft, nextId: number): Transaction {
-  const amount = Number(draft.amount);
+export function previousEntry(entries: WeightEntry[], entry: WeightEntry): WeightEntry | null {
+  const sorted = sortEntries(entries, "oldest");
+  const index = sorted.findIndex((item) => item.id === entry.id);
+  return index > 0 ? sorted[index - 1] : null;
+}
+
+export function entryDelta(entry: WeightEntry, previous: WeightEntry | null, unit: WeightUnit = "kg"): number | null {
+  if (previous == null) return null;
+  return entry.weight - previous.weight;
+}
+
+export function deltaTone(delta: number | null): "up" | "down" | "flat" {
+  if (delta == null || Math.abs(delta) < 0.05) return "flat";
+  return delta > 0 ? "up" : "down";
+}
+
+export function weekChange(entries: WeightEntry[]): { delta: number; from: number } | null {
+  if (entries.length < 2) return null;
+  const sorted = sortEntries(entries, "newest");
+  const latest = sorted[0];
+  const weekAgo = sorted.find((entry) => {
+    const latestDate = new Date(`${latest.date}T12:00:00`);
+    const entryDate = new Date(`${entry.date}T12:00:00`);
+    const diffDays = (latestDate.getTime() - entryDate.getTime()) / (1000 * 60 * 60 * 24);
+    return diffDays >= 6 && diffDays <= 8;
+  });
+  if (weekAgo == null) return null;
+  return { delta: latest.weight - weekAgo.weight, from: weekAgo.weight };
+}
+
+export function goalProgress(current: number, target: number, start: number): number {
+  const total = start - target;
+  if (total <= 0) return 1;
+  const done = start - current;
+  return Math.min(1, Math.max(0, done / total));
+}
+
+export function distanceToGoal(current: number, target: number): number {
+  return Math.max(0, current - target);
+}
+
+export function lastSevenDays(entries: WeightEntry[]): Array<{ label: string; weight: number }> {
+  const sorted = sortEntries(entries, "newest").slice(0, 7).reverse();
+  return sorted.map((entry) => {
+    const day = new Date(`${entry.date}T12:00:00`).toLocaleDateString("en-US", { weekday: "short" });
+    return { label: day.slice(0, 3).toUpperCase(), weight: entry.weight };
+  });
+}
+
+export function entriesForMonth(entries: WeightEntry[], year: number, month: number): WeightEntry[] {
+  const monthKey = `${year}-${String(month + 1).padStart(2, "0")}`;
+  return entries.filter((entry) => entry.date.startsWith(monthKey));
+}
+
+export function makeEntry(draft: NewEntryDraft, nextId: number): WeightEntry | null {
+  const weight = Number(draft.weight);
+  const bodyFat = Number(draft.bodyFat);
+  if (!Number.isFinite(weight) || weight <= 0) return null;
+  if (!Number.isFinite(bodyFat) || bodyFat < 0) return null;
   return {
-    id: `tx-new-${nextId}`,
-    title: draft.title.trim(),
-    merchant: draft.merchant.trim() || draft.title.trim(),
-    amount,
-    type: draft.type,
-    category: draft.type === "income" ? "income" : draft.category,
+    id: `w-new-${nextId}`,
+    weight,
+    bodyFat,
     date: draft.date,
+    time: draft.time,
+    mood: draft.mood ?? undefined,
     note: draft.note.trim() || undefined,
   };
+}
+
+export function todayIso(): string {
+  const now = new Date();
+  return now.toISOString().split("T")[0];
+}
+
+export function nowTime(): string {
+  const now = new Date();
+  return `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 }

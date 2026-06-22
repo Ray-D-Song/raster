@@ -1,52 +1,48 @@
-export type TransactionType = "expense" | "income";
-
 export type ThemePreference = "light" | "dark";
 
-export type ThemePresetChoice = "macos-classic" | "ayu" | "catppuccin" | "everforest" | "gruvbox" | "solarized";
+export type WeightUnit = "kg" | "lb";
 
-export type CurrencyCode = "USD" | "EUR" | "CNY";
+export type Mood = "great" | "good" | "neutral" | "bloated" | "tired";
 
-export interface Category {
+export type SortOrder = "newest" | "oldest";
+
+export type WeeklyGoal = 0.25 | 0.5 | 1.0;
+
+export interface WeightEntry {
   id: string;
-  name: string;
-  color: string;
-  icon: string;
-}
-
-export interface Transaction {
-  id: string;
-  title: string;
-  merchant: string;
-  amount: number;
-  type: TransactionType;
-  category: string;
+  weight: number;
+  bodyFat: number;
   date: string;
+  time: string;
+  mood?: Mood;
   note?: string;
 }
 
-export interface Budget {
-  category: string;
-  limit: number;
-  color: string;
+export interface UserProfile {
+  name: string;
+  displayName: string;
+  memberSince: string;
+  heightCm: number;
+  avatarUrl: string;
 }
 
 export interface UserSettings {
-  currency: CurrencyCode;
   theme: ThemePreference;
-  themePreset: ThemePresetChoice;
-  budgetAlerts: boolean;
-  monthlyReports: boolean;
-  budgetCycle: "monthly";
+  unit: WeightUnit;
+  targetWeight: number;
+  targetDate: string;
+  weeklyGoal: WeeklyGoal;
+  dailyReminders: boolean;
+  darkMode: boolean;
 }
 
-export interface NewTransactionDraft {
-  title: string;
-  merchant: string;
-  amount: string;
-  type: TransactionType;
-  category: string;
+export interface NewEntryDraft {
+  weight: string;
+  bodyFat: string;
   date: string;
+  time: string;
+  mood: Mood | null;
   note: string;
 }
 
-export type AppTab = "overview" | "transactions" | "budget" | "settings";
+export type AppTab = "dashboard" | "entry" | "history" | "settings";

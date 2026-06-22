@@ -1,196 +1,155 @@
-import { useMemo, useState } from "react";
-import { Alert, AppShell, AppShellTab, AppShellTabBar, ConfigProvider, Dialog, Text, View, useTheme } from "raster-js/components";
-import { AddTransactionDialog } from "./components/AddTransactionDialog";
-import { defaultDraft, defaultSettings, seedBudgets, seedTransactions, themePresetPairs } from "./data";
-import { categoryById, formatMoney, makeTransaction } from "./model";
-import { Budget } from "./pages/Budget";
-import { Overview } from "./pages/Overview";
+import { useState } from "react";
+import { AppShell, AppShellTab, AppShellTabBar, ConfigProvider, View, useTheme } from "raster-js/components";
+import { defaultDraft, defaultSettings, seedEntries } from "./data";
+import { makeEntry, nowTime, sortEntries, todayIso } from "./model";
+import { Dashboard } from "./pages/Dashboard";
+import { Entry } from "./pages/Entry";
+import { History } from "./pages/History";
 import { Settings } from "./pages/Settings";
-import { Transactions } from "./pages/Transactions";
-import { secondaryText } from "./styles";
-import type { AppTab, NewTransactionDraft, Transaction, UserSettings } from "./types";
+import { vitalityTheme } from "./styles";
+import type { AppTab, NewEntryDraft, SortOrder, UserSettings, WeightEntry } from "./types";
 
-export function App() {
-  const [tab, setTab] = useState<AppTab>("overview");
-  const [transactions, setTransactions] = useState<Transaction[]>(seedTransactions);
-  const [settings, setSettings] = useState<UserSettings>(defaultSettings);
-  const [search, setSearch] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState("all");
-  const [draft, setDraft] = useState<NewTransactionDraft>(defaultDraft);
-  const [addOpen, setAddOpen] = useState(false);
-  const [error, setError] = useState("");
-  const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
-  const [nextId, setNextId] = useState(1);
-
-  const currency = settings.currency;
-  const theme = settings.theme;
-  const themePreset = themePresetPairs[settings.themePreset];
-  const nativeTheme = useTheme();
-  const appTheme = nativeTheme?.colors ?? null;
-  const selectedCategory = selectedTransaction ? categoryById(selectedTransaction.category) : null;
-
-  const activePage = useMemo(() => {
-    if (appTheme == null) return null;
-    if (tab === "transactions") {
-      return (
-        <Transactions
-          transactions={transactions}
-          currency={currency}
-          theme={appTheme}
-          search={search}
-          categoryFilter={categoryFilter}
-          onSearchChange={setSearch}
-          onCategoryChange={setCategoryFilter}
-          onAdd={() => setAddOpen(true)}
-          onOpenTransaction={setSelectedTransaction}
-        />
-      );
-    }
-    if (tab === "budget") {
-      return (
-        <Budget
-          budgets={seedBudgets}
-          transactions={transactions}
-          currency={currency}
-          theme={appTheme}
-          alertsEnabled={settings.budgetAlerts}
-          onAlertsChange={(budgetAlerts) => setSettings((current) => ({ ...current, budgetAlerts }))}
-        />
-      );
-    }
-    if (tab === "settings") {
-      return (
-        <Settings
-          settings={settings}
-          theme={appTheme}
-          onChange={setSettings}
-          transactionCount={transactions.length}
-        />
-      );
-    }
+function renderPage(
+  tab: AppTab,
+  appTheme: NonNullable<ReturnType<typeof useTheme>>["colors"],
+  props: {
+    draft: NewEntryDraft;
+    entries: WeightEntry[];
+    settings: UserSettings;
+    error: string;
+    sortOrder: SortOrder;
+    calendarMonth: { year: number; month: number };
+    selectedDay: number | null;
+    setDraft: (draft: NewEntryDraft) => void;
+    setError: (error: string) => void;
+    setSortOrder: (order: SortOrder) => void;
+    setCalendarMonth: (value: { year: number; month: number } | ((current: { year: number; month: number }) => { year: number; month: number })) => void;
+    setSelectedDay: (day: number | null) => void;
+    setSettings: (settings: UserSettings) => void;
+    setTab: (tab: AppTab) => void;
+    submitDraft: () => void;
+  }
+) {
+  if (tab === "entry") {
     return (
-      <Overview
-        transactions={transactions}
-        budgets={seedBudgets}
-        currency={currency}
+      <Entry
+        draft={props.draft}
         theme={appTheme}
-        onAdd={() => setAddOpen(true)}
-        onOpenTransaction={setSelectedTransaction}
-        onNavigate={setTab}
+        error={props.error}
+        onChange={props.setDraft}
+        onSubmit={props.submitDraft}
+        onClearError={() => props.setError("")}
       />
     );
-  }, [appTheme, categoryFilter, currency, search, settings, tab, transactions]);
+  }
+  if (tab === "history") {
+    return (
+      <History
+        entries={props.entries}
+        unit={props.settings.unit}
+        theme={appTheme}
+        sortOrder={props.sortOrder}
+        calendarMonth={props.calendarMonth}
+        selectedDay={props.selectedDay}
+        onSortChange={props.setSortOrder}
+        onMonthChange={(delta) =>
+          props.setCalendarMonth((current) => {
+            const next = new Date(current.year, current.month + delta, 1);
+            return { year: next.getFullYear(), month: next.getMonth() };
+          })
+        }
+        onSelectDay={props.setSelectedDay}
+      />
+    );
+  }
+  if (tab === "settings") {
+    return (
+      <Settings
+        settings={props.settings}
+        theme={appTheme}
+        entryCount={props.entries.length}
+        onChange={props.setSettings}
+      />
+    );
+  }
+  return (
+    <Dashboard
+      entries={props.entries}
+      settings={props.settings}
+      theme={appTheme}
+      onNavigate={props.setTab}
+    />
+  );
+}
 
-  const closeAdd = () => {
-    setAddOpen(false);
-    setDraft(defaultDraft);
-  };
+export function App() {
+  const [tab, setTab] = useState<AppTab>("dashboard");
+  const [entries, setEntries] = useState<WeightEntry[]>(() => sortEntries(seedEntries, "newest"));
+  const [settings, setSettings] = useState<UserSettings>(defaultSettings);
+  const [draft, setDraft] = useState<NewEntryDraft>(defaultDraft);
+  const [error, setError] = useState("");
+  const [sortOrder, setSortOrder] = useState<SortOrder>("newest");
+  const [calendarMonth, setCalendarMonth] = useState(() => {
+    const now = new Date();
+    return { year: now.getFullYear(), month: now.getMonth() };
+  });
+  const [selectedDay, setSelectedDay] = useState<number | null>(null);
+  const [nextId, setNextId] = useState(1);
 
-  const submitDraft = () => {
-    const title = draft.title.trim();
-    const amount = Number(draft.amount);
-    if (title.length === 0) {
-      setError("Transaction title is required.");
+  const nativeTheme = useTheme();
+  const appTheme = nativeTheme?.colors ?? null;
+
+  function submitDraft() {
+    const entry = makeEntry(draft, nextId);
+    if (entry == null) {
+      setError("Enter a valid weight and body fat percentage.");
       return;
     }
-    if (!Number.isFinite(amount) || amount <= 0) {
-      setError("Enter a positive transaction amount.");
-      return;
-    }
-    const transaction = makeTransaction(draft, nextId);
-    setTransactions((current) => [transaction, ...current]);
+    setEntries((current) => sortEntries([entry, ...current], "newest"));
     setNextId((value) => value + 1);
-    closeAdd();
-    setTab("transactions");
-  };
+    setDraft({
+      weight: "",
+      bodyFat: draft.bodyFat,
+      date: todayIso(),
+      time: nowTime(),
+      mood: null,
+      note: "",
+    });
+    setError("");
+    setTab("history");
+  }
 
   return (
-    <ConfigProvider theme={{ mode: theme, preset: themePreset }}>
+    <ConfigProvider theme={{ ...vitalityTheme, mode: settings.theme }}>
       <AppShell
         tabBar={
           <AppShellTabBar value={tab} onValueChange={(value) => setTab(value as AppTab)}>
-            <AppShellTab value="overview" label="Overview" icon="layout-dashboard" />
-            <AppShellTab value="transactions" label="Activity" icon="file" />
-            <AppShellTab value="budget" label="Budget" icon="chart-pie" />
-            <AppShellTab value="settings" label="Settings" icon="circle-user" />
+            <AppShellTab value="dashboard" label="Dashboard" icon="layout-dashboard" />
+            <AppShellTab value="entry" label="Entry" icon="plus" />
+            <AppShellTab value="history" label="History" icon="calendar" />
+            <AppShellTab value="settings" label="Settings" icon="settings" />
           </AppShellTabBar>
         }
       >
-        {activePage}
-        {appTheme ? (
-          <AddTransactionDialog
-            open={addOpen}
-            draft={draft}
-            theme={appTheme}
-            onChange={setDraft}
-            onCancel={closeAdd}
-            onSubmit={submitDraft}
-          />
-        ) : null}
-
-        <Alert
-          open={error.length > 0}
-          title="Check transaction"
-          description={error}
-          icon="warning"
-          okText="Got it"
-          onOk={() => setError("")}
-          onOpenChange={(event) => {
-            if (!event.open) setError("");
-          }}
-        />
-
-        <Dialog
-          open={selectedTransaction != null}
-          title={selectedTransaction?.title ?? "Transaction"}
-          width={340}
-          closeButton
-          onCancel={() => setSelectedTransaction(null)}
-          onOpenChange={(event) => {
-            if (!event.open) setSelectedTransaction(null);
-          }}
-        >
-          {selectedTransaction && selectedCategory && appTheme ? (
-            <View style={{ gap: 12 }}>
-              <View
-                style={{
-                  borderWidth: 1,
-                  borderRadius: 8,
-                  padding: 12,
-                  gap: 8,
-                }}
-              >
-                <Text style={{ color: secondaryText(appTheme), fontSize: 12 }}>{selectedTransaction.merchant}</Text>
-                <Text
-                  style={{
-                    color: selectedTransaction.type === "income" ? appTheme.success : appTheme.danger,
-                    fontSize: 28,
-                    fontWeight: "800",
-                  }}
-                >
-                  {formatMoney(
-                    selectedTransaction.type === "expense" ? -selectedTransaction.amount : selectedTransaction.amount,
-                    currency
-                  )}
-                </Text>
-              </View>
-              <View style={{ gap: 6 }}>
-                <Text style={{ fontSize: 13 }}>Category</Text>
-                <Text style={{ color: secondaryText(appTheme), fontSize: 13 }}>{selectedCategory.name}</Text>
-              </View>
-              <View style={{ gap: 6 }}>
-                <Text style={{ fontSize: 13 }}>Date</Text>
-                <Text style={{ color: secondaryText(appTheme), fontSize: 13 }}>{selectedTransaction.date}</Text>
-              </View>
-              {selectedTransaction.note ? (
-                <View style={{ gap: 6 }}>
-                  <Text style={{ fontSize: 13 }}>Note</Text>
-                  <Text style={{ color: secondaryText(appTheme), fontSize: 13 }}>{selectedTransaction.note}</Text>
-                </View>
-              ) : null}
-            </View>
-          ) : null}
-        </Dialog>
+        {appTheme
+          ? renderPage(tab, appTheme, {
+              draft,
+              entries,
+              settings,
+              error,
+              sortOrder,
+              calendarMonth,
+              selectedDay,
+              setDraft,
+              setError,
+              setSortOrder,
+              setCalendarMonth,
+              setSelectedDay,
+              setSettings,
+              setTab,
+              submitDraft,
+            })
+          : <View />}
       </AppShell>
     </ConfigProvider>
   );

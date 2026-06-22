@@ -1,0 +1,123 @@
+import { Alert, Button, Icon, Input, Text, Textarea, View } from "raster-js/components";
+import { AppHeader } from "../components/AppHeader";
+import { Card } from "../components/Card";
+import { MoodPicker } from "../components/MoodPicker";
+import { userProfile, vitalityColors } from "../data";
+import { type AppTheme, labelCaps, pagePadding } from "../styles";
+import type { NewEntryDraft } from "../types";
+
+interface EntryProps {
+  draft: NewEntryDraft;
+  theme: AppTheme;
+  error: string;
+  onChange: (draft: NewEntryDraft) => void;
+  onSubmit: () => void;
+  onClearError: () => void;
+}
+
+export function Entry({ draft, theme, error, onChange, onSubmit, onClearError }: EntryProps) {
+  const bodyFat = Number(draft.bodyFat);
+
+  return (
+    <View style={{ backgroundColor: theme.background }}>
+      <AppHeader theme={theme} avatarUrl={userProfile.avatarUrl} compact />
+      <View style={[pagePadding, { gap: 32 }]}>
+        <View style={{ gap: 8 }}>
+          <Text style={{ fontSize: 24, fontWeight: "600", color: vitalityColors.onSurface }}>New Measurement</Text>
+          <Text style={{ fontSize: 14, color: vitalityColors.onSurfaceVariant }}>
+            Consistency is the key to progress. Let's record your stats for today.
+          </Text>
+        </View>
+
+        <Card theme={theme} style={{ gap: 16 }}>
+          <Text style={{ ...labelCaps, color: vitalityColors.outline }}>WEIGHT (KG)</Text>
+          <View style={{ flexDirection: "row", alignItems: "baseline", justifyContent: "center", gap: 8 }}>
+            <Input
+              value={draft.weight}
+              placeholder="0.0"
+              style={{ fontSize: 40, fontWeight: "700", color: vitalityColors.primary, width: 160 }}
+              onChange={(event) => onChange({ ...draft, weight: event.value ?? "" })}
+            />
+            <Text style={{ fontSize: 20, fontWeight: "600", color: vitalityColors.onSurfaceVariant }}>kg</Text>
+          </View>
+        </Card>
+
+        <Card theme={theme} style={{ gap: 12 }}>
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+            <Text style={{ ...labelCaps, color: vitalityColors.outline }}>BODY FAT (%)</Text>
+            <Text style={{ fontSize: 20, fontWeight: "600", color: vitalityColors.primary }}>
+              {Number.isFinite(bodyFat) ? `${bodyFat.toFixed(1)}%` : "—"}
+            </Text>
+          </View>
+          <Input
+            value={draft.bodyFat}
+            placeholder="18.5"
+            onChange={(event) => onChange({ ...draft, bodyFat: event.value ?? "" })}
+          />
+          <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+            <Text style={{ fontSize: 12, color: vitalityColors.onSurfaceVariant }}>5%</Text>
+            <Text style={{ fontSize: 12, color: vitalityColors.onSurfaceVariant }}>25%</Text>
+            <Text style={{ fontSize: 12, color: vitalityColors.onSurfaceVariant }}>50%</Text>
+          </View>
+        </Card>
+
+        <View style={{ flexDirection: "row", gap: 16 }}>
+          <Card theme={theme} style={{ flex: 1, gap: 8, padding: 16 }}>
+            <Text style={{ ...labelCaps, color: vitalityColors.outline }}>DATE</Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <Icon name="calendar" color={vitalityColors.primary} size="small" />
+              <Input
+                value={draft.date}
+                onChange={(event) => onChange({ ...draft, date: event.value ?? "" })}
+              />
+            </View>
+          </Card>
+          <Card theme={theme} style={{ flex: 1, gap: 8, padding: 16 }}>
+            <Text style={{ ...labelCaps, color: vitalityColors.outline }}>TIME</Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <Icon name="info" color={vitalityColors.primary} size="small" />
+              <Input
+                value={draft.time}
+                onChange={(event) => onChange({ ...draft, time: event.value ?? "" })}
+              />
+            </View>
+          </Card>
+        </View>
+
+        <MoodPicker
+          value={draft.mood}
+          onChange={(mood) => onChange({ ...draft, mood })}
+        />
+
+        <Card theme={theme} style={{ padding: 16 }}>
+          <Textarea
+            value={draft.note}
+            placeholder="Add a private note about your day..."
+            rows={3}
+            onChange={(event) => onChange({ ...draft, note: event.value ?? "" })}
+          />
+        </Card>
+
+        <Button
+          label="Save Record"
+          icon="check"
+          variant="primary"
+          onClick={onSubmit}
+          style={{ height: 56, borderRadius: 999 }}
+        />
+      </View>
+
+      <Alert
+        open={error.length > 0}
+        title="Check entry"
+        description={error}
+        icon="warning"
+        okText="Got it"
+        onOk={onClearError}
+        onOpenChange={(event) => {
+          if (!event.open) onClearError();
+        }}
+      />
+    </View>
+  );
+}
