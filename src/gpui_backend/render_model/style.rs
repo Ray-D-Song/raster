@@ -332,6 +332,20 @@ pub fn apply_style<T: Styled>(mut element: T, style: &RenderStyle) -> T {
     element
 }
 
+/// Apply styles for text wrapper elements.
+///
+/// Flex children default to `min-width: auto`, which prevents wrapped text from
+/// shrinking below its single-line width. Default `minWidth: 0` lets long text
+/// wrap inside flex layouts unless the caller sets an explicit `minWidth`.
+pub fn apply_text_style<T: Styled>(element: T, style: &RenderStyle) -> T {
+    let element = if style.min_width.is_none() {
+        element.min_w(px(0.))
+    } else {
+        element
+    };
+    apply_style(element, style)
+}
+
 pub fn has_scroll_overflow(style: &RenderStyle) -> bool {
     matches!(style.overflow_x, Some(Overflow::Scroll))
         || matches!(style.overflow_y, Some(Overflow::Scroll))

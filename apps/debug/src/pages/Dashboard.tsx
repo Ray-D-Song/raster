@@ -116,10 +116,10 @@ export function Dashboard({ entries, settings, theme, onNavigate }: DashboardPro
         </View>
 
         <View style={{ flexDirection: "row", gap: 0 }}>
-          <Card theme={theme} style={{ flex: 1, minWidth: 0, justifyContent: "space-between", flexDirection: "row", borderTopLeftRadius: 24, borderBottomLeftRadius: 24, gap: 8 }}>
+          <Card theme={theme} style={{ flex: 1, justifyContent: "space-between", flexDirection: "row", borderTopLeftRadius: 24, borderBottomLeftRadius: 24, gap: 8 }}>
             <View style={{ width: 4, backgroundColor: vitalityColors.primary, borderTopLeftRadius: 24, borderBottomLeftRadius: 24 }} />
-            <View style={{ flex: 1, gap: 4, padding: 16, minWidth: 0 }}>
-              <Text style={{ fontSize: 20, fontWeight: "600", fontStyle: "italic", color: vitalityColors.onSurfaceVariant }}>
+            <View style={{ flex: 1, gap: 4, padding: 16 }}>
+              <Text style={{ fontSize: 20, fontWeight: "600", fontStyle: "italic", color: vitalityColors.onSurfaceVariant, margin: { bottom: 8 } }}>
                 {dailyQuote.text}
               </Text>
               <Text style={{ ...labelCaps, color: vitalityColors.primary }}>— {dailyQuote.attribution}</Text>
