@@ -679,7 +679,8 @@ impl ButtonVariant {
                     cx.theme().button_primary_foreground
                 }
             }
-            Self::Secondary | Self::Ghost => cx.theme().secondary_foreground,
+            Self::Secondary => cx.theme().secondary_foreground,
+            Self::Ghost => cx.theme().foreground,
             Self::Danger => cx.theme().danger,
             Self::Warning => cx.theme().warning,
             Self::Success => cx.theme().success,
@@ -814,13 +815,7 @@ impl ButtonVariant {
                     colors.color.mix_oklab(cx.theme().transparent, 0.3)
                 }
             }
-            Self::Ghost => {
-                if cx.theme().mode.is_dark() {
-                    cx.theme().secondary.lighten(0.1).opacity(0.8)
-                } else {
-                    cx.theme().secondary.darken(0.1).opacity(0.8)
-                }
-            }
+            Self::Ghost => cx.theme().accent,
             Self::Link => cx.theme().transparent,
             Self::Text => cx.theme().transparent,
         };
@@ -828,6 +823,7 @@ impl ButtonVariant {
         let border = self.border_color(bg, outline, cx);
         let fg = match self {
             Self::Link => cx.theme().link_hover,
+            Self::Ghost => cx.theme().accent_foreground,
             _ => self.text_color(outline, cx),
         };
 
@@ -856,13 +852,7 @@ impl ButtonVariant {
                 }
             }
             Self::Secondary => cx.theme().secondary_active,
-            Self::Ghost => {
-                if cx.theme().mode.is_dark() {
-                    cx.theme().secondary.lighten(0.2).opacity(0.8)
-                } else {
-                    cx.theme().secondary.darken(0.2).opacity(0.8)
-                }
-            }
+            Self::Ghost => cx.theme().button_primary_active,
             Self::Danger => cx.theme().danger.mix_oklab(cx.theme().transparent, 0.4),
             Self::Warning => cx.theme().warning.mix_oklab(cx.theme().transparent, 0.4),
             Self::Success => cx.theme().success.mix_oklab(cx.theme().transparent, 0.4),
@@ -875,6 +865,7 @@ impl ButtonVariant {
         let fg = match self {
             Self::Link => cx.theme().link_active,
             Self::Text => cx.theme().foreground.opacity(0.7),
+            Self::Ghost => cx.theme().button_primary_foreground,
             _ => self.text_color(outline, cx),
         };
         let underline = self.underline(cx);
@@ -893,7 +884,8 @@ impl ButtonVariant {
         let bg = match self {
             Self::Default => cx.theme().input.mix_oklab(cx.theme().transparent, 0.7),
             Self::Primary => cx.theme().button_primary_active,
-            Self::Secondary | Self::Ghost => cx.theme().secondary_active,
+            Self::Secondary => cx.theme().secondary_active,
+            Self::Ghost => cx.theme().button_primary,
             Self::Danger => cx.theme().danger_active,
             Self::Warning => cx.theme().warning_active,
             Self::Success => cx.theme().success_active,
@@ -907,6 +899,7 @@ impl ButtonVariant {
         let fg = match self {
             Self::Link => cx.theme().link_active,
             Self::Text => cx.theme().foreground.opacity(0.7),
+            Self::Ghost => cx.theme().button_primary_foreground,
             _ => self.text_color(false, cx),
         };
         let underline = self.underline(cx);
