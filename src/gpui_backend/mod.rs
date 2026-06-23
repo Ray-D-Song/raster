@@ -4,6 +4,7 @@
 //! mounting diff application, and owner notifications.
 
 pub mod app;
+pub mod assets;
 pub mod components;
 pub mod config_provider;
 pub mod embedded_themes;

@@ -2,7 +2,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use gpui::{AnyElement, IntoElement, ParentElement, Styled};
 use gpui_component::{
-    Icon, Selectable, Sizable, Size,
+    Selectable, Sizable, Size,
     tab::{Tab, TabBar, TabVariant},
 };
 
@@ -20,7 +20,7 @@ use crate::{
                 bool_prop, component_props, event_handler, number_prop, prop_or_child_text,
                 string_prop,
             },
-            icon::parse_icon_name,
+            icon::icon_from_svg,
         },
         perf::PerfMonitor,
         render_model::{model::RenderModel, style::apply_style},
@@ -197,8 +197,8 @@ fn build_tab_from_text(
     } else {
         tab = tab.label(fallback_index.to_string());
     }
-    if let Some(icon) = string_prop(props, "icon").and_then(|name| parse_icon_name(&name)) {
-        tab = tab.icon(Icon::new(icon));
+    if let Some(icon) = string_prop(props, "iconSvg").map(|svg| icon_from_svg(&svg)) {
+        tab = tab.icon(icon);
     }
     if let Some(variant) = string_prop(props, "variant").and_then(parse_tab_variant) {
         tab = tab.with_variant(variant);

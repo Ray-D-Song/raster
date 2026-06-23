@@ -2,6 +2,7 @@ import { Alert, Button, DatePicker, Icon, Input, Slider, Text, Textarea, View } 
 import { Card } from "../components/Card";
 import { MoodPicker } from "../components/MoodPicker";
 import { vitalityColors } from "../data";
+import { appIcons } from "../icons";
 import { type AppTheme, elevatedShadow, labelCaps, pagePadding } from "../styles";
 import type { NewEntryDraft } from "../types";
 
@@ -79,7 +80,7 @@ export function Entry({ draft, theme, error, onChange, onSubmit, onClearError }:
           <Card theme={theme} style={{ flex: 1, gap: 8, padding: 16 }}>
             <Text style={{ ...labelCaps, color: vitalityColors.outline }}>TIME</Text>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              <Icon name="info" color={vitalityColors.primary} size="small" />
+              <Icon src={appIcons.info} color={vitalityColors.primary} size={14} />
               <Input
                 value={draft.time}
                 onChange={(event) => onChange({ ...draft, time: event.value ?? "" })}
@@ -104,7 +105,7 @@ export function Entry({ draft, theme, error, onChange, onSubmit, onClearError }:
 
         <Button
           label="Save Record"
-          icon="check"
+          icon={appIcons.check}
           variant="primary"
           onClick={onSubmit}
           style={{ height: 56, borderRadius: 999, boxShadow: elevatedShadow }}
@@ -115,7 +116,7 @@ export function Entry({ draft, theme, error, onChange, onSubmit, onClearError }:
         open={error.length > 0}
         title="Check entry"
         description={error}
-        icon="warning"
+        icon={appIcons.warning}
         okText="Got it"
         onOk={onClearError}
         onOpenChange={(event) => {

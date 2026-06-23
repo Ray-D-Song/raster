@@ -1,5 +1,6 @@
 import { Icon, Text, View } from "raster-js/components";
 import { vitalityColors } from "../data";
+import { appIcons } from "../icons";
 import {
   deltaTone,
   entryDelta,
@@ -33,7 +34,7 @@ export function WeightEntryCard({ entry, previous, unit, onClick }: WeightEntryC
       : tone === "down"
         ? vitalityColors.onPrimaryContainer
         : vitalityColors.onSurfaceVariant;
-  const badgeIcon = tone === "up" ? "arrow-up" : tone === "down" ? "arrow-down" : "dash";
+  const badgeIcon = tone === "up" ? appIcons.arrowUp : tone === "down" ? appIcons.arrowDown : appIcons.horizontalRule;
 
   return (
     <View
@@ -64,7 +65,7 @@ export function WeightEntryCard({ entry, previous, unit, onClick }: WeightEntryC
               backgroundColor: badgeBackground,
             }}
           >
-            <Icon name={badgeIcon} color={badgeForeground} size="small" />
+            <Icon src={badgeIcon} color={badgeForeground} size={14} />
             <Text style={{ ...labelCaps, color: badgeForeground }}>{formatWeightDelta(delta, unit)}</Text>
           </View>
         ) : null}

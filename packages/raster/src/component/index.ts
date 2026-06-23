@@ -3,6 +3,12 @@ import { Children, forwardRef, isValidElement, useEffect, useImperativeHandle, u
 import { jsx } from "react/jsx-runtime";
 
 import { ConfigProvider, Input, Label, Text, Textarea, View, Widget } from "../core/components/index.js";
+import {
+  attachIconSvgProp,
+  normalizeIconSrc,
+  type IconifyIcon,
+  type IconSrc,
+} from "../icons/iconify.js";
 import { useTheme } from "../core/theme.js";
 import type {
   ButtonCustomVariant,
@@ -15,7 +21,6 @@ import type {
   ConfigProviderProps,
   FieldAlign,
   GenericComponentProps,
-  IconName,
   InputProps,
   JsonObject,
   JsonValue,
@@ -62,7 +67,6 @@ export type {
   ConfigProviderProps,
   FieldAlign,
   GenericComponentProps,
-  IconName,
   InputProps,
   LabelProps,
   RasterNotificationShowOptions,
@@ -175,14 +179,14 @@ export interface AvatarProps extends ComponentBaseProps {
   name?: JsonValue;
   src?: string;
   size?: ComponentSize;
-  placeholder?: IconName;
+  placeholder?: IconSrc;
 }
 
 export interface AvatarSpec {
   name?: JsonValue;
   src?: string;
-  placeholder?: IconName;
-  icon?: IconName;
+  placeholder?: IconSrc;
+  icon?: IconSrc;
 }
 
 export interface AvatarGroupProps extends ComponentBaseProps {
@@ -223,16 +227,16 @@ export interface AppShellTabBarProps {
 export interface AppShellTabProps {
   value: string;
   label: string;
-  icon?: IconName;
-  activeIcon?: IconName;
-  inactiveIcon?: IconName;
+  icon?: IconSrc;
+  activeIcon?: IconSrc;
+  inactiveIcon?: IconSrc;
   disabled?: boolean;
 }
 
 export interface AppShellTabRenderProps {
   value: string;
   label: string;
-  icon?: IconName;
+  icon?: IconSrc;
   selected: boolean;
   disabled: boolean;
   color: string;
@@ -247,7 +251,7 @@ export interface ButtonProps extends ComponentBaseProps {
   disabled?: boolean;
   selected?: boolean;
   loading?: boolean;
-  loadingIcon?: IconName;
+  loadingIcon?: IconSrc;
   compact?: boolean;
   outline?: boolean;
   rounded?: ButtonRounded;
@@ -255,7 +259,7 @@ export interface ButtonProps extends ComponentBaseProps {
   tabIndex?: number;
   tabStop?: boolean;
   tooltip?: string;
-  icon?: IconName;
+  icon?: IconSrc;
   customVariant?: ButtonCustomVariant;
   onClick?: RasterEventHandler<string>;
   onHover?: RasterEventHandler<boolean | string>;
@@ -287,7 +291,7 @@ export interface AlertProps extends ComponentBaseProps {
   open?: boolean;
   title?: JsonValue;
   description?: JsonValue;
-  icon?: IconName;
+  icon?: IconSrc;
   showCancel?: boolean;
   okText?: JsonValue;
   cancelText?: JsonValue;
@@ -332,7 +336,7 @@ export interface ColorPickerProps extends ComponentBaseProps {
   defaultValue?: string;
   featuredColors?: string[];
   label?: JsonValue;
-  icon?: IconName;
+  icon?: IconSrc;
   size?: ComponentSize;
   anchor?: ColorPickerAnchor;
   onChange?: RasterEventHandler<ColorPickerChangePayload>;
@@ -505,13 +509,34 @@ export interface FieldProps extends ComponentBaseProps {
 }
 
 export interface IconProps extends ComponentBaseProps {
-  name?: IconName;
-  icon?: IconName;
-  path?: string;
+  src?: IconSrc;
   empty?: boolean;
   rotate?: number;
-  size?: ComponentSize;
+  size?: number;
+  width?: number;
+  height?: number;
   color?: string;
+}
+
+export type { IconifyIcon, IconSrc } from "../icons/iconify.js";
+export { attachIconSvgProp, iconifyIconToSvg, normalizeIconSrc } from "../icons/iconify.js";
+
+function componentSizeToPx(size: ComponentSize): number {
+  switch (size) {
+    case "xs":
+    case "xsmall":
+      return 12;
+    case "sm":
+    case "small":
+      return 14;
+    case "lg":
+    case "large":
+      return 24;
+    case "md":
+    case "medium":
+    default:
+      return 16;
+  }
 }
 
 export interface RadioProps extends ComponentBaseProps {
@@ -542,7 +567,7 @@ export interface CollectionItem {
   id?: CollectionItemId;
   label?: JsonValue;
   description?: JsonValue;
-  icon?: IconName;
+  icon?: IconSrc;
   disabled?: boolean;
   value?: JsonValue;
   badge?: JsonValue;
@@ -631,7 +656,7 @@ export interface SwitchProps extends ComponentBaseProps {
 
 export interface TabProps extends ComponentBaseProps {
   label?: JsonValue;
-  icon?: IconName;
+  icon?: IconSrc;
   variant?: TabVariant;
   size?: ComponentSize;
   disabled?: boolean;
@@ -727,13 +752,52 @@ export function createComponent<P extends ComponentBaseProps = GenericComponentP
   return RasterComponent;
 }
 
-export const Avatar = createComponent<AvatarProps>("Avatar");
-export const AvatarGroup = createComponent<AvatarGroupProps>("AvatarGroup");
-export const Alert = createComponent<AlertProps>("Alert");
-export const Button = createComponent<ButtonProps>("Button");
+function normalizeAvatarSpecEntry(entry: string | AvatarSpec): string | AvatarSpec {
+  if (typeof entry === "string") {
+    return entry;
+  }
+  const spec = { ...entry } as AvatarSpec & Record<string, unknown>;
+  attachIconSvgProp(spec, "placeholder");
+  attachIconSvgProp(spec, "icon");
+  return spec as AvatarSpec;
+}
+
+export function Avatar(input: AvatarProps): ReactElement {
+  const { props, style, children, events, queries } = splitComponentProps(input);
+  attachIconSvgProp(props, "placeholder");
+  return jsx(Widget, { name: "Avatar", props, queries, style, children, ...events });
+}
+
+export function AvatarGroup(input: AvatarGroupProps): ReactElement {
+  const { avatars, items, ...rest } = input;
+  const normalized: AvatarGroupProps = {
+    ...rest,
+    ...(avatars != null ? { avatars: avatars.map(normalizeAvatarSpecEntry) } : {}),
+    ...(items != null ? { items: items.map(normalizeAvatarSpecEntry) } : {}),
+  };
+  const { props, style, children, events, queries } = splitComponentProps(normalized);
+  return jsx(Widget, { name: "AvatarGroup", props, queries, style, children, ...events });
+}
+
+export function Alert(input: AlertProps): ReactElement {
+  const { props, style, children, events, queries } = splitComponentProps(input);
+  attachIconSvgProp(props, "icon");
+  return jsx(Widget, { name: "Alert", props, queries, style, children, ...events });
+}
+
+export function Button(input: ButtonProps): ReactElement {
+  const { props, style, children, events, queries } = splitComponentProps(input);
+  attachIconSvgProp(props, "icon");
+  attachIconSvgProp(props, "loadingIcon");
+  return jsx(Widget, { name: "Button", props, queries, style, children, ...events });
+}
 export const ButtonGroup = createComponent<ButtonGroupProps>("ButtonGroup");
 export const Checkbox = createComponent<CheckboxProps>("Checkbox");
-export const ColorPicker = createComponent<ColorPickerProps>("ColorPicker");
+export function ColorPicker(input: ColorPickerProps): ReactElement {
+  const { props, style, children, events, queries } = splitComponentProps(input);
+  attachIconSvgProp(props, "icon");
+  return jsx(Widget, { name: "ColorPicker", props, queries, style, children, ...events });
+}
 export const DatePicker = createComponent<DatePickerProps>("DatePicker");
 export const Dialog = createComponent<DialogProps>("Dialog");
 
@@ -878,7 +942,7 @@ export function AppShellTab(_props: AppShellTabProps): null {
 
 function renderDefaultAppShellTabIcon({ icon, iconSize, color }: AppShellTabRenderProps): ReactNode {
   if (icon == null) return null;
-  return jsx(Icon, { name: icon, size: iconSize, color }, "icon");
+  return jsx(Icon, { src: icon, size: componentSizeToPx(iconSize), color }, "icon");
 }
 
 function renderDefaultAppShellTabLabel(
@@ -1048,14 +1112,46 @@ export function Field({
   });
 }
 export const Form = createComponent<FormProps>("Form");
-export const Icon = createComponent<IconProps>("Icon");
+
+export function Icon(input: IconProps): ReactElement {
+  const { src, size, width, height, ...rest } = input;
+  const { props, style, children, events, queries } = splitComponentProps(rest);
+
+  const svg = src == null ? undefined : normalizeIconSrc(src);
+  if (svg != null) {
+    props.svg = svg;
+  }
+  if (size != null) {
+    props.size = size;
+  }
+  if (width != null) {
+    props.width = width;
+  }
+  if (height != null) {
+    props.height = height;
+  }
+
+  return jsx(Widget, {
+    name: "Icon",
+    props,
+    queries,
+    style,
+    children,
+    ...events,
+  });
+}
+
 export const Radio = createComponent<RadioProps>("Radio");
 export const RadioGroup = createComponent<RadioGroupProps>("RadioGroup");
 export const Select = createComponent<SelectProps>("Select");
 export const Sheet = createComponent<SheetProps>("Sheet");
 export const Slider = createComponent<SliderProps>("Slider");
 export const Switch = createComponent<SwitchProps>("Switch");
-export const Tab = createComponent<TabProps>("Tab");
+export function Tab(input: TabProps): ReactElement {
+  const { props, style, children, events, queries } = splitComponentProps(input);
+  attachIconSvgProp(props, "icon");
+  return jsx(Widget, { name: "Tab", props, queries, style, children, ...events });
+}
 export const TabBar = createComponent<TabBarProps>("TabBar");
 
 const VirtualListHost = createComponent<VirtualListProps>("VirtualList");

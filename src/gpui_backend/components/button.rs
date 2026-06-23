@@ -12,8 +12,12 @@ use crate::{
         mount::{NodeValue, RetainedNodeKind},
     },
     gpui_backend::{
-        components::helper::props::{
-            bool_prop, component_props, event_handler, number_prop, prop_or_child_text, string_prop,
+        components::{
+            helper::props::{
+                bool_prop, component_props, event_handler, number_prop, prop_or_child_text,
+                string_prop,
+            },
+            icon::icon_from_svg,
         },
         render_model::{model::RenderModel, style::apply_style},
         retained_tree::node::RetainedNode,
@@ -74,6 +78,9 @@ pub fn render_button_from_node<'a>(
     }
     if let Some(tooltip) = string_prop(props, "tooltip") {
         button = button.tooltip(tooltip);
+    }
+    if let Some(icon) = string_prop(props, "iconSvg").map(|svg| icon_from_svg(&svg)) {
+        button = button.icon(icon);
     }
     if let Some(handler_id) = event_handler(node, "onClick") {
         button = button.on_click(move |_event, _window, _cx| {

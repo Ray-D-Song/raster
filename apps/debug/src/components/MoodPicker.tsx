@@ -1,6 +1,7 @@
 import { Icon, Text, View } from "raster-js/components";
-import type { IconName } from "raster-js/components";
+import type { IconifyIcon } from "raster-js/components";
 import { vitalityColors } from "../data";
+import { appIcons } from "../icons";
 import { cardShadow, row } from "../styles";
 import type { Mood } from "../types";
 
@@ -9,12 +10,12 @@ interface MoodPickerProps {
   onChange: (mood: Mood) => void;
 }
 
-const moodOptions: Array<{ id: Mood; icon: IconName }> = [
-  { id: "great", icon: "star" },
-  { id: "good", icon: "thumbs-up" },
-  { id: "neutral", icon: "dash" },
-  { id: "bloated", icon: "info" },
-  { id: "tired", icon: "thumbs-down" },
+const moodOptions: Array<{ id: Mood; icon: IconifyIcon }> = [
+  { id: "great", icon: appIcons.star },
+  { id: "good", icon: appIcons.thumbUp },
+  { id: "neutral", icon: appIcons.horizontalRule },
+  { id: "bloated", icon: appIcons.info },
+  { id: "tired", icon: appIcons.thumbDown },
 ];
 
 export function MoodPicker({ value, onChange }: MoodPickerProps) {
@@ -49,9 +50,9 @@ export function MoodPicker({ value, onChange }: MoodPickerProps) {
               }}
             >
               <Icon
-                name={option.icon}
+                src={option.icon}
                 color={selected ? vitalityColors.primary : vitalityColors.outline}
-                size="large"
+                size={24}
               />
             </View>
           );

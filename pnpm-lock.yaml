@@ -31,6 +31,9 @@ importers:
 
   apps/debug:
     dependencies:
+      '@iconify-icons/material-symbols':
+        specifier: ^1.2.58
+        version: 1.2.58
       raster-js:
         specifier: workspace:*
         version: link:../../packages/raster
@@ -566,6 +569,12 @@ packages:
 
   '@expressive-code/plugin-text-markers@0.42.0':
     resolution: {integrity: sha512-l59lUx8fq1v5g6SpmbDjiU0+7IdfbiWnAyRmtTVSpfhyq+nZMN4UcmYyu2b9Mynhzt7Gr+O+cXyEPDNb2AVWVQ==}
+
+  '@iconify-icons/material-symbols@1.2.58':
+    resolution: {integrity: sha512-v0ZfPXlmDcDPCejxhg5h2eHCEHClrpn+i44Ev766vkzPIEFRdgT+YK942KzyqBpH0RhKJfel4OZdL1DY1oa5Qg==}
+
+  '@iconify/types@2.0.0':
+    resolution: {integrity: sha512-+wluvCrRhXrhyOmRDJ3q8mux9JkKy5SJ/v8ol2tu4FVjyYvtEzkc/3pK15ET6RKg4b4w4BmTk1+gsCUhf21Ykg==}
 
   '@img/colour@1.1.0':
     resolution: {integrity: sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ==}
@@ -2730,6 +2739,12 @@ snapshots:
   '@expressive-code/plugin-text-markers@0.42.0':
     dependencies:
       '@expressive-code/core': 0.42.0
+
+  '@iconify-icons/material-symbols@1.2.58':
+    dependencies:
+      '@iconify/types': 2.0.0
+
+  '@iconify/types@2.0.0': {}
 
   '@img/colour@1.1.0': {}
 

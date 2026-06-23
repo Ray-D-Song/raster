@@ -2,7 +2,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use gpui::{App, ParentElement, Window, div, px};
 use gpui_component::{
-    Icon, WindowExt,
+    WindowExt,
     dialog::{AlertDialog, DialogButtonProps},
 };
 
@@ -17,7 +17,7 @@ use crate::{
         components::{
             button::parse_button_variant,
             helper::props::{bool_prop, component_props, event_handler, number_prop, string_prop},
-            icon::parse_icon_name,
+            icon::icon_from_svg,
             internal::controlled_dialog::{
                 ControlledDialogState, dispatch_open_change, dispatch_string_event,
             },
@@ -132,7 +132,7 @@ impl AlertConfig {
         Self {
             title: string_prop(props, "title"),
             description: string_prop(props, "description"),
-            icon: string_prop(props, "icon"),
+            icon: string_prop(props, "iconSvg"),
             show_cancel: bool_prop(props, "showCancel").unwrap_or(false),
             ok_text: string_prop(props, "okText"),
             cancel_text: string_prop(props, "cancelText"),
@@ -232,12 +232,7 @@ fn apply_config(mut alert: AlertDialog, config: &AlertConfig) -> AlertDialog {
     if let Some(description) = config.description.clone() {
         alert = alert.description(div().child(description));
     }
-    if let Some(icon) = config
-        .icon
-        .as_deref()
-        .and_then(parse_icon_name)
-        .map(Icon::new)
-    {
+    if let Some(icon) = config.icon.as_deref().map(icon_from_svg) {
         alert = alert.icon(icon);
     }
 

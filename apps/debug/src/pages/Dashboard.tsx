@@ -11,6 +11,7 @@ import {
   lastSevenDays,
   weekChange,
 } from "../model";
+import { appIcons } from "../icons";
 import { type AppTheme, elevatedShadow, labelCaps, pagePadding, row, secondaryText, spaceBetween } from "../styles";
 import type { AppTab, UserSettings, WeightEntry } from "../types";
 
@@ -57,7 +58,7 @@ export function Dashboard({ entries, settings, theme, onNavigate }: DashboardPro
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 16 }}>
           <Card theme={theme} style={{ flex: 1, minWidth: 140, height: 128, justifyContent: "space-between" }}>
             <View style={spaceBetween}>
-              <Icon name="chart-pie" color={vitalityColors.secondary} size="medium" />
+              <Icon src={appIcons.pieChart} color={vitalityColors.secondary} size={16} />
               <Text style={{ ...labelCaps, color: vitalityColors.onSurfaceVariant }}>BMI</Text>
             </View>
             <View style={{ gap: 2 }}>
@@ -68,7 +69,7 @@ export function Dashboard({ entries, settings, theme, onNavigate }: DashboardPro
 
           <Card theme={theme} style={{ flex: 1, minWidth: 140, height: 128, justifyContent: "space-between" }}>
             <View style={spaceBetween}>
-              <Icon name="arrow-down" color={vitalityColors.error} size="medium" />
+              <Icon src={appIcons.arrowDown} color={vitalityColors.error} size={16} />
               <Text style={{ ...labelCaps, color: vitalityColors.onSurfaceVariant }}>THIS WEEK</Text>
             </View>
             <View style={{ gap: 2 }}>
@@ -89,7 +90,7 @@ export function Dashboard({ entries, settings, theme, onNavigate }: DashboardPro
               </Text>
               <Text style={{ fontSize: 14, color: "rgba(0, 87, 77, 0.8)" }}>Keep moving, you're on fire!</Text>
             </View>
-            <Icon name="star" color={vitalityColors.onPrimaryContainer} size="large" />
+            <Icon src={appIcons.star} color={vitalityColors.onPrimaryContainer} size={24} />
           </Card>
         </View>
 
@@ -129,7 +130,7 @@ export function Dashboard({ entries, settings, theme, onNavigate }: DashboardPro
 
         <Button
           label="Log weight"
-          icon="plus"
+          icon={appIcons.add}
           variant="primary"
           onClick={() => onNavigate("entry")}
           style={{ alignSelf: "center", boxShadow: elevatedShadow }}

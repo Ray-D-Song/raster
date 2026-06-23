@@ -20,6 +20,7 @@ use gpui::{
 use gpui::{Bounds, SharedString, TitlebarOptions, WindowBounds, px, size};
 use gpui_component::ActiveTheme;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+use crate::gpui_backend::assets::RasterAssets;
 use gpui_component_assets::Assets;
 
 use crate::{
@@ -102,7 +103,7 @@ pub fn start_desktop(
 ) {
     logger::info("gpui_backend initialize start");
     gpui_platform::application()
-        .with_assets(Assets)
+        .with_assets(RasterAssets::new(Assets))
         .with_quit_mode(QuitMode::LastWindowClosed)
         .run(move |cx: &mut App| {
             if let Some(config) = &dev_reload {

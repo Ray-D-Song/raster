@@ -16,7 +16,7 @@ use crate::{
     gpui_backend::{
         components::{
             helper::props::{component_props, display_value, event_handler, string_prop},
-            icon::parse_icon_name,
+            icon::icon_from_svg,
         },
         render_model::{
             model::RenderModel,
@@ -124,7 +124,7 @@ pub(in crate::gpui_backend) fn render_color_picker_from_node(
     if let Some(label) = props.get("label").map(display_value) {
         color_picker = color_picker.label(label);
     }
-    if let Some(icon) = string_prop(props, "icon").and_then(|value| parse_icon_name(&value)) {
+    if let Some(icon) = string_prop(props, "iconSvg").map(|svg| icon_from_svg(&svg)) {
         color_picker = color_picker.icon(icon);
     }
     if let Some(size) = string_prop(props, "size") {

@@ -1,8 +1,10 @@
 import type { ReactNode } from "react";
 import { Avatar, Button, ButtonGroup, Icon, Input, Switch, Text, View } from "raster-js/components";
-import type { IconName } from "raster-js/components";
+import type { IconifyIcon } from "raster-js/components";
 import { Card } from "../components/Card";
+import { SectionTitle } from "../components/SectionTitle";
 import { userProfile, vitalityColors } from "../data";
+import { appIcons } from "../icons";
 import { type AppTheme, labelCaps, pagePadding, spaceBetween } from "../styles";
 import type { UserSettings, WeeklyGoal, WeightUnit } from "../types";
 
@@ -18,7 +20,7 @@ const weeklyGoalOptions: WeeklyGoal[] = [0.25, 0.5, 1.0];
 const preferenceDivider = "rgba(186, 202, 197, 0.2)";
 
 interface PreferenceRowProps {
-  icon: IconName;
+  icon: IconifyIcon;
   label: string;
   control: ReactNode;
   bordered?: boolean;
@@ -43,7 +45,7 @@ function PreferenceRow({ icon, label, control, bordered = false }: PreferenceRow
             flexShrink: 0,
           }}
         >
-          <Icon name={icon} color={vitalityColors.outline} size="medium" />
+          <Icon src={icon} color={vitalityColors.outline} size={16} />
         </View>
         <Text style={{ fontSize: 16 }}>{label}</Text>
       </View>
@@ -75,16 +77,13 @@ export function Settings({ settings, theme, entryCount, onChange }: SettingsProp
             </View>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 4, margin: { top: 12 } }}>
               <Text style={{ fontSize: 16, fontWeight: "600", color: vitalityColors.primary }}>Edit Profile</Text>
-              <Icon name="settings" color={vitalityColors.primary} size="small" />
+              <Icon src={appIcons.settings} color={vitalityColors.primary} size={14} />
             </View>
           </Card>
         </View>
 
         <View style={{ gap: 16 }}>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-            <Icon name="chart-pie" color={vitalityColors.primary} size="medium" />
-            <Text style={{ fontSize: 20, fontWeight: "600", color: vitalityColors.onSurface }}>Goal Settings</Text>
-          </View>
+          <SectionTitle src={appIcons.pieChart} title="Goal Settings" />
           <Card theme={theme} style={{ gap: 24 }}>
             <View
               style={{
@@ -164,15 +163,12 @@ export function Settings({ settings, theme, entryCount, onChange }: SettingsProp
         </View>
 
         <View style={{ gap: 16 }}>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-            <Icon name="settings" color={vitalityColors.primary} size="medium" />
-            <Text style={{ fontSize: 20, fontWeight: "600", color: vitalityColors.onSurface }}>Preferences</Text>
-          </View>
+          <SectionTitle src={appIcons.settings} title="Preferences" />
           <Card theme={theme} style={{ gap: 0, padding: {
             top: 8, right: 20, bottom: 8, left: 20
           } }}>
             <PreferenceRow
-              icon="bell"
+              icon={appIcons.notifications}
               label="Daily Reminders"
               control={
                 <Switch
@@ -182,7 +178,7 @@ export function Settings({ settings, theme, entryCount, onChange }: SettingsProp
               }
             />
             <PreferenceRow
-              icon="info"
+              icon={appIcons.info}
               label="Units of Measure"
               bordered
               control={
@@ -199,7 +195,7 @@ export function Settings({ settings, theme, entryCount, onChange }: SettingsProp
               }
             />
             <PreferenceRow
-              icon="moon"
+              icon={appIcons.darkMode}
               label="Dark Mode"
               bordered
               control={
@@ -215,8 +211,8 @@ export function Settings({ settings, theme, entryCount, onChange }: SettingsProp
         </View>
 
         <View style={{ gap: 12 }}>
-          <Button label="Export CSV Data" icon="external-link" variant="primary" outline />
-          <Button label="Delete All Data" icon="delete" variant="danger" />
+          <Button label="Export CSV Data" icon={appIcons.openInNew} variant="primary" outline />
+          <Button label="Delete All Data" icon={appIcons.delete} variant="danger" />
           <Text style={{ fontSize: 12, color: vitalityColors.onSurfaceVariant }}>
             Debug build keeps {entryCount} weight entries in memory.
           </Text>

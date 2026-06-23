@@ -2,7 +2,7 @@ use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use gpui::{AlignSelf, AnyElement, IntoElement, Styled as _};
 use gpui_component::{
-    Icon, Sizable, Size,
+    Sizable, Size,
     avatar::{Avatar, AvatarGroup},
 };
 
@@ -12,7 +12,7 @@ use crate::{
         components::helper::props::{
             bool_prop, component_props, display_value, number_prop, string_prop,
         },
-        components::icon::parse_icon_name,
+        components::icon::icon_from_svg,
         render_model::{model::RenderModel, style::apply_style},
         retained_tree::{node::RetainedNode, tree::RetainedTree},
     },
@@ -112,11 +112,11 @@ fn avatar_from_spec(value: &NodeValue) -> Option<Avatar> {
             if let Some(name) = string_prop(spec, "name") {
                 avatar = avatar.name(name);
             }
-            if let Some(icon) = string_prop(spec, "placeholder")
-                .or_else(|| string_prop(spec, "icon"))
-                .and_then(|name| parse_icon_name(&name))
+            if let Some(icon) = string_prop(spec, "placeholderSvg")
+                .or_else(|| string_prop(spec, "iconSvg"))
+                .map(|svg| icon_from_svg(&svg))
             {
-                avatar = avatar.placeholder(Icon::new(icon));
+                avatar = avatar.placeholder(icon);
             }
             Some(avatar)
         }
@@ -133,8 +133,8 @@ fn build_avatar(node: &RetainedNode) -> Avatar {
     if let Some(name) = string_prop(props, "name") {
         avatar = avatar.name(name);
     }
-    if let Some(icon) = string_prop(props, "placeholder").and_then(|name| parse_icon_name(&name)) {
-        avatar = avatar.placeholder(Icon::new(icon));
+    if let Some(icon) = string_prop(props, "placeholderSvg").map(|svg| icon_from_svg(&svg)) {
+        avatar = avatar.placeholder(icon);
     }
     if let Some(size) = string_prop(props, "size").map(|value| Size::from_str(&value)) {
         avatar = avatar.with_size(size);

@@ -2,6 +2,7 @@ import { Button, ButtonGroup, Icon, Text, View } from "raster-js/components";
 import { Card } from "../components/Card";
 import { WeightEntryCard } from "../components/WeightEntryCard";
 import { vitalityColors } from "../data";
+import { appIcons } from "../icons";
 import { entriesForMonth, previousEntry, sortEntries } from "../model";
 import { type AppTheme, labelCaps, pagePadding, spaceBetween } from "../styles";
 import type { SortOrder, WeightEntry, WeightUnit } from "../types";
@@ -72,10 +73,10 @@ export function History({
             </Text>
             <View style={{ flexDirection: "row", gap: 8 }}>
               <View onClick={() => onMonthChange(-1)} style={{ padding: 8, borderRadius: 999 }}>
-                <Icon name="chevron-left" color={vitalityColors.primary} size="medium" />
+                <Icon src={appIcons.chevronLeft} color={vitalityColors.primary} size={16} />
               </View>
               <View onClick={() => onMonthChange(1)} style={{ padding: 8, borderRadius: 999 }}>
-                <Icon name="chevron-right" color={vitalityColors.primary} size="medium" />
+                <Icon src={appIcons.chevronRight} color={vitalityColors.primary} size={16} />
               </View>
             </View>
           </View>
