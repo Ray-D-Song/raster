@@ -138,7 +138,8 @@ export function History({
           <Text style={{ fontSize: 20, fontWeight: "600", color: vitalityColors.onSurface }}>Detailed Logs</Text>
           <ButtonGroup
             value={sortOrder}
-            variant="secondary"
+            variant="primary"
+            outline
             size="small"
             onChange={(value) => onSortChange(String(value ?? "newest") as SortOrder)}
           >

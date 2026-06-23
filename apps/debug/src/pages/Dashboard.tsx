@@ -82,7 +82,7 @@ export function Dashboard({ entries, settings, theme, onNavigate }: DashboardPro
           </Card>
 
           <Card theme={theme} tinted style={{ width: "100%", flexDirection: "row", alignItems: "center" }}>
-            <View style={{ flex: 1, gap: 4 }}>
+            <View style={{ flex: 1, gap: 12 }}>
               <Text style={{ ...labelCaps, color: "rgba(0, 87, 77, 0.7)" }}>ACTIVITY STREAK</Text>
               <Text style={{ fontSize: 36, fontWeight: "700", color: vitalityColors.onPrimaryContainer }}>
                 {activityStreakDays} Days

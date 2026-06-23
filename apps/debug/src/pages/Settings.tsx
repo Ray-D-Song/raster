@@ -1,4 +1,6 @@
+import type { ReactNode } from "react";
 import { Avatar, Button, ButtonGroup, Icon, Input, Switch, Text, View } from "raster-js/components";
+import type { IconName } from "raster-js/components";
 import { Card } from "../components/Card";
 import { userProfile, vitalityColors } from "../data";
 import { type AppTheme, labelCaps, pagePadding, spaceBetween } from "../styles";
@@ -12,6 +14,43 @@ interface SettingsProps {
 }
 
 const weeklyGoalOptions: WeeklyGoal[] = [0.25, 0.5, 1.0];
+
+const preferenceDivider = "rgba(186, 202, 197, 0.2)";
+
+interface PreferenceRowProps {
+  icon: IconName;
+  label: string;
+  control: ReactNode;
+  bordered?: boolean;
+}
+
+function PreferenceRow({ icon, label, control, bordered = false }: PreferenceRowProps) {
+  return (
+    <View
+      style={{
+        ...spaceBetween,
+        padding: { top: 16, bottom: 16 },
+        ...(bordered ? { borderTopWidth: 1, borderColor: preferenceDivider } : {}),
+      }}
+    >
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 16, flex: 1, minWidth: 0 }}>
+        <View
+          style={{
+            width: 24,
+            height: 24,
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+          }}
+        >
+          <Icon name={icon} color={vitalityColors.outline} size="medium" />
+        </View>
+        <Text style={{ fontSize: 16 }}>{label}</Text>
+      </View>
+      <View style={{ flexShrink: 0, margin: { left: 16 } }}>{control}</View>
+    </View>
+  );
+}
 
 export function Settings({ settings, theme, entryCount, onChange }: SettingsProps) {
   return (
@@ -129,51 +168,54 @@ export function Settings({ settings, theme, entryCount, onChange }: SettingsProp
             <Icon name="settings" color={vitalityColors.primary} size="medium" />
             <Text style={{ fontSize: 20, fontWeight: "600", color: vitalityColors.onSurface }}>Preferences</Text>
           </View>
-          <Card theme={theme} style={{ gap: 4 }}>
-            <View style={{ ...spaceBetween, padding: { top: 12, bottom: 12 } }}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 16 }}>
-                <Icon name="bell" color={vitalityColors.outline} size="medium" />
-                <Text style={{ fontSize: 16 }}>Daily Reminders</Text>
-              </View>
-              <Switch
-                checked={settings.dailyReminders}
-                onChange={(value) => onChange({ ...settings, dailyReminders: value === true })}
-              />
-            </View>
-
-            <View style={{ ...spaceBetween, padding: { top: 12, bottom: 12 }, borderTopWidth: 1, borderColor: "rgba(186, 202, 197, 0.2)" }}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 16 }}>
-                <Icon name="info" color={vitalityColors.outline} size="medium" />
-                <Text style={{ fontSize: 16 }}>Units of Measure</Text>
-              </View>
-              <ButtonGroup
-                value={settings.unit}
-                variant="secondary"
-                size="small"
-                onChange={(value) => onChange({ ...settings, unit: String(value ?? "kg") as WeightUnit })}
-              >
-                <Button label="KG" value="kg" />
-                <Button label="LB" value="lb" />
-              </ButtonGroup>
-            </View>
-
-            <View style={{ ...spaceBetween, padding: { top: 12, bottom: 12 }, borderTopWidth: 1, borderColor: "rgba(186, 202, 197, 0.2)" }}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 16 }}>
-                <Icon name="moon" color={vitalityColors.outline} size="medium" />
-                <Text style={{ fontSize: 16 }}>Dark Mode</Text>
-              </View>
-              <Switch
-                checked={settings.darkMode}
-                onChange={(value) =>
-                  onChange({ ...settings, darkMode: value === true, theme: value === true ? "dark" : "light" })
-                }
-              />
-            </View>
+          <Card theme={theme} style={{ gap: 0, padding: {
+            top: 8, right: 20, bottom: 8, left: 20
+          } }}>
+            <PreferenceRow
+              icon="bell"
+              label="Daily Reminders"
+              control={
+                <Switch
+                  checked={settings.dailyReminders}
+                  onChange={(value) => onChange({ ...settings, dailyReminders: value === true })}
+                />
+              }
+            />
+            <PreferenceRow
+              icon="info"
+              label="Units of Measure"
+              bordered
+              control={
+                <ButtonGroup
+                  value={settings.unit}
+                  variant="primary"
+                  outline
+                  size="small"
+                  onChange={(value) => onChange({ ...settings, unit: String(value ?? "kg") as WeightUnit })}
+                >
+                  <Button label="KG" value="kg" />
+                  <Button label="LB" value="lb" />
+                </ButtonGroup>
+              }
+            />
+            <PreferenceRow
+              icon="moon"
+              label="Dark Mode"
+              bordered
+              control={
+                <Switch
+                  checked={settings.darkMode}
+                  onChange={(value) =>
+                    onChange({ ...settings, darkMode: value === true, theme: value === true ? "dark" : "light" })
+                  }
+                />
+              }
+            />
           </Card>
         </View>
 
         <View style={{ gap: 12 }}>
-          <Button label="Export CSV Data" icon="external-link" variant="secondary" />
+          <Button label="Export CSV Data" icon="external-link" variant="primary" outline />
           <Button label="Delete All Data" icon="delete" variant="danger" />
           <Text style={{ fontSize: 12, color: vitalityColors.onSurfaceVariant }}>
             Debug build keeps {entryCount} weight entries in memory.

@@ -28,6 +28,7 @@ export const vitalityTheme: RasterThemeConfig = {
     danger: vitalityColors.error,
     success: vitalityColors.primaryContainer,
     info: vitalityColors.secondary,
+    switch: vitalityColors.outlineVariant,
   },
 };
 

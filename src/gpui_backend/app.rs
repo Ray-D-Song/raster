@@ -57,6 +57,7 @@ use crate::{
             },
             select::{RasterSelectState, is_select_node, render_select_from_node},
             sheet::{RasterSheetState, SheetRenderContext, is_sheet_node},
+            slider::{RasterSliderState, is_slider_node, render_slider_from_node},
             switch::{is_switch_node, render_switch_from_node},
             tab::{is_tab_bar_node, is_tab_node, render_tab_bar_from_node, render_tab_from_node},
             text_and_label::{
@@ -537,6 +538,7 @@ impl OwnerRegistry {
                 select_state: None,
                 color_picker_state: None,
                 date_picker_state: None,
+                slider_state: None,
                 chart_state: None,
                 virtual_list_state: None,
                 runtime_commands,
@@ -715,6 +717,7 @@ pub(super) struct NodeOwnerView {
     select_state: Option<RasterSelectState>,
     color_picker_state: Option<RasterColorPickerState>,
     date_picker_state: Option<RasterDatePickerState>,
+    slider_state: Option<RasterSliderState>,
     chart_state: Option<RasterChartState>,
     virtual_list_state: Option<RasterVirtualListState>,
     runtime_commands: ChannelSender<RuntimeCommand>,
@@ -729,6 +732,7 @@ impl Render for NodeOwnerView {
                 self.select_state = None;
                 self.color_picker_state = None;
                 self.date_picker_state = None;
+                self.slider_state = None;
                 self.chart_state = None;
                 self.virtual_list_state = None;
                 let dispatcher = event_dispatcher(self.runtime_commands.clone(), self.root.clone());
@@ -749,6 +753,7 @@ impl Render for NodeOwnerView {
                 self.input_state = None;
                 self.color_picker_state = None;
                 self.date_picker_state = None;
+                self.slider_state = None;
                 self.chart_state = None;
                 self.virtual_list_state = None;
                 if self
@@ -773,6 +778,7 @@ impl Render for NodeOwnerView {
                 self.input_state = None;
                 self.select_state = None;
                 self.date_picker_state = None;
+                self.slider_state = None;
                 self.chart_state = None;
                 self.virtual_list_state = None;
                 if self
@@ -799,6 +805,7 @@ impl Render for NodeOwnerView {
                 self.input_state = None;
                 self.select_state = None;
                 self.color_picker_state = None;
+                self.slider_state = None;
                 self.chart_state = None;
                 self.virtual_list_state = None;
                 if self
@@ -821,11 +828,36 @@ impl Render for NodeOwnerView {
                         return decorate_refresh(date_picker, highlight);
                     }
                 }
+            } else if is_slider_node(&node) {
+                self.input_state = None;
+                self.select_state = None;
+                self.color_picker_state = None;
+                self.date_picker_state = None;
+                self.chart_state = None;
+                self.virtual_list_state = None;
+                if self
+                    .slider_state
+                    .as_ref()
+                    .is_none_or(|state| !state.matches_config(&node))
+                {
+                    self.slider_state = Some(RasterSliderState::new(
+                        &node,
+                        self.runtime_commands.clone(),
+                        cx,
+                    ));
+                }
+                if let Some(slider_state) = &mut self.slider_state {
+                    slider_state.sync_from_node(&node, window, cx);
+                    if let Some(slider) = render_slider_from_node(&node, slider_state.slider()) {
+                        return decorate_refresh(slider, highlight);
+                    }
+                }
             } else if is_virtual_list_node(&node) {
                 self.input_state = None;
                 self.select_state = None;
                 self.color_picker_state = None;
                 self.date_picker_state = None;
+                self.slider_state = None;
                 self.chart_state = None;
                 if self.virtual_list_state.is_none() {
                     self.virtual_list_state = Some(RasterVirtualListState::new(&node));
@@ -850,6 +882,7 @@ impl Render for NodeOwnerView {
                 self.select_state = None;
                 self.color_picker_state = None;
                 self.date_picker_state = None;
+                self.slider_state = None;
                 self.virtual_list_state = None;
                 if self
                     .chart_state
@@ -869,6 +902,7 @@ impl Render for NodeOwnerView {
                 self.select_state = None;
                 self.color_picker_state = None;
                 self.date_picker_state = None;
+                self.slider_state = None;
                 self.chart_state = None;
                 self.virtual_list_state = None;
                 if is_button_group_node(&node) {

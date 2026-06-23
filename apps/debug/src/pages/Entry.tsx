@@ -1,4 +1,4 @@
-import { Alert, Button, Icon, Input, Text, Textarea, View } from "raster-js/components";
+import { Alert, Button, Icon, Input, Slider, Text, Textarea, View } from "raster-js/components";
 import { Card } from "../components/Card";
 import { MoodPicker } from "../components/MoodPicker";
 import { vitalityColors } from "../data";
@@ -47,10 +47,12 @@ export function Entry({ draft, theme, error, onChange, onSubmit, onClearError }:
               {Number.isFinite(bodyFat) ? `${bodyFat.toFixed(1)}%` : "—"}
             </Text>
           </View>
-          <Input
-            value={draft.bodyFat}
-            placeholder="18.5"
-            onChange={(event) => onChange({ ...draft, bodyFat: event.value ?? "" })}
+          <Slider
+            min={5}
+            max={50}
+            step={0.5}
+            value={Number.isFinite(bodyFat) ? bodyFat : 18.5}
+            onChange={(event) => onChange({ ...draft, bodyFat: String(event.value) })}
           />
           <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
             <Text style={{ fontSize: 12, color: vitalityColors.onSurfaceVariant }}>5%</Text>

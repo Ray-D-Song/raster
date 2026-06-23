@@ -159,6 +159,7 @@ export const componentNames = [
   "RadioGroup",
   "Select",
   "Sheet",
+  "Slider",
   "Switch",
   "Tab",
   "TabBar",
@@ -601,6 +602,20 @@ export interface SheetProps extends ComponentBaseProps {
   onOpenChange?: RasterEventHandler<SheetOpenChangePayload>;
 }
 
+export interface SliderChangePayload {
+  value: number;
+}
+
+export interface SliderProps extends ComponentBaseProps {
+  min?: number;
+  max?: number;
+  step?: number;
+  value?: number;
+  defaultValue?: number;
+  disabled?: boolean;
+  onChange?: RasterEventHandler<SliderChangePayload>;
+}
+
 export interface SwitchProps extends ComponentBaseProps {
   label?: JsonValue;
   tooltip?: string;
@@ -1035,6 +1050,7 @@ export const Radio = createComponent<RadioProps>("Radio");
 export const RadioGroup = createComponent<RadioGroupProps>("RadioGroup");
 export const Select = createComponent<SelectProps>("Select");
 export const Sheet = createComponent<SheetProps>("Sheet");
+export const Slider = createComponent<SliderProps>("Slider");
 export const Switch = createComponent<SwitchProps>("Switch");
 export const Tab = createComponent<TabProps>("Tab");
 export const TabBar = createComponent<TabBarProps>("TabBar");

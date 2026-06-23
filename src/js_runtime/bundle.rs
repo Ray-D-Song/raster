@@ -30,6 +30,7 @@ const RASTER_COMPONENT_EXPORTS: &[&str] = &[
     "RadioGroup",
     "Select",
     "Sheet",
+    "Slider",
     "Switch",
     "Tab",
     "TabBar",

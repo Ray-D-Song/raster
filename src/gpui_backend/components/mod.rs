@@ -19,6 +19,7 @@ pub mod internal;
 pub mod radio;
 pub mod select;
 pub mod sheet;
+pub mod slider;
 pub mod switch;
 pub mod tab;
 pub mod text_and_label;
