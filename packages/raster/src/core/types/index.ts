@@ -52,6 +52,9 @@ export type {
 export type {
   AlignContentValue,
   AlignValue,
+  BoxShadowInput,
+  BoxShadowPreset,
+  BoxShadowValue,
   DisplayValue,
   EdgeInsets,
   FlexDirectionValue,

@@ -1,4 +1,4 @@
-import type { RasterResolvedThemeColors, RasterStyle } from "raster-js/components";
+import type { BoxShadowInput, BoxShadowPreset, RasterResolvedThemeColors, RasterStyle } from "raster-js/components";
 import type { RasterThemeConfig } from "raster-js/components";
 import { vitalityColors } from "./data";
 
@@ -55,3 +55,20 @@ export const labelCaps: RasterStyle = {
   fontSize: 12,
   fontWeight: "600",
 };
+
+/** Level 1 — cards, list items, input panels */
+export const cardShadow: BoxShadowPreset = "md";
+
+/** Teal ambient glow for tinted bento surfaces (design ambient-shadow) */
+export const ambientShadow: BoxShadowInput = {
+  offsetY: 10,
+  blurRadius: 30,
+  spreadRadius: -10,
+  color: "rgba(0, 107, 95, 0.08)",
+};
+
+/** Level 2 — hero widgets, primary CTAs, highlighted cards */
+export const elevatedShadow: BoxShadowPreset = "xl";
+
+/** Bottom navigation bar */
+export const tabBarShadow: BoxShadowPreset = "md";

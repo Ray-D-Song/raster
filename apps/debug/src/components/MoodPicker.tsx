@@ -1,7 +1,7 @@
 import { Icon, Text, View } from "raster-js/components";
 import type { IconName } from "raster-js/components";
 import { vitalityColors } from "../data";
-import { row } from "../styles";
+import { cardShadow, row } from "../styles";
 import type { Mood } from "../types";
 
 interface MoodPickerProps {
@@ -31,6 +31,7 @@ export function MoodPicker({ value, onChange }: MoodPickerProps) {
           borderRadius: 24,
           borderWidth: 1,
           borderColor: vitalityColors.surfaceContainer,
+          boxShadow: cardShadow,
           padding: 12,
         }}
       >

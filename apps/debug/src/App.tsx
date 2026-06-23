@@ -6,7 +6,7 @@ import { Dashboard } from "./pages/Dashboard";
 import { Entry } from "./pages/Entry";
 import { History } from "./pages/History";
 import { Settings } from "./pages/Settings";
-import { vitalityTheme } from "./styles";
+import { tabBarShadow, vitalityTheme } from "./styles";
 import type { AppTab, NewEntryDraft, SortOrder, UserSettings, WeightEntry } from "./types";
 
 function renderPage(
@@ -123,7 +123,11 @@ export function App() {
     <ConfigProvider theme={{ ...vitalityTheme, mode: settings.theme }}>
       <AppShell
         tabBar={
-          <AppShellTabBar value={tab} onValueChange={(value) => setTab(value as AppTab)}>
+          <AppShellTabBar
+            value={tab}
+            onValueChange={(value) => setTab(value as AppTab)}
+            style={{ boxShadow: tabBarShadow }}
+          >
             <AppShellTab value="dashboard" label="Dashboard" icon="layout-dashboard" />
             <AppShellTab value="entry" label="Entry" icon="plus" />
             <AppShellTab value="history" label="History" icon="calendar" />

@@ -63,7 +63,7 @@ export function Settings({ settings, theme, entryCount, onChange }: SettingsProp
             <Text style={{ fontSize: 14, color: vitalityColors.outline }}>Member since {userProfile.memberSince}</Text>
           </Card>
 
-          <Card theme={theme} tinted style={{ flex: 1, minWidth: 160, justifyContent: "space-between" }}>
+          <Card theme={theme} variant="tinted" style={{ flex: 1, minWidth: 160, justifyContent: "space-between" }}>
             <View style={{ gap: 8 }}>
               <Text style={{ ...labelCaps, color: vitalityColors.primary }}>CURRENT HEIGHT</Text>
               <View style={{ flexDirection: "row", alignItems: "baseline", gap: 4 }}>

@@ -2,7 +2,7 @@ import { Alert, Button, Icon, Input, Slider, Text, Textarea, View } from "raster
 import { Card } from "../components/Card";
 import { MoodPicker } from "../components/MoodPicker";
 import { vitalityColors } from "../data";
-import { type AppTheme, labelCaps, pagePadding } from "../styles";
+import { type AppTheme, elevatedShadow, labelCaps, pagePadding } from "../styles";
 import type { NewEntryDraft } from "../types";
 
 interface EntryProps {
@@ -103,7 +103,7 @@ export function Entry({ draft, theme, error, onChange, onSubmit, onClearError }:
           icon="check"
           variant="primary"
           onClick={onSubmit}
-          style={{ height: 56, borderRadius: 999 }}
+          style={{ height: 56, borderRadius: 999, boxShadow: elevatedShadow }}
         />
       </View>
 

@@ -11,7 +11,7 @@ import {
   lastSevenDays,
   weekChange,
 } from "../model";
-import { type AppTheme, labelCaps, pagePadding, row, secondaryText, spaceBetween } from "../styles";
+import { type AppTheme, elevatedShadow, labelCaps, pagePadding, row, secondaryText, spaceBetween } from "../styles";
 import type { AppTab, UserSettings, WeightEntry } from "../types";
 
 interface DashboardProps {
@@ -81,7 +81,7 @@ export function Dashboard({ entries, settings, theme, onNavigate }: DashboardPro
             </View>
           </Card>
 
-          <Card theme={theme} tinted style={{ width: "100%", flexDirection: "row", alignItems: "center" }}>
+          <Card theme={theme} variant="accent" style={{ width: "100%", flexDirection: "row", alignItems: "center" }}>
             <View style={{ flex: 1, gap: 12 }}>
               <Text style={{ ...labelCaps, color: "rgba(0, 87, 77, 0.7)" }}>ACTIVITY STREAK</Text>
               <Text style={{ fontSize: 36, fontWeight: "700", color: vitalityColors.onPrimaryContainer }}>
@@ -132,7 +132,7 @@ export function Dashboard({ entries, settings, theme, onNavigate }: DashboardPro
           icon="plus"
           variant="primary"
           onClick={() => onNavigate("entry")}
-          style={{ alignSelf: "center" }}
+          style={{ alignSelf: "center", boxShadow: elevatedShadow }}
         />
       </View>
     </View>

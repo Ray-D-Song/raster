@@ -42,6 +42,22 @@ export type PositionValue = "relative" | "absolute";
 // GPUI does not expose CSS-style overflow auto; Raster maps auto to scroll.
 export type OverflowValue = "visible" | "hidden" | "clip" | "scroll" | "auto";
 
+export type BoxShadowPreset = "none" | "xs" | "sm" | "md" | "lg" | "xl";
+
+export interface BoxShadowValue {
+  offsetX?: number;
+  offsetY?: number;
+  blurRadius?: number;
+  spreadRadius?: number;
+  color?: string;
+}
+
+export type BoxShadowInput =
+  | BoxShadowPreset
+  | string
+  | BoxShadowValue
+  | ReadonlyArray<BoxShadowInput>;
+
 export interface RasterStyle {
   display?: DisplayValue;
   flexDirection?: FlexDirectionValue;
@@ -92,5 +108,6 @@ export interface RasterStyle {
   fontWeight?: FontWeight;
   fontStyle?: "normal" | "italic";
   textDecorationLine?: "none" | "underline";
+  boxShadow?: BoxShadowInput;
 }
 

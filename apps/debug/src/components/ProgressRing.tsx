@@ -1,7 +1,7 @@
 import { PieChart, Text, View } from "raster-js/components";
 import { vitalityColors } from "../data";
 import { formatWeight } from "../model";
-import { labelCaps } from "../styles";
+import { elevatedShadow, labelCaps } from "../styles";
 import type { WeightUnit } from "../types";
 
 interface ProgressRingProps {
@@ -25,6 +25,7 @@ export function ProgressRing({ current, target, progress, unit }: ProgressRingPr
         backgroundColor: "#ffffff",
         borderWidth: 1,
         borderColor: "rgba(0, 107, 95, 0.08)",
+        boxShadow: elevatedShadow,
         overflow: "hidden",
       }}
     >

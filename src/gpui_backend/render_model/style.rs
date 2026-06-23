@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
 use gpui::{
-    AbsoluteLength, AlignContent, AlignItems, DefiniteLength, Display, FlexDirection, FlexWrap,
-    FontStyle, FontWeight, Hsla, JustifyContent, Length, Overflow, Position, Rgba, Styled, px,
+    AbsoluteLength, AlignContent, AlignItems, BoxShadow, DefiniteLength, Display, FlexDirection,
+    FlexWrap, FontStyle, FontWeight, Hsla, JustifyContent, Length, Overflow,
+    Position, Rgba, Styled, hsla, point, px,
 };
 
 use crate::common::mount::NodeValue;
@@ -47,6 +48,7 @@ pub struct RenderStyle {
     pub font_weight: Option<FontWeight>,
     pub font_style: Option<FontStyle>,
     pub underline: Option<bool>,
+    pub box_shadow: Vec<BoxShadow>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -127,6 +129,10 @@ pub fn parse_render_style(style: &BTreeMap<String, NodeValue>) -> RenderStyle {
         font_weight: style.get("fontWeight").and_then(parse_font_weight),
         font_style: string_value(style, "fontStyle").and_then(parse_font_style),
         underline: string_value(style, "textDecorationLine").and_then(parse_text_decoration),
+        box_shadow: style
+            .get("boxShadow")
+            .map(parse_box_shadow)
+            .unwrap_or_default(),
     };
 
     if let Some(flex) = number_value(style, "flex") {
@@ -327,6 +333,12 @@ pub fn apply_style<T: Styled>(mut element: T, style: &RenderStyle) -> T {
     }
     if style.underline == Some(true) {
         element = element.underline();
+    }
+
+    if style.box_shadow.is_empty() {
+        element = element.shadow_none();
+    } else {
+        element = element.shadow(style.box_shadow.clone());
     }
 
     element
@@ -609,5 +621,274 @@ fn parse_text_decoration(value: &str) -> Option<bool> {
         "underline" => Some(true),
         "none" => Some(false),
         _ => None,
+    }
+}
+
+fn parse_box_shadow(value: &NodeValue) -> Vec<BoxShadow> {
+    match value {
+        NodeValue::Null => Vec::new(),
+        NodeValue::String(value) => parse_box_shadow_string(value),
+        NodeValue::Array(items) => items.iter().flat_map(parse_box_shadow).collect(),
+        NodeValue::Object(object) => parse_box_shadow_object(object)
+            .into_iter()
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn parse_box_shadow_string(value: &str) -> Vec<BoxShadow> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("none") {
+        return Vec::new();
+    }
+    if let Some(preset) = box_shadow_preset(trimmed) {
+        return preset;
+    }
+    split_box_shadow_layers(trimmed)
+        .into_iter()
+        .filter_map(|layer| parse_box_shadow_css_layer(&layer))
+        .collect()
+}
+
+fn parse_box_shadow_object(object: &BTreeMap<String, NodeValue>) -> Option<BoxShadow> {
+    let offset_x = number_field(object, "offsetX").unwrap_or(0.0);
+    let offset_y = number_field(object, "offsetY").unwrap_or(0.0);
+    let blur_radius = number_field(object, "blurRadius").unwrap_or(0.0);
+    let spread_radius = number_field(object, "spreadRadius").unwrap_or(0.0);
+    let color = object
+        .get("color")
+        .and_then(|value| value.as_str())
+        .and_then(parse_color)
+        .unwrap_or_else(|| hsla(0., 0., 0., 0.25));
+    Some(box_shadow(
+        offset_x,
+        offset_y,
+        blur_radius,
+        spread_radius,
+        color,
+    ))
+}
+
+fn box_shadow_preset(name: &str) -> Option<Vec<BoxShadow>> {
+    Some(match name {
+        "xs" => vec![box_shadow(0., 1., 2., 0., hsla(0., 0., 0., 0.05))],
+        "sm" => vec![
+            box_shadow(0., 1., 3., 0., hsla(0., 0., 0., 0.1)),
+            box_shadow(0., 1., 2., -1., hsla(0., 0., 0., 0.1)),
+        ],
+        "md" => vec![
+            box_shadow(0., 4., 6., -1., hsla(0., 0., 0., 0.1)),
+            box_shadow(0., 2., 4., -2., hsla(0., 0., 0., 0.1)),
+        ],
+        "lg" => vec![
+            box_shadow(0., 10., 15., -3., hsla(0., 0., 0., 0.1)),
+            box_shadow(0., 4., 6., -4., hsla(0., 0., 0., 0.1)),
+        ],
+        "xl" => vec![
+            box_shadow(0., 20., 25., -5., hsla(0., 0., 0., 0.1)),
+            box_shadow(0., 8., 10., -6., hsla(0., 0., 0., 0.1)),
+        ],
+        _ => return None,
+    })
+}
+
+fn parse_box_shadow_css_layer(layer: &str) -> Option<BoxShadow> {
+    let mut tokens = tokenize_css_layer(layer);
+    if tokens.is_empty() {
+        return None;
+    }
+    if tokens[0].eq_ignore_ascii_case("inset") {
+        tokens.remove(0);
+    }
+    if tokens.len() < 3 {
+        return None;
+    }
+    let color = parse_color(&tokens.pop()?).or_else(|| {
+        let second = tokens.pop()?;
+        let first = tokens.pop()?;
+        let combined = format!("{first} {second}");
+        parse_color(&combined)
+    })?;
+    let (offset_x, offset_y, blur_radius, spread_radius) = match tokens.len() {
+        4 => (
+            parse_length_token(&tokens[0])?,
+            parse_length_token(&tokens[1])?,
+            parse_length_token(&tokens[2])?,
+            parse_length_token(&tokens[3])?,
+        ),
+        3 => (
+            parse_length_token(&tokens[0])?,
+            parse_length_token(&tokens[1])?,
+            parse_length_token(&tokens[2])?,
+            0.0,
+        ),
+        2 => (
+            parse_length_token(&tokens[0])?,
+            parse_length_token(&tokens[1])?,
+            0.0,
+            0.0,
+        ),
+        _ => return None,
+    };
+    Some(box_shadow(
+        offset_x,
+        offset_y,
+        blur_radius,
+        spread_radius,
+        color,
+    ))
+}
+
+fn split_box_shadow_layers(value: &str) -> Vec<String> {
+    let mut layers = Vec::new();
+    let mut current = String::new();
+    let mut paren_depth: i32 = 0;
+    for ch in value.chars() {
+        match ch {
+            '(' => {
+                paren_depth += 1;
+                current.push(ch);
+            }
+            ')' => {
+                paren_depth = paren_depth.saturating_sub(1);
+                current.push(ch);
+            }
+            ',' if paren_depth == 0 => {
+                if !current.trim().is_empty() {
+                    layers.push(current.trim().to_owned());
+                }
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+    if !current.trim().is_empty() {
+        layers.push(current.trim().to_owned());
+    }
+    layers
+}
+
+fn tokenize_css_layer(layer: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut paren_depth: i32 = 0;
+    for ch in layer.trim().chars() {
+        if ch == '(' {
+            paren_depth += 1;
+            current.push(ch);
+        } else if ch == ')' {
+            paren_depth = paren_depth.saturating_sub(1);
+            current.push(ch);
+        } else if ch.is_whitespace() && paren_depth == 0 {
+            if !current.is_empty() {
+                tokens.push(current.clone());
+                current.clear();
+            }
+        } else {
+            current.push(ch);
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
+fn parse_length_token(token: &str) -> Option<f32> {
+    let trimmed = token.trim();
+    if trimmed == "0" {
+        return Some(0.0);
+    }
+    if let Some(value) = trimmed.strip_suffix("px") {
+        return value.parse().ok();
+    }
+    trimmed.parse().ok()
+}
+
+fn number_field(object: &BTreeMap<String, NodeValue>, key: &str) -> Option<f32> {
+    match object.get(key) {
+        Some(NodeValue::Number(value)) => Some(*value as f32),
+        Some(NodeValue::String(value)) => value.parse().ok(),
+        _ => None,
+    }
+}
+
+fn box_shadow(
+    offset_x: f32,
+    offset_y: f32,
+    blur_radius: f32,
+    spread_radius: f32,
+    color: Hsla,
+) -> BoxShadow {
+    BoxShadow {
+        color,
+        offset: point(px(offset_x), px(offset_y)),
+        blur_radius: px(blur_radius),
+        spread_radius: px(spread_radius),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shadow_alpha(shadow: &BoxShadow) -> f32 {
+        shadow.color.a
+    }
+
+    fn shadow_offset_y(shadow: &BoxShadow) -> f32 {
+        f32::from(shadow.offset.y)
+    }
+
+    fn shadow_blur(shadow: &BoxShadow) -> f32 {
+        f32::from(shadow.blur_radius)
+    }
+
+    #[test]
+    fn parses_css_box_shadow_string() {
+        let shadows = parse_box_shadow_string("0 8px 16px rgba(0, 0, 0, 0.04)");
+        assert_eq!(shadows.len(), 1);
+        assert!((shadow_offset_y(&shadows[0]) - 8.0).abs() < f32::EPSILON);
+        assert!((shadow_blur(&shadows[0]) - 16.0).abs() < f32::EPSILON);
+        assert!((shadow_alpha(&shadows[0]) - 0.04).abs() < 0.001);
+    }
+
+    #[test]
+    fn parses_sm_preset() {
+        let shadows = parse_box_shadow_string("sm");
+        assert_eq!(shadows.len(), 2);
+    }
+
+    #[test]
+    fn parses_structured_box_shadow_object() {
+        let mut object = BTreeMap::new();
+        object.insert("offsetY".to_owned(), NodeValue::Number(8.0));
+        object.insert("blurRadius".to_owned(), NodeValue::Number(16.0));
+        object.insert(
+            "color".to_owned(),
+            NodeValue::String("rgba(0, 0, 0, 0.04)".to_owned()),
+        );
+        let shadows = parse_box_shadow(&NodeValue::Object(object));
+        assert_eq!(shadows.len(), 1);
+        assert!((shadow_offset_y(&shadows[0]) - 8.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn parses_multiple_css_layers() {
+        let shadows =
+            parse_box_shadow_string("0 1px 3px rgba(0,0,0,0.1), 0 8px 16px rgba(0,0,0,0.04)");
+        assert_eq!(shadows.len(), 2);
+    }
+
+    #[test]
+    fn none_and_missing_clear_shadow() {
+        assert!(parse_box_shadow_string("none").is_empty());
+        assert!(parse_box_shadow_string("").is_empty());
+        assert!(parse_render_style(&BTreeMap::new()).box_shadow.is_empty());
+    }
+
+    #[test]
+    fn invalid_css_box_shadow_is_ignored() {
+        assert!(parse_box_shadow_string("not-a-shadow").is_empty());
     }
 }

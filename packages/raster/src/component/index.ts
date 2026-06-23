@@ -49,6 +49,9 @@ import type {
 } from "../core/types/index.js";
 
 export type {
+  BoxShadowInput,
+  BoxShadowPreset,
+  BoxShadowValue,
   ButtonCustomVariant,
   ButtonRounded,
   ButtonVariant,

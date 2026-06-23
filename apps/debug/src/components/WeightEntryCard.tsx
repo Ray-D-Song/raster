@@ -8,7 +8,7 @@ import {
   formatWeight,
   formatWeightDelta,
 } from "../model";
-import { labelCaps, spaceBetween } from "../styles";
+import { cardShadow, labelCaps, spaceBetween } from "../styles";
 import type { WeightEntry, WeightUnit } from "../types";
 
 interface WeightEntryCardProps {
@@ -43,6 +43,7 @@ export function WeightEntryCard({ entry, previous, unit, onClick }: WeightEntryC
         borderRadius: 24,
         borderWidth: 1,
         borderColor: "rgba(186, 202, 197, 0.2)",
+        boxShadow: cardShadow,
         padding: 20,
         gap: 16,
       }}
