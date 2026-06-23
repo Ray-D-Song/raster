@@ -1,4 +1,4 @@
-import { Alert, Button, DatePicker, Icon, Input, Slider, Text, Textarea, View } from "raster-js/components";
+import { Alert, Button, DatePicker, Input, Slider, Text, Textarea, TimePicker, View } from "raster-js/components";
 import { Card } from "../components/Card";
 import { MoodPicker } from "../components/MoodPicker";
 import { vitalityColors } from "../data";
@@ -79,13 +79,18 @@ export function Entry({ draft, theme, error, onChange, onSubmit, onClearError }:
           </Card>
           <Card theme={theme} style={{ flex: 1, gap: 8, padding: 16 }}>
             <Text style={{ ...labelCaps, color: vitalityColors.outline }}>TIME</Text>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              <Icon src={appIcons.info} color={vitalityColors.primary} size={14} />
-              <Input
-                value={draft.time}
-                onChange={(event) => onChange({ ...draft, time: event.value ?? "" })}
-              />
-            </View>
+            <TimePicker
+              value={draft.time}
+              format="HH:mm"
+              placeholder="Select time"
+              style={{ fontWeight: "600", color: vitalityColors.primary }}
+              onChange={(event) => {
+                const value = event.value;
+                if (typeof value === "string" && value.length > 0) {
+                  onChange({ ...draft, time: value });
+                }
+              }}
+            />
           </Card>
         </View>
 

@@ -17,6 +17,7 @@ const RASTER_COMPONENT_EXPORTS: &[&str] = &[
     "Checkbox",
     "ColorPicker",
     "DatePicker",
+    "TimePicker",
     "Dialog",
     "Field",
     "Form",

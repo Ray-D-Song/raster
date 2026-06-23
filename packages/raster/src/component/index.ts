@@ -153,6 +153,7 @@ export const componentNames = [
   "Checkbox",
   "ColorPicker",
   "DatePicker",
+  "TimePicker",
   "Dialog",
   "Field",
   "Form",
@@ -445,11 +446,29 @@ export interface DatePickerProps extends ComponentBaseProps {
   numberOfMonths?: number;
   size?: ComponentSize;
   disabled?: DateDisabledProp;
-  placeholder?: JsonValue;
+  placeholder?: string;
   cleanable?: boolean;
   appearance?: boolean;
   onChange?: RasterEventHandler<DateChangePayload>;
   onValueChange?: RasterEventHandler<DatePickerValue>;
+}
+
+export type TimeFormat = "HH:mm" | "HH:mm:ss";
+
+export interface TimeChangePayload {
+  value: string | null;
+}
+
+export interface TimePickerProps extends ComponentBaseProps {
+  value?: string | null;
+  format?: TimeFormat;
+  placeholder?: string;
+  appearance?: boolean;
+  cleanable?: boolean;
+  disabled?: boolean;
+  size?: ComponentSize;
+  onChange?: RasterEventHandler<TimeChangePayload>;
+  onValueChange?: RasterEventHandler<string | null>;
 }
 
 export type DialogOpenChangeReason = "ok" | "cancel" | "controlled";
@@ -599,7 +618,7 @@ export interface SelectProps extends ComponentBaseProps {
   options?: SelectOption[];
   sections?: CollectionSection<SelectOption>[];
   value?: JsonValue;
-  placeholder?: JsonValue;
+  placeholder?: string;
   searchable?: boolean;
   cleanable?: boolean;
   disabled?: boolean;
@@ -799,6 +818,7 @@ export function ColorPicker(input: ColorPickerProps): ReactElement {
   return jsx(Widget, { name: "ColorPicker", props, queries, style, children, ...events });
 }
 export const DatePicker = createComponent<DatePickerProps>("DatePicker");
+export const TimePicker = createComponent<TimePickerProps>("TimePicker");
 export const Dialog = createComponent<DialogProps>("Dialog");
 
 export function AppShell({ children, tabBar, theme = "light", style, contentStyle }: AppShellProps): ReactElement {

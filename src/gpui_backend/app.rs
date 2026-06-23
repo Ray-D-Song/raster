@@ -47,6 +47,9 @@ use crate::{
             date_picker::{
                 RasterDatePickerState, is_date_picker_node, render_date_picker_from_node,
             },
+            time_picker::{
+                RasterTimePickerState, is_time_picker_node, render_time_picker_from_node,
+            },
             dialog::{DialogRenderContext, RasterDialogState, is_dialog_node},
             form::{is_field_node, is_form_node, render_field_from_node, render_form_from_node},
             helper::props::event_handler,
@@ -539,6 +542,7 @@ impl OwnerRegistry {
                 select_state: None,
                 color_picker_state: None,
                 date_picker_state: None,
+                time_picker_state: None,
                 slider_state: None,
                 chart_state: None,
                 virtual_list_state: None,
@@ -718,6 +722,7 @@ pub(super) struct NodeOwnerView {
     select_state: Option<RasterSelectState>,
     color_picker_state: Option<RasterColorPickerState>,
     date_picker_state: Option<RasterDatePickerState>,
+    time_picker_state: Option<RasterTimePickerState>,
     slider_state: Option<RasterSliderState>,
     chart_state: Option<RasterChartState>,
     virtual_list_state: Option<RasterVirtualListState>,
@@ -733,6 +738,7 @@ impl Render for NodeOwnerView {
                 self.select_state = None;
                 self.color_picker_state = None;
                 self.date_picker_state = None;
+                self.time_picker_state = None;
                 self.slider_state = None;
                 self.chart_state = None;
                 self.virtual_list_state = None;
@@ -754,6 +760,7 @@ impl Render for NodeOwnerView {
                 self.input_state = None;
                 self.color_picker_state = None;
                 self.date_picker_state = None;
+                self.time_picker_state = None;
                 self.slider_state = None;
                 self.chart_state = None;
                 self.virtual_list_state = None;
@@ -779,6 +786,7 @@ impl Render for NodeOwnerView {
                 self.input_state = None;
                 self.select_state = None;
                 self.date_picker_state = None;
+                self.time_picker_state = None;
                 self.slider_state = None;
                 self.chart_state = None;
                 self.virtual_list_state = None;
@@ -806,6 +814,7 @@ impl Render for NodeOwnerView {
                 self.input_state = None;
                 self.select_state = None;
                 self.color_picker_state = None;
+                self.time_picker_state = None;
                 self.slider_state = None;
                 self.chart_state = None;
                 self.virtual_list_state = None;
@@ -829,11 +838,40 @@ impl Render for NodeOwnerView {
                         return decorate_refresh(date_picker, highlight);
                     }
                 }
+            } else if is_time_picker_node(&node) {
+                self.input_state = None;
+                self.select_state = None;
+                self.color_picker_state = None;
+                self.date_picker_state = None;
+                self.slider_state = None;
+                self.chart_state = None;
+                self.virtual_list_state = None;
+                if self
+                    .time_picker_state
+                    .as_ref()
+                    .is_none_or(|state| !state.matches_config(&node))
+                {
+                    self.time_picker_state = Some(RasterTimePickerState::new(
+                        &node,
+                        self.runtime_commands.clone(),
+                        window,
+                        cx,
+                    ));
+                }
+                if let Some(time_picker_state) = &mut self.time_picker_state {
+                    time_picker_state.sync_from_node(&node, window, cx);
+                    if let Some(time_picker) =
+                        render_time_picker_from_node(&node, time_picker_state.time_picker())
+                    {
+                        return decorate_refresh(time_picker, highlight);
+                    }
+                }
             } else if is_slider_node(&node) {
                 self.input_state = None;
                 self.select_state = None;
                 self.color_picker_state = None;
                 self.date_picker_state = None;
+                self.time_picker_state = None;
                 self.chart_state = None;
                 self.virtual_list_state = None;
                 if self
@@ -858,6 +896,7 @@ impl Render for NodeOwnerView {
                 self.select_state = None;
                 self.color_picker_state = None;
                 self.date_picker_state = None;
+                self.time_picker_state = None;
                 self.slider_state = None;
                 self.chart_state = None;
                 if self.virtual_list_state.is_none() {
@@ -883,6 +922,7 @@ impl Render for NodeOwnerView {
                 self.select_state = None;
                 self.color_picker_state = None;
                 self.date_picker_state = None;
+                self.time_picker_state = None;
                 self.slider_state = None;
                 self.virtual_list_state = None;
                 if self
@@ -903,6 +943,7 @@ impl Render for NodeOwnerView {
                 self.select_state = None;
                 self.color_picker_state = None;
                 self.date_picker_state = None;
+                self.time_picker_state = None;
                 self.slider_state = None;
                 self.chart_state = None;
                 self.virtual_list_state = None;
