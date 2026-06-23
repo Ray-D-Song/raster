@@ -1,13 +1,20 @@
 import { useState } from "react";
 import { AppShell, AppShellTab, AppShellTabBar, ConfigProvider, View, useTheme } from "raster-js/components";
-import { defaultDraft, defaultSettings, seedEntries } from "./data";
+import { defaultDraft, defaultSettings, seedEntries, vitalityColors } from "./data";
 import { makeEntry, nowTime, sortEntries, todayIso } from "./model";
 import { Dashboard } from "./pages/Dashboard";
 import { Entry } from "./pages/Entry";
 import { History } from "./pages/History";
 import { Settings } from "./pages/Settings";
 import { appIcons } from "./icons";
-import { tabBarShadow, vitalityTheme } from "./styles";
+import {
+  tabBarActiveItemStyle,
+  tabBarContainerStyle,
+  tabBarContentStyle,
+  tabBarLabelStyle,
+  tabBarSafeAreaInset,
+  vitalityTheme,
+} from "./styles";
 import type { AppTab, NewEntryDraft, SortOrder, UserSettings, WeightEntry } from "./types";
 
 function renderPage(
@@ -123,11 +130,17 @@ export function App() {
   return (
     <ConfigProvider theme={{ ...vitalityTheme, mode: settings.theme }}>
       <AppShell
+        tabBarContainerStyle={tabBarContainerStyle}
+        tabBarStyle={tabBarContentStyle}
+        safeAreaInsetBottom={tabBarSafeAreaInset}
         tabBar={
           <AppShellTabBar
             value={tab}
             onValueChange={(value) => setTab(value as AppTab)}
-            style={{ boxShadow: tabBarShadow }}
+            activeTintColor={vitalityColors.onPrimaryContainer}
+            inactiveTintColor={vitalityColors.onSurfaceVariant}
+            activeItemStyle={tabBarActiveItemStyle}
+            labelStyle={tabBarLabelStyle}
           >
             <AppShellTab value="dashboard" label="Dashboard" icon={appIcons.dashboard} />
             <AppShellTab value="entry" label="Entry" icon={appIcons.add} />

@@ -147,6 +147,27 @@ fn runtime_bundle_flattens_style_arrays() {
 }
 
 #[test]
+fn runtime_bundle_appshell_supports_tab_bar_container_and_safe_area_props() {
+    let bundle = include_str!("../../../runtime/js/generated/runtime_bundle.js");
+    assert!(
+        bundle.contains("tabBarContainerStyle"),
+        "runtime bundle should expose AppShell tabBarContainerStyle"
+    );
+    assert!(
+        bundle.contains("tabBarStyle"),
+        "runtime bundle should expose AppShell tabBarStyle"
+    );
+    assert!(
+        bundle.contains("safeAreaInsetBottom"),
+        "runtime bundle should expose AppShell safeAreaInsetBottom"
+    );
+    assert!(
+        bundle.contains("safeAreaBottomPaddingStyle"),
+        "runtime bundle should merge safe area inset into tab bar container padding"
+    );
+}
+
+#[test]
 fn runtime_command_emits_runtime_event() {
     let runtime = pollster::block_on(super::super::start()).expect("start js runtime");
     pollster::block_on(runtime.eval_runtime_script_to_string(

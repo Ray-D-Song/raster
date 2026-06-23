@@ -205,6 +205,9 @@ export interface AppShellProps {
   theme?: "light" | "dark";
   style?: RasterStyleInput;
   contentStyle?: RasterStyleInput;
+  tabBarContainerStyle?: RasterStyleInput;
+  tabBarStyle?: RasterStyleInput;
+  safeAreaInsetBottom?: number;
 }
 
 export interface AppShellTabBarProps {
@@ -821,13 +824,27 @@ export const DatePicker = createComponent<DatePickerProps>("DatePicker");
 export const TimePicker = createComponent<TimePickerProps>("TimePicker");
 export const Dialog = createComponent<DialogProps>("Dialog");
 
-export function AppShell({ children, tabBar, theme = "light", style, contentStyle }: AppShellProps): ReactElement {
+export function AppShell({
+  children,
+  tabBar,
+  theme = "light",
+  style,
+  contentStyle,
+  tabBarContainerStyle,
+  tabBarStyle,
+  safeAreaInsetBottom,
+}: AppShellProps): ReactElement {
   const nativeTheme = useTheme();
   const colors = nativeTheme?.colors;
   const dark = (nativeTheme?.mode ?? theme) === "dark";
   const backgroundColor = colors?.background ?? (dark ? "#09090b" : "#ffffff");
   const borderColor = colors?.border ?? (dark ? "rgba(255, 255, 255, 0.1)" : "#e4e4e7");
   const tabBarColor = colors?.tabBar ?? backgroundColor;
+  const tabBarContainerDefaults: RasterStyle = {
+    borderTopWidth: 1,
+    borderColor,
+    backgroundColor: tabBarColor,
+  };
 
   return jsx(View, {
     style: styleList(
@@ -860,14 +877,21 @@ export function AppShell({ children, tabBar, theme = "light", style, contentStyl
         : jsx(
             View,
             {
-              style: {
-                borderTopWidth: 1,
-                borderColor,
-                backgroundColor: tabBarColor,
-              },
-              children: tabBar,
+              style: styleList(
+                tabBarContainerDefaults,
+                tabBarContainerStyle,
+                safeAreaBottomPaddingStyle(safeAreaInsetBottom, tabBarContainerDefaults, tabBarContainerStyle)
+              ),
+              children: jsx(
+                View,
+                {
+                  style: tabBarStyle,
+                  children: tabBar,
+                },
+                "tabBarSlot"
+              ),
             },
-            "tabBar"
+            "tabBarContainer"
           ),
     ],
   });
@@ -1004,6 +1028,34 @@ function styleList(...items: MaybeRasterStyleInput[]): Array<RasterStyle | null 
 
 function isStyleArray(item: MaybeRasterStyleInput): item is ReadonlyArray<RasterStyle | null | undefined> {
   return Array.isArray(item);
+}
+
+function extractLastPaddingBottom(styles: ReadonlyArray<RasterStyle | null | undefined>): number {
+  let bottom = 0;
+  for (const style of styles) {
+    if (style?.padding == null) {
+      continue;
+    }
+    if (typeof style.padding === "number") {
+      bottom = style.padding;
+      continue;
+    }
+    if (style.padding.bottom != null) {
+      bottom = style.padding.bottom;
+    }
+  }
+  return bottom;
+}
+
+function safeAreaBottomPaddingStyle(
+  inset: number | undefined,
+  ...styleSources: MaybeRasterStyleInput[]
+): RasterStyle | null {
+  if (inset == null || inset <= 0) {
+    return null;
+  }
+  const existingBottom = extractLastPaddingBottom(styleList(...styleSources));
+  return { padding: { bottom: existingBottom + inset } };
 }
 
 function isAppShellTabElement(node: ReactNode): node is ReactElement<AppShellTabProps> {

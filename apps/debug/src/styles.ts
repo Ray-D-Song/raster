@@ -70,5 +70,33 @@ export const ambientShadow: BoxShadowInput = {
 /** Level 2 — hero widgets, primary CTAs, highlighted cards */
 export const elevatedShadow: BoxShadowPreset = "xl";
 
-/** Bottom navigation bar */
-export const tabBarShadow: BoxShadowPreset = "md";
+/** Bottom navigation bar container — upward ambient shadow */
+export const tabBarContainerStyle: RasterStyle = {
+  borderTopWidth: 0,
+  backgroundColor: "rgba(248, 249, 255, 0.95)",
+  borderTopLeftRadius: 12,
+  borderTopRightRadius: 12,
+  boxShadow: {
+    offsetY: -4,
+    blurRadius: 12,
+    color: "rgba(0, 0, 0, 0.04)",
+  },
+};
+
+export const tabBarContentStyle: RasterStyle = {
+  padding: { top: 8, left: 16, right: 16 },
+};
+
+export const tabBarActiveItemStyle: RasterStyle = {
+  backgroundColor: vitalityColors.primaryContainer,
+  borderRadius: 999,
+  padding: { top: 4, bottom: 4, left: 6, right: 6 },
+};
+
+export const tabBarLabelStyle: RasterStyle = {
+  fontSize: 12,
+  fontWeight: "600",
+};
+
+/** Home indicator safe area below tab items */
+export const tabBarSafeAreaInset = 24;
