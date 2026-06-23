@@ -68,7 +68,7 @@ export function Entry({ draft, theme, error, onChange, onSubmit, onClearError }:
             <DatePicker
               value={draft.date}
               placeholder="Select date"
-              appearance={false}
+              style={{ fontWeight: "600", color: vitalityColors.primary }}
               onChange={(event) => {
                 const value = event.value;
                 if (typeof value === "string" && value.length > 0) {

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Avatar, Button, ButtonGroup, Icon, Input, Switch, Text, View } from "raster-js/components";
+import { Avatar, Button, ButtonGroup, DatePicker, Icon, Input, Switch, Text, View } from "raster-js/components";
 import type { IconifyIcon } from "raster-js/components";
 import { Card } from "../components/Card";
 import { SectionTitle } from "../components/SectionTitle";
@@ -121,9 +121,16 @@ export function Settings({ settings, theme, entryCount, onChange }: SettingsProp
                 <Text style={{ fontSize: 20, fontWeight: "600", color: vitalityColors.onSurface }}>Target Date</Text>
                 <Text style={{ fontSize: 14, color: vitalityColors.outline }}>When to reach your goal</Text>
               </View>
-              <Input
+              <DatePicker
                 value={settings.targetDate}
-                onChange={(event) => onChange({ ...settings, targetDate: event.value ?? settings.targetDate })}
+                placeholder="Select date"
+                style={{ width: 140, fontWeight: "600", color: vitalityColors.primary }}
+                onChange={(event) => {
+                  const value = event.value;
+                  if (typeof value === "string" && value.length > 0) {
+                    onChange({ ...settings, targetDate: value });
+                  }
+                }}
               />
             </View>
 
