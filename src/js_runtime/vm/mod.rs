@@ -363,9 +363,12 @@ impl JsRuntime {
         self.vm
             .ctx
             .with(|ctx| {
-                ctx.eval::<String, _>(script).catch(&ctx).map_err(|error| {
+                let result = ctx.eval::<String, _>(script).catch(&ctx).map_err(|error| {
                     anyhow::anyhow!("failed to evaluate runtime script: {error:?}")
-                })
+                })?;
+                while ctx.execute_pending_job() {}
+                ctx.run_gc();
+                Ok(result)
             })
             .await
     }

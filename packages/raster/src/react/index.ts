@@ -23,11 +23,13 @@ import {
   removeFabricChild,
   removeFabricChildFromContainer,
   resetFabricCommit,
+  clearFabricContainerChildren,
   clearFabricSurface,
   updateFabricHostNode,
   updateFabricTextNode,
   type RasterFabricContainer,
 } from "../core/renderer/index.js";
+import { resetRasterRuntimeGlobals } from "../core/runtime/teardown.js";
 import type {
   RasterEventHandler,
   RasterNativeChildSet,
@@ -121,6 +123,7 @@ type FabricReconciler = Omit<
 };
 
 type FabricContainer = ReturnType<FabricReconciler["createContainer"]>;
+type FabricContainerState = FabricContainer & { current: unknown };
 
 type RasterEventMetadata = {
   type: string | null;
@@ -472,7 +475,9 @@ const fabricHostConfig = {
   commitTextUpdate(instance: FabricTextInstance, _oldText: string, newText: string) {
     updateFabricTextNode(instance, newText, getRasterNativeBinding());
   },
-  clearContainer() {},
+  clearContainer(container: FabricContainerNode) {
+    clearFabricContainerChildren(container, getRasterNativeBinding());
+  },
   resetAfterCommit(containerInfo: FabricContainerNode) {
     resetFabricCommit(containerInfo, getRasterNativeBinding());
   },
@@ -480,6 +485,22 @@ const fabricHostConfig = {
 
 const fabricReconciler = Reconciler(fabricHostConfig) as unknown as FabricReconciler;
 let currentEventReconciler: FabricReconciler = fabricReconciler;
+
+function releaseFabricReconcilerContainer(container: FabricContainer): void {
+  (container as FabricContainerState).current = null;
+}
+
+function disconnectRasterRootGlobals(root: RasterDevRoot): void {
+  if (rasterGlobal.__rasterRunEvent === root.__rasterRunEvent) {
+    delete rasterGlobal.__rasterRunEvent;
+  }
+  if (rasterGlobal.__rasterFlushSyncWork === root.__rasterFlushSyncWork) {
+    delete rasterGlobal.__rasterFlushSyncWork;
+  }
+  if (rasterGlobal.__rasterDevRoot === root) {
+    delete rasterGlobal.__rasterDevRoot;
+  }
+}
 
 function flushRasterWork(reconciler: FabricReconciler = currentEventReconciler): void {
   reconciler.flushSyncWork();
@@ -527,6 +548,7 @@ function createFabricReconcilerContainer(containerInfo: FabricContainerNode): Fa
 export function createFabricRoot(options?: RasterRootOptions): RasterDevRoot {
   const root = createFabricContainerForHostConfig(options);
   const container = createFabricReconcilerContainer(root);
+  let disposed = false;
 
   const runEvent = (
     handler: RasterEventHandler,
@@ -560,8 +582,25 @@ export function createFabricRoot(options?: RasterRootOptions): RasterDevRoot {
     }
   };
 
+  const unmountFabricRoot = () => {
+    const previousSurfaceId = currentFabricSurfaceId;
+    currentFabricSurfaceId = root.surfaceId;
+    currentEventReconciler = fabricReconciler;
+    try {
+      fabricReconciler.updateContainerSync(null, container, null, null);
+      flushRasterWork(fabricReconciler);
+      clearFabricSurface(root, getRasterNativeBinding());
+      resetRasterRuntimeGlobals();
+    } finally {
+      currentFabricSurfaceId = previousSurfaceId;
+    }
+  };
+
   const rasterRoot: RasterDevRoot = {
     render(element: ReactElement | null) {
+      if (disposed) {
+        throw new Error("Raster root has been disposed");
+      }
       const previousSurfaceId = currentFabricSurfaceId;
       currentFabricSurfaceId = root.surfaceId;
       currentEventReconciler = fabricReconciler;
@@ -573,16 +612,19 @@ export function createFabricRoot(options?: RasterRootOptions): RasterDevRoot {
       }
     },
     clear() {
-      const previousSurfaceId = currentFabricSurfaceId;
-      currentFabricSurfaceId = root.surfaceId;
-      currentEventReconciler = fabricReconciler;
-      try {
-        fabricReconciler.updateContainerSync(null, container, null, null);
-        flushRasterWork(fabricReconciler);
-        clearFabricSurface(root, getRasterNativeBinding());
-      } finally {
-        currentFabricSurfaceId = previousSurfaceId;
+      if (disposed) {
+        return;
       }
+      unmountFabricRoot();
+    },
+    dispose() {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
+      unmountFabricRoot();
+      releaseFabricReconcilerContainer(container);
+      disconnectRasterRootGlobals(rasterRoot);
     },
     __rasterRunEvent: runEvent,
     __rasterFlushSyncWork() {

@@ -66,6 +66,9 @@ function createMockBinding(): RasterNativeBinding & { calls: NativeCall[] } {
     resetAfterCommit(surfaceId) {
       calls.push({ name: "resetAfterCommit", args: [surfaceId] });
     },
+    clearContainerChildren(surfaceId) {
+      calls.push({ name: "clearContainerChildren", args: [surfaceId] });
+    },
     appendChild(parent, child) {
       calls.push({ name: "appendChild", args: [parent, child] });
     },

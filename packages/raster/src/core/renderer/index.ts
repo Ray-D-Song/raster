@@ -48,6 +48,13 @@ export function resetFabricCommit(
   binding.resetAfterCommit(container.surfaceId);
 }
 
+export function clearFabricContainerChildren(
+  container: RasterFabricContainer,
+  binding: RasterNativeBinding = getRasterNativeBinding()
+): void {
+  binding.clearContainerChildren?.(container.surfaceId);
+}
+
 export function clearFabricSurface(
   container: RasterFabricContainer,
   binding: RasterNativeBinding = getRasterNativeBinding()

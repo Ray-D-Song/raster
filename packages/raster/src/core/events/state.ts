@@ -35,3 +35,9 @@ export const handlers = handlerRegistry.handlers;
 export const handlerSlots = handlerRegistry.handlerSlots;
 export const textControlEventCounts = new Map<string, number>();
 
+export function resetRasterHandlerRegistry(): void {
+  handlers.clear();
+  handlerSlots.clear();
+  textControlEventCounts.clear();
+}
+

@@ -26,6 +26,10 @@ export function dispatchRasterRuntimeEvent(name: string, payload: unknown): void
   }
 }
 
+export function resetRasterRuntimeEventListeners(): void {
+  listeners.clear();
+}
+
 runtimeEventGlobal.__rasterDispatchRuntimeEventJson ??= (name, payloadJson) => {
   dispatchRasterRuntimeEvent(name, JSON.parse(payloadJson));
 };

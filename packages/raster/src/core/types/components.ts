@@ -7,6 +7,7 @@ import type { RasterThemeConfig } from "./theme.js";
 export interface RasterRoot {
   render(element: ReactElement | null): void;
   clear(): void;
+  dispose(): void;
 }
 
 export interface RasterNodeProps {

@@ -265,6 +265,16 @@ impl NativeHostState {
         self.batcher.reset_after_commit(wake)
     }
 
+    fn clear_container_children(&mut self, surface_id: SurfaceId) -> anyhow::Result<()> {
+        self.ensure_surface(surface_id)?;
+        self.roots.insert(surface_id, Vec::new());
+        self.batcher.push(MountMutation::SetRootChildren {
+            surface_id,
+            children: Vec::new(),
+        });
+        Ok(())
+    }
+
     fn clear_surface(
         &mut self,
         surface_id: SurfaceId,
@@ -614,6 +624,16 @@ pub fn install_native_binding<'js>(ctx: Ctx<'js>, state: NativeBindingState) -> 
             "resetAfterCommit",
             Function::new(ctx.clone(), move |ctx: Ctx<'js>, _surface_id: u64| {
                 reset_after_commit(ctx, state.clone())
+            })?,
+        )?;
+    }
+
+    {
+        let state = state.clone();
+        binding.set(
+            "clearContainerChildren",
+            Function::new(ctx.clone(), move |ctx: Ctx<'js>, surface_id: u64| {
+                clear_container_children(ctx, state.clone(), surface_id)
             })?,
         )?;
     }
@@ -1122,6 +1142,20 @@ fn reset_after_commit<'js>(ctx: Ctx<'js>, state: NativeBindingState) -> JsResult
             .lock()
             .map_err(|_| anyhow::anyhow!("native binding state lock poisoned"))?
             .reset_after_commit(wake.as_ref())
+    })
+}
+
+fn clear_container_children<'js>(
+    ctx: Ctx<'js>,
+    state: NativeBindingState,
+    surface_id: u64,
+) -> JsResult<()> {
+    to_js_result(&ctx, || {
+        state
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("native binding state lock poisoned"))?
+            .clear_container_children(SurfaceId(surface_id))
     })
 }
 

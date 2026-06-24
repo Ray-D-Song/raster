@@ -131,6 +131,7 @@ export interface RasterNativeBinding {
   appendInitialChild(parent: RasterNativeNodeHandle, child: RasterNativeNodeHandle): void;
   prepareForCommit(surfaceId: RasterSurfaceId): void;
   resetAfterCommit(surfaceId: RasterSurfaceId): void;
+  clearContainerChildren?(surfaceId: RasterSurfaceId): void;
   clearSurface?(surfaceId: RasterSurfaceId): void;
   appendChild(parent: RasterNativeNodeHandle, child: RasterNativeNodeHandle): void;
   appendChildToContainer(surfaceId: RasterSurfaceId, child: RasterNativeNodeHandle): void;
