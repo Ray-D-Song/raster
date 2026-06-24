@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { getRasterBridge } from "../bridge/index.js";
 
 type AvatarSpecEntry = string | { src?: string };
@@ -35,6 +35,40 @@ async function loadRemoteImage(uri: string, cancelled: () => boolean): Promise<v
     return;
   }
   getRasterBridge().post("host.assets", "load", { uri, bytes });
+}
+
+export interface ImageSrcCallbacks {
+  onLoad?: (src: string) => void;
+  onError?: (src: string) => void;
+}
+
+export function useImageSrc(src: string | undefined, callbacks?: ImageSrcCallbacks): void {
+  const callbacksRef = useRef(callbacks);
+  callbacksRef.current = callbacks;
+
+  useEffect(() => {
+    if (!isRemoteSrc(src)) {
+      return;
+    }
+
+    let cancelled = false;
+    void loadRemoteImage(src, () => cancelled)
+      .then(() => {
+        if (!cancelled) {
+          callbacksRef.current?.onLoad?.(src);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          callbacksRef.current?.onError?.(src);
+          console.error("[raster] failed to load image", { uri: src, error });
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [src]);
 }
 
 export function usePrefetchImageSrc(src?: string): void {

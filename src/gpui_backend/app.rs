@@ -56,6 +56,7 @@ use crate::{
             form::{is_field_node, is_form_node, render_field_from_node, render_form_from_node},
             helper::props::event_handler,
             icon::{is_icon_node, render_icon_from_node},
+            image::{is_image_node, render_image_from_node},
             input::{RasterInputState, is_text_control_node, render_input_from_node},
             radio::{
                 is_radio_group_node, is_radio_node, render_radio_from_node,
@@ -1035,6 +1036,13 @@ impl NodeOwnerView {
                         return decorate_refresh(icon, highlight);
                     }
                 }
+                if is_image_node(&node) {
+                    let dispatcher =
+                        event_dispatcher(self.bridge.clone(), self.root.clone());
+                    if let Some(image) = render_image_from_node(&node, dispatcher) {
+                        return decorate_refresh(image, highlight);
+                    }
+                }
                 if is_tab_bar_node(&node) {
                     if let Some(tab_bar) = render_tab_bar_from_node(
                         &node,
@@ -1285,9 +1293,11 @@ fn render_node_inline(
                 }
             }
             if is_radio_node(&node) {
-                if let Some(radio) =
-                    render_radio_from_node(&node, child_text.iter().map(String::as_str), dispatcher)
-                {
+                if let Some(radio) = render_radio_from_node(
+                    &node,
+                    child_text.iter().map(String::as_str),
+                    dispatcher.clone(),
+                ) {
                     return radio;
                 }
             }
@@ -1304,6 +1314,11 @@ fn render_node_inline(
             if is_icon_node(&node) {
                 if let Some(icon) = render_icon_from_node(&node) {
                     return icon;
+                }
+            }
+            if is_image_node(&node) {
+                if let Some(image) = render_image_from_node(&node, dispatcher.clone()) {
+                    return image;
                 }
             }
             if is_tab_bar_node(&node) {

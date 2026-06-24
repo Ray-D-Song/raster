@@ -9,7 +9,7 @@ import {
   type IconifyIcon,
   type IconSrc,
 } from "../icons/iconify.js";
-import { usePrefetchAvatarSpecs, usePrefetchImageSrc } from "../internal/prefetchImageSrc.js";
+import { useImageSrc, usePrefetchAvatarSpecs, usePrefetchImageSrc } from "../internal/prefetchImageSrc.js";
 import { useTheme } from "../core/theme.js";
 import type {
   ButtonCustomVariant,
@@ -159,6 +159,7 @@ export const componentNames = [
   "Field",
   "Form",
   "Icon",
+  "Image",
   "LineChart",
   "BarChart",
   "AreaChart",
@@ -176,6 +177,19 @@ export const componentNames = [
 ] as const;
 
 export type ComponentName = (typeof componentNames)[number];
+
+export type ImageObjectFit = "fill" | "contain" | "cover" | "scaleDown" | "none";
+
+export interface ImageProps extends ComponentBaseProps {
+  src: string;
+  alt?: string;
+  width?: number;
+  height?: number;
+  objectFit?: ImageObjectFit;
+  showLoading?: boolean;
+  onLoad?: RasterEventHandler<string>;
+  onError?: RasterEventHandler<string>;
+}
 
 export interface AvatarProps extends ComponentBaseProps {
   name?: JsonValue;
@@ -783,6 +797,23 @@ function normalizeAvatarSpecEntry(entry: string | AvatarSpec): string | AvatarSp
   attachIconSvgProp(spec, "placeholder");
   attachIconSvgProp(spec, "icon");
   return spec as AvatarSpec;
+}
+
+export function Image(input: ImageProps): ReactElement {
+  const { src, onLoad, onError, ...rest } = input;
+  const { props, style, children, events, queries } = splitComponentProps(rest);
+  props.src = src;
+  useImageSrc(src, { onLoad, onError });
+  return jsx(Widget, {
+    name: "Image",
+    props,
+    queries,
+    style,
+    children,
+    ...(onLoad != null ? { onLoad } : {}),
+    ...(onError != null ? { onError } : {}),
+    ...events,
+  });
 }
 
 export function Avatar(input: AvatarProps): ReactElement {

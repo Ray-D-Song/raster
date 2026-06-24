@@ -1,6 +1,6 @@
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
-use gpui::{AlignSelf, AnyElement, ImageSource, IntoElement, Styled as _};
+use gpui::{AlignSelf, AnyElement, IntoElement, Styled as _};
 use gpui_component::{
     Sizable, Size,
     avatar::{Avatar, AvatarGroup},
@@ -9,9 +9,11 @@ use gpui_component::{
 use crate::{
     common::mount::{NodeValue, RetainedNodeKind},
     gpui_backend::{
-        asset_context::current_render_image,
-        components::helper::props::{
-            bool_prop, component_props, display_value, number_prop, string_prop,
+        components::helper::{
+            image_source::{is_remote_uri, resolve_image_source},
+            props::{
+                bool_prop, component_props, display_value, number_prop, string_prop,
+            },
         },
         components::icon::icon_from_svg,
         render_model::{model::RenderModel, style::apply_style},
@@ -145,16 +147,12 @@ fn build_avatar(node: &RetainedNode) -> Avatar {
 
 fn avatar_from_src(src: &str, avatar: Avatar) -> Avatar {
     if is_remote_uri(src) {
-        if let Some(image) = current_render_image(src) {
-            avatar.src(ImageSource::Render(image))
+        if let Some(source) = resolve_image_source(src) {
+            avatar.src(source)
         } else {
             avatar
         }
     } else {
         avatar.src(src)
     }
-}
-
-fn is_remote_uri(src: &str) -> bool {
-    src.starts_with("http://") || src.starts_with("https://")
 }

@@ -22,6 +22,7 @@ const RASTER_COMPONENT_EXPORTS: &[&str] = &[
     "Field",
     "Form",
     "Icon",
+    "Image",
     "LineChart",
     "BarChart",
     "AreaChart",

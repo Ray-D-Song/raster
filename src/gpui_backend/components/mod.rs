@@ -15,6 +15,7 @@ pub mod dialog;
 pub mod form;
 pub mod helper;
 pub mod icon;
+pub mod image;
 pub mod input;
 pub mod internal;
 pub mod radio;
