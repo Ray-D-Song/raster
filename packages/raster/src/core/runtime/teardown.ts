@@ -13,6 +13,7 @@ export function resetRasterRuntimeGlobals(): void {
   delete runtimeGlobal.__rasterInvokeHandlersJson;
   delete runtimeGlobal.__rasterInvokeQuery;
   delete runtimeGlobal.__rasterInvokeQueryJson;
+  delete runtimeGlobal.__rasterBridgeDispatch;
   delete runtimeGlobal.__rasterReadMaterializeDiagnostics;
   delete runtimeGlobal.__rasterResetMaterializeDiagnostics;
 }

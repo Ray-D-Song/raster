@@ -7,8 +7,8 @@ use gpui_component::{
 };
 
 use crate::{
+    bridge::{SharedBridgeState, emit_handler_invoke},
     common::{
-        channel::{ChannelSender, RuntimeCommand},
         ids::{HandlerId, NativeObjectId},
         mount::{NodeValue, RetainedNodeKind},
         utils::logger,
@@ -33,7 +33,7 @@ pub(in crate::gpui_backend) fn render_tab_bar_from_node(
     tree: &Rc<RefCell<RetainedTree>>,
     owners: &Rc<RefCell<OwnerRegistry>>,
     perf: &Rc<RefCell<PerfMonitor>>,
-    runtime_commands: ChannelSender<RuntimeCommand>,
+    bridge: SharedBridgeState,
     root: gpui::WeakEntity<RasterRootView>,
 ) -> Option<AnyElement> {
     if !is_tab_bar_node(node) {
@@ -92,7 +92,7 @@ pub(in crate::gpui_backend) fn render_tab_bar_from_node(
             tree,
             owners,
             perf,
-            runtime_commands.clone(),
+            bridge.clone(),
             root.clone(),
         ));
     }
@@ -102,7 +102,7 @@ pub(in crate::gpui_backend) fn render_tab_bar_from_node(
             tree,
             owners,
             perf,
-            runtime_commands.clone(),
+            bridge.clone(),
             root.clone(),
         ));
     }
@@ -112,7 +112,7 @@ pub(in crate::gpui_backend) fn render_tab_bar_from_node(
         tab_bar = tab_bar.on_click(move |index, _window, _cx| {
             if let Some(Some(handler_id)) = tab_clicks.get(*index) {
                 send_event(
-                    &runtime_commands,
+                    &bridge,
                     *handler_id,
                     NodeValue::String(index.to_string()),
                     "Tab onClick",
@@ -120,7 +120,7 @@ pub(in crate::gpui_backend) fn render_tab_bar_from_node(
             }
             if let Some(handler_id) = on_click {
                 send_event(
-                    &runtime_commands,
+                    &bridge,
                     handler_id,
                     NodeValue::String(index.to_string()),
                     "TabBar onClick",
@@ -135,7 +135,7 @@ pub(in crate::gpui_backend) fn render_tab_bar_from_node(
 pub(in crate::gpui_backend) fn render_tab_from_node(
     node: &RetainedNode,
     child_text: impl IntoIterator<Item = impl Into<String>>,
-    runtime_commands: ChannelSender<RuntimeCommand>,
+    bridge: SharedBridgeState,
 ) -> Option<AnyElement> {
     if !is_tab_node(node) {
         return None;
@@ -149,7 +149,7 @@ pub(in crate::gpui_backend) fn render_tab_from_node(
     if let Some(handler_id) = event_handler(node, "onClick") {
         tab = tab.on_click(move |_, _, _| {
             send_event(
-                &runtime_commands,
+                &bridge,
                 handler_id,
                 NodeValue::String(String::new()),
                 "Tab onClick",
@@ -220,7 +220,7 @@ fn render_slot_children(
     tree: &Rc<RefCell<RetainedTree>>,
     owners: &Rc<RefCell<OwnerRegistry>>,
     perf: &Rc<RefCell<PerfMonitor>>,
-    runtime_commands: ChannelSender<RuntimeCommand>,
+    bridge: SharedBridgeState,
     root: gpui::WeakEntity<RasterRootView>,
 ) -> AnyElement {
     gpui::div()
@@ -232,7 +232,7 @@ fn render_slot_children(
                 tree,
                 owners,
                 perf,
-                runtime_commands.clone(),
+                bridge.clone(),
                 root.clone(),
             )
         }))
@@ -255,18 +255,10 @@ fn parse_tab_variant(value: String) -> Option<TabVariant> {
 }
 
 fn send_event(
-    runtime_commands: &ChannelSender<RuntimeCommand>,
+    bridge: &SharedBridgeState,
     handler_id: HandlerId,
     payload: NodeValue,
-    label: &str,
+    _label: &str,
 ) {
-    if runtime_commands
-        .send(RuntimeCommand::InvokeEvent {
-            handler_id,
-            payload,
-        })
-        .is_err()
-    {
-        logger::error(format!("failed to enqueue {label} event"));
-    }
+    emit_handler_invoke(bridge, handler_id, payload);
 }

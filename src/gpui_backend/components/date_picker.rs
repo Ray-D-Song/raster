@@ -8,8 +8,8 @@ use gpui_component::{
 };
 
 use crate::{
+    bridge::{SharedBridgeState, emit_handler_invoke},
     common::{
-        channel::{ChannelSender, RuntimeCommand},
         ids::HandlerId,
         mount::{NodeValue, RetainedNodeKind},
         utils::logger,
@@ -36,7 +36,7 @@ pub(in crate::gpui_backend) struct RasterDatePickerState {
 impl RasterDatePickerState {
     pub(in crate::gpui_backend) fn new(
         node: &RetainedNode,
-        runtime_commands: ChannelSender<RuntimeCommand>,
+        bridge: SharedBridgeState,
         window: &mut Window,
         cx: &mut Context<crate::gpui_backend::app::NodeOwnerView>,
     ) -> Self {
@@ -64,10 +64,10 @@ impl RasterDatePickerState {
 
         let _subscription = cx.subscribe(&date_picker, {
             let bindings = bindings.clone();
-            let runtime_commands = runtime_commands.clone();
+            let bridge = bridge.clone();
             move |_, _, event: &DatePickerEvent, _cx| match event {
                 DatePickerEvent::Change(date) => {
-                    bindings.borrow().dispatch_change(*date, &runtime_commands);
+                    bindings.borrow().dispatch_change(*date, &bridge);
                 }
             }
         });
@@ -208,7 +208,7 @@ impl DatePickerEventBindings {
         }
     }
 
-    fn dispatch_change(&self, date: Date, runtime_commands: &ChannelSender<RuntimeCommand>) {
+    fn dispatch_change(&self, date: Date, bridge: &SharedBridgeState) {
         let value_payload = date_to_value(date, self.mode);
 
         if let Some(handler_id) = self.on_change {
@@ -222,27 +222,11 @@ impl DatePickerEventBindings {
                 ]
                 .into(),
             );
-            if runtime_commands
-                .send(RuntimeCommand::InvokeEvent {
-                    handler_id,
-                    payload,
-                })
-                .is_err()
-            {
-                logger::error("failed to enqueue DatePicker onChange event");
-            }
+            emit_handler_invoke(bridge, handler_id, payload);
         }
 
         if let Some(handler_id) = self.on_value_change {
-            if runtime_commands
-                .send(RuntimeCommand::InvokeEvent {
-                    handler_id,
-                    payload: value_payload,
-                })
-                .is_err()
-            {
-                logger::error("failed to enqueue DatePicker onValueChange event");
-            }
+            emit_handler_invoke(bridge, handler_id, value_payload);
         }
     }
 }
@@ -397,8 +381,6 @@ fn parse_day_of_week(value: &NodeValue) -> Option<Vec<u32>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::channel::channel;
-
     #[test]
     fn single_value_round_trips_iso_date() {
         let date = value_to_date(
@@ -453,9 +435,38 @@ mod tests {
         assert!(!matcher.is_match(&Date::Single(Some(allowed))));
     }
 
+    fn test_bridge() -> SharedBridgeState {
+        crate::bridge::BridgeState::new(crate::bridge::new_asset_store())
+    }
+
+    fn drain_invoke_events(bridge: &crate::bridge::BridgeState) -> Vec<(HandlerId, NodeValue)> {
+        use crate::bridge::{BridgeEnvelope, BridgeValue, bridge_value_to_node};
+        bridge
+            .drain_egress()
+            .into_iter()
+            .filter_map(|envelope| {
+                let BridgeEnvelope::Event { channel, name, payload } = envelope else {
+                    return None;
+                };
+                if channel != "host.event" || name != "invoke" {
+                    return None;
+                }
+                let BridgeValue::Object(obj) = payload else {
+                    return None;
+                };
+                let handler_id = match obj.get("handlerId")? {
+                    BridgeValue::Number(id) => HandlerId(*id as u64),
+                    _ => return None,
+                };
+                let payload = bridge_value_to_node(obj.get("payload")?.clone());
+                Some((handler_id, payload))
+            })
+            .collect()
+    }
+
     #[test]
     fn dispatch_change_sends_single_payload_and_value_events() {
-        let (sender, receiver) = channel();
+        let bridge = test_bridge();
         let bindings = DatePickerEventBindings {
             mode: DateSelectionMode::Single,
             on_change: Some(HandlerId(1)),
@@ -465,30 +476,25 @@ mod tests {
             NaiveDate::parse_from_str("2026-05-23", "%Y-%m-%d").unwrap(),
         ));
 
-        bindings.dispatch_change(date, &sender);
+        bindings.dispatch_change(date, &bridge);
 
-        let events = receiver.drain();
+        let events = drain_invoke_events(&bridge);
         assert_eq!(events.len(), 2);
         assert!(matches!(
             &events[0],
-            RuntimeCommand::InvokeEvent {
-                handler_id: HandlerId(1),
-                payload: NodeValue::Object(payload),
-            } if payload.get("mode") == Some(&NodeValue::String("single".to_owned()))
-                && payload.get("value") == Some(&NodeValue::String("2026-05-23".to_owned()))
+            (HandlerId(1), NodeValue::Object(payload))
+                if payload.get("mode") == Some(&NodeValue::String("single".to_owned()))
+                    && payload.get("value") == Some(&NodeValue::String("2026-05-23".to_owned()))
         ));
         assert!(matches!(
             &events[1],
-            RuntimeCommand::InvokeEvent {
-                handler_id: HandlerId(2),
-                payload: NodeValue::String(value),
-            } if value == "2026-05-23"
+            (HandlerId(2), NodeValue::String(value)) if value == "2026-05-23"
         ));
     }
 
     #[test]
     fn dispatch_change_sends_range_value_event() {
-        let (sender, receiver) = channel();
+        let bridge = test_bridge();
         let bindings = DatePickerEventBindings {
             mode: DateSelectionMode::Range,
             on_change: None,
@@ -499,19 +505,17 @@ mod tests {
             None,
         );
 
-        bindings.dispatch_change(date, &sender);
+        bindings.dispatch_change(date, &bridge);
 
-        let events = receiver.drain();
+        let events = drain_invoke_events(&bridge);
         assert_eq!(events.len(), 1);
         assert!(matches!(
             &events[0],
-            RuntimeCommand::InvokeEvent {
-                handler_id: HandlerId(2),
-                payload: NodeValue::Array(values),
-            } if values == &vec![
-                NodeValue::String("2026-05-01".to_owned()),
-                NodeValue::Null,
-            ]
+            (HandlerId(2), NodeValue::Array(values))
+                if values == &vec![
+                    NodeValue::String("2026-05-01".to_owned()),
+                    NodeValue::Null,
+                ]
         ));
     }
 }

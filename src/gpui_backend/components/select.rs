@@ -10,8 +10,8 @@ use gpui_component::{
 };
 
 use crate::{
+    bridge::{SharedBridgeState, emit_handler_invoke},
     common::{
-        channel::{ChannelSender, RuntimeCommand},
         ids::HandlerId,
         mount::{NodeValue, RetainedNodeKind},
         utils::logger,
@@ -31,14 +31,14 @@ pub(in crate::gpui_backend) struct RasterSelectState {
     bindings: Rc<RefCell<SelectEventBindings>>,
     searchable: bool,
     controlled_value: Option<Option<NodeValue>>,
-    runtime_commands: ChannelSender<RuntimeCommand>,
+    bridge: SharedBridgeState,
     _subscription: Subscription,
 }
 
 impl RasterSelectState {
     pub(in crate::gpui_backend) fn new(
         node: &RetainedNode,
-        runtime_commands: ChannelSender<RuntimeCommand>,
+        bridge: SharedBridgeState,
         window: &mut Window,
         cx: &mut Context<crate::gpui_backend::app::NodeOwnerView>,
     ) -> Self {
@@ -53,7 +53,7 @@ impl RasterSelectState {
         let delegate = RasterSelectDelegate::new(
             model.borrow().sections.clone(),
             bindings.borrow().on_search_change,
-            runtime_commands.clone(),
+            bridge.clone(),
         );
         let select = cx.new(|cx| {
             SelectState::new(delegate, selected_index, window, cx).searchable(searchable)
@@ -62,7 +62,7 @@ impl RasterSelectState {
         let _subscription = cx.subscribe(&select, {
             let model = model.clone();
             let bindings = bindings.clone();
-            let runtime_commands = runtime_commands.clone();
+            let bridge = bridge.clone();
             move |_, _, event: &SelectEvent<RasterSelectDelegate>, _cx| match event {
                 SelectEvent::Confirm(value) => {
                     let index = value
@@ -72,7 +72,7 @@ impl RasterSelectState {
                         value.as_ref(),
                         index,
                         &model.borrow(),
-                        &runtime_commands,
+                        &bridge,
                     );
                 }
             }
@@ -84,7 +84,7 @@ impl RasterSelectState {
             bindings,
             searchable,
             controlled_value,
-            runtime_commands,
+            bridge,
             _subscription,
         }
     }
@@ -109,7 +109,7 @@ impl RasterSelectState {
             let delegate = RasterSelectDelegate::new(
                 next_model.sections,
                 bindings.on_search_change,
-                self.runtime_commands.clone(),
+                self.bridge.clone(),
             );
             self.select.update(cx, |select, cx| {
                 select.set_items(delegate, window, cx);
@@ -282,19 +282,19 @@ impl SelectItem for RasterSelectItem {
 pub struct RasterSelectDelegate {
     sections: Vec<RasterSelectSection>,
     on_search_change: Option<HandlerId>,
-    runtime_commands: ChannelSender<RuntimeCommand>,
+    bridge: SharedBridgeState,
 }
 
 impl RasterSelectDelegate {
     fn new(
         sections: Vec<RasterSelectSection>,
         on_search_change: Option<HandlerId>,
-        runtime_commands: ChannelSender<RuntimeCommand>,
+        bridge: SharedBridgeState,
     ) -> Self {
         Self {
             sections,
             on_search_change,
-            runtime_commands,
+            bridge,
         }
     }
 }
@@ -344,16 +344,11 @@ impl SelectDelegate for RasterSelectDelegate {
 
     fn perform_search(&mut self, query: &str, _window: &mut Window, _: &mut App) -> gpui::Task<()> {
         if let Some(handler_id) = self.on_search_change {
-            if self
-                .runtime_commands
-                .send(RuntimeCommand::InvokeEvent {
-                    handler_id,
-                    payload: NodeValue::String(query.to_owned()),
-                })
-                .is_err()
-            {
-                logger::error("failed to enqueue Select onSearchChange event");
-            }
+            emit_handler_invoke(
+                &self.bridge,
+                handler_id,
+                NodeValue::String(query.to_owned()),
+            );
         }
         gpui::Task::ready(())
     }
@@ -382,7 +377,7 @@ impl SelectEventBindings {
         value: Option<&NodeValue>,
         index: Option<IndexPath>,
         model: &RasterSelectModel,
-        runtime_commands: &ChannelSender<RuntimeCommand>,
+        bridge: &SharedBridgeState,
     ) {
         let value_payload = match value {
             Some(value) => {
@@ -401,15 +396,7 @@ impl SelectEventBindings {
                         }
                     }
 
-                    if runtime_commands
-                        .send(RuntimeCommand::InvokeEvent {
-                            handler_id,
-                            payload: NodeValue::Object(payload),
-                        })
-                        .is_err()
-                    {
-                        logger::error("failed to enqueue Select onChange event");
-                    }
+                    emit_handler_invoke(bridge, handler_id, NodeValue::Object(payload));
                 }
                 value.clone()
             }
@@ -420,30 +407,14 @@ impl SelectEventBindings {
                             .into_iter()
                             .collect(),
                     );
-                    if runtime_commands
-                        .send(RuntimeCommand::InvokeEvent {
-                            handler_id,
-                            payload,
-                        })
-                        .is_err()
-                    {
-                        logger::error("failed to enqueue Select onChange event");
-                    }
+                    emit_handler_invoke(bridge, handler_id, payload);
                 }
                 NodeValue::Null
             }
         };
 
         if let Some(handler_id) = self.on_value_change {
-            if runtime_commands
-                .send(RuntimeCommand::InvokeEvent {
-                    handler_id,
-                    payload: value_payload,
-                })
-                .is_err()
-            {
-                logger::error("failed to enqueue Select onValueChange event");
-            }
+            emit_handler_invoke(bridge, handler_id, value_payload);
         }
     }
 
@@ -451,7 +422,7 @@ impl SelectEventBindings {
         &self,
         open: bool,
         reason: &str,
-        runtime_commands: &ChannelSender<RuntimeCommand>,
+        bridge: &SharedBridgeState,
     ) {
         let Some(handler_id) = self.on_open_change else {
             return;
@@ -464,15 +435,7 @@ impl SelectEventBindings {
             ]
             .into(),
         );
-        if runtime_commands
-            .send(RuntimeCommand::InvokeEvent {
-                handler_id,
-                payload,
-            })
-            .is_err()
-        {
-            logger::error("failed to enqueue Select onOpenChange event");
-        }
+        emit_handler_invoke(bridge, handler_id, payload);
     }
 }
 
@@ -557,11 +520,41 @@ fn item_disabled(item: &std::collections::BTreeMap<String, NodeValue>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::channel::channel;
+    use crate::bridge::{
+        BridgeEnvelope, BridgeState, BridgeValue, bridge_value_to_node, new_asset_store,
+    };
+
+    fn test_bridge() -> SharedBridgeState {
+        BridgeState::new(new_asset_store())
+    }
+
+    fn drain_invoke_events(bridge: &BridgeState) -> Vec<(HandlerId, NodeValue)> {
+        bridge
+            .drain_egress()
+            .into_iter()
+            .filter_map(|envelope| {
+                let BridgeEnvelope::Event { channel, name, payload } = envelope else {
+                    return None;
+                };
+                if channel != "host.event" || name != "invoke" {
+                    return None;
+                }
+                let BridgeValue::Object(obj) = payload else {
+                    return None;
+                };
+                let handler_id = match obj.get("handlerId")? {
+                    BridgeValue::Number(id) => HandlerId(*id as u64),
+                    _ => return None,
+                };
+                let payload = bridge_value_to_node(obj.get("payload")?.clone());
+                Some((handler_id, payload))
+            })
+            .collect()
+    }
 
     #[test]
     fn dispatch_change_sends_payload_and_value_events() {
-        let (sender, receiver) = channel();
+        let bridge = test_bridge();
         let bindings = SelectEventBindings {
             on_change: Some(HandlerId(1)),
             on_value_change: Some(HandlerId(2)),
@@ -586,32 +579,27 @@ mod tests {
             Some(&NodeValue::String("stable".to_owned())),
             Some(IndexPath::default().section(0).row(0)),
             &model,
-            &sender,
+            &bridge,
         );
 
-        let events = receiver.drain();
+        let events = drain_invoke_events(&bridge);
         assert_eq!(events.len(), 2);
         assert!(matches!(
             &events[0],
-            RuntimeCommand::InvokeEvent {
-                handler_id: HandlerId(1),
-                payload: NodeValue::Object(payload),
-            } if payload.get("value") == Some(&NodeValue::String("stable".to_owned()))
-                && payload.get("id") == Some(&NodeValue::String("stable".to_owned()))
-                && payload.get("label") == Some(&NodeValue::String("Stable".to_owned()))
+            (HandlerId(1), NodeValue::Object(payload))
+                if payload.get("value") == Some(&NodeValue::String("stable".to_owned()))
+                    && payload.get("id") == Some(&NodeValue::String("stable".to_owned()))
+                    && payload.get("label") == Some(&NodeValue::String("Stable".to_owned()))
         ));
         assert!(matches!(
             &events[1],
-            RuntimeCommand::InvokeEvent {
-                handler_id: HandlerId(2),
-                payload: NodeValue::String(value),
-            } if value == "stable"
+            (HandlerId(2), NodeValue::String(value)) if value == "stable"
         ));
     }
 
     #[test]
     fn dispatch_change_sends_null_value_when_cleared() {
-        let (sender, receiver) = channel();
+        let bridge = test_bridge();
         let bindings = SelectEventBindings {
             on_change: None,
             on_value_change: Some(HandlerId(2)),
@@ -620,16 +608,10 @@ mod tests {
         };
         let model = RasterSelectModel { sections: vec![] };
 
-        bindings.dispatch_change(None, None, &model, &sender);
+        bindings.dispatch_change(None, None, &model, &bridge);
 
-        let events = receiver.drain();
+        let events = drain_invoke_events(&bridge);
         assert_eq!(events.len(), 1);
-        assert!(matches!(
-            &events[0],
-            RuntimeCommand::InvokeEvent {
-                handler_id: HandlerId(2),
-                payload: NodeValue::Null,
-            }
-        ));
+        assert!(matches!(&events[0], (HandlerId(2), NodeValue::Null)));
     }
 }

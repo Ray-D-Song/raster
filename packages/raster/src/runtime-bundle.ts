@@ -1,4 +1,5 @@
 export { createRoot, createRoot as createRasterRoot } from "./react/index.js";
+export { getRasterBridge, installBridgeDispatch } from "./bridge/index.js";
 export { ConfigProvider, Input, Label, Slot, Text, Textarea, ThemePreset, View, Widget, useTheme } from "./core/index.js";
 import ReactDefault, * as React from "react";
 import { jsx, jsxs } from "react/jsx-runtime";

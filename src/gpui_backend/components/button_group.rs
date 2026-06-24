@@ -7,8 +7,8 @@ use gpui_component::{
 };
 
 use crate::{
+    bridge::{SharedBridgeState, emit_handler_invoke},
     common::{
-        channel::{ChannelSender, RuntimeCommand},
         ids::HandlerId,
         mount::{NodeValue, RetainedNodeKind},
         utils::logger,
@@ -23,7 +23,7 @@ use crate::{
 pub(in crate::gpui_backend) fn render_button_group_from_node(
     node: &RetainedNode,
     tree: &Rc<RefCell<RetainedTree>>,
-    runtime_commands: ChannelSender<RuntimeCommand>,
+    bridge: SharedBridgeState,
 ) -> Option<AnyElement> {
     if !is_button_group_node(node) {
         return None;
@@ -131,7 +131,7 @@ pub(in crate::gpui_backend) fn render_button_group_from_node(
 
             if let Some(Some(handler_id)) = button_clicks.get(index) {
                 send_event(
-                    &runtime_commands,
+                    &bridge,
                     *handler_id,
                     NodeValue::String(String::new()),
                     "ButtonGroup child onClick",
@@ -139,12 +139,12 @@ pub(in crate::gpui_backend) fn render_button_group_from_node(
             }
             if let Some(handler_id) = group_on_change {
                 if let Some(value) = button_values.get(index).cloned() {
-                    send_event(&runtime_commands, handler_id, value, "ButtonGroup onChange");
+                    send_event(&bridge, handler_id, value, "ButtonGroup onChange");
                 }
             }
             if let Some(handler_id) = group_on_click {
                 send_event(
-                    &runtime_commands,
+                    &bridge,
                     handler_id,
                     NodeValue::String(index.to_string()),
                     "ButtonGroup onClick",
@@ -177,20 +177,12 @@ fn button_label(node: &RetainedNode, tree: &RetainedTree) -> Option<String> {
 }
 
 fn send_event(
-    runtime_commands: &ChannelSender<RuntimeCommand>,
+    bridge: &SharedBridgeState,
     handler_id: HandlerId,
     payload: NodeValue,
-    label: &str,
+    _label: &str,
 ) {
-    if runtime_commands
-        .send(RuntimeCommand::InvokeEvent {
-            handler_id,
-            payload,
-        })
-        .is_err()
-    {
-        logger::error(format!("failed to enqueue {label} event"));
-    }
+    emit_handler_invoke(bridge, handler_id, payload);
 }
 
 fn parse_axis(value: &str) -> Axis {

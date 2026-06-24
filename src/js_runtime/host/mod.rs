@@ -7,11 +7,12 @@ pub mod batch;
 
 use llrt_core::{Ctx, Exception, Function, Object, Result as JsResult, Value};
 
+use crate::bridge::{
+    BridgeEnvelope, BridgeValue, SharedBridgeState, new_asset_store,
+};
+use crate::bridge::value::node_value_to_bridge;
 use crate::common::{
-    channel::{
-        ChannelReceiver, ChannelSender, CommitQueue, NoopWakeSignal, NotificationCommandPayload,
-        NotificationType, UiCommand, WakeSignal, channel,
-    },
+    channel::{CommitQueue, NoopWakeSignal, NotificationCommandPayload, NotificationType, WakeSignal},
     ids::{HandlerId, NativeObjectId, SurfaceId},
     mount::{HandlerBinding, MountMutation, NodePayload, NodeValue, RetainedNodeKind},
 };
@@ -23,15 +24,9 @@ pub type NativeBindingState = Arc<NativeBinding>;
 pub struct NativeBinding {
     inner: Mutex<NativeHostState>,
     commits: Mutex<CommitQueue>,
-    ui_commands: Mutex<UiCommandQueue>,
+    bridge: SharedBridgeState,
     wake: Mutex<Arc<dyn WakeSignal>>,
     theme_snapshot_json: Mutex<String>,
-}
-
-#[derive(Debug)]
-struct UiCommandQueue {
-    sender: ChannelSender<UiCommand>,
-    receiver: ChannelReceiver<UiCommand>,
 }
 
 #[derive(Debug)]
@@ -81,29 +76,14 @@ struct HandlerSlotKey {
 
 pub fn new_native_binding_state() -> NativeBindingState {
     let commits = CommitQueue::new();
-    let ui_commands = UiCommandQueue::new();
+    let bridge = crate::bridge::BridgeState::new(new_asset_store());
     Arc::new(NativeBinding {
         inner: Mutex::new(NativeHostState::new(commits.sender())),
         commits: Mutex::new(commits),
-        ui_commands: Mutex::new(ui_commands),
+        bridge,
         wake: Mutex::new(Arc::new(NoopWakeSignal)),
         theme_snapshot_json: Mutex::new("{}".to_owned()),
     })
-}
-
-impl UiCommandQueue {
-    fn new() -> Self {
-        let (sender, receiver) = channel();
-        Self { sender, receiver }
-    }
-
-    fn sender(&self) -> ChannelSender<UiCommand> {
-        self.sender.clone()
-    }
-
-    fn drain(&self) -> Vec<UiCommand> {
-        self.receiver.drain()
-    }
 }
 
 impl NativeBinding {
@@ -150,11 +130,8 @@ impl NativeBinding {
             .unwrap_or_default()
     }
 
-    pub fn drain_ui_commands(&self) -> Vec<UiCommand> {
-        self.ui_commands
-            .lock()
-            .map(|commands| commands.drain())
-            .unwrap_or_default()
+    pub fn bridge(&self) -> SharedBridgeState {
+        self.bridge.clone()
     }
 
     pub fn set_theme_snapshot_json(&self, snapshot: String) {
@@ -170,18 +147,6 @@ impl NativeBinding {
             .unwrap_or_else(|_| "{}".to_owned())
     }
 
-    fn submit_ui_command(&self, command: UiCommand) -> anyhow::Result<()> {
-        let sender = self
-            .ui_commands
-            .lock()
-            .map_err(|_| anyhow::anyhow!("ui command queue lock poisoned"))?
-            .sender();
-        sender
-            .send(command)
-            .map_err(|_| anyhow::anyhow!("ui command receiver has been dropped"))?;
-        self.commit_wake().wake();
-        Ok(())
-    }
 }
 
 impl NativeHostState {
@@ -653,8 +618,25 @@ pub fn install_native_binding<'js>(ctx: Ctx<'js>, state: NativeBindingState) -> 
     install_notification_functions(ctx.clone(), state.clone(), &binding)?;
     install_chart_functions(ctx.clone(), state.clone(), &binding)?;
     install_theme_functions(ctx.clone(), state.clone(), &binding)?;
+    crate::bridge::js::install_bridge_binding(ctx.clone(), state.bridge())?;
 
     ctx.globals().set("__rasterNative", binding)
+}
+
+fn send_bridge_call(
+    state: &NativeBinding,
+    channel: &str,
+    method: &str,
+    payload: BridgeValue,
+) -> anyhow::Result<()> {
+    state
+        .bridge()
+        .send_ingress(BridgeEnvelope::Call {
+            id: 0,
+            channel: channel.to_owned(),
+            method: method.to_owned(),
+            payload,
+        })
 }
 
 fn install_theme_functions<'js>(
@@ -684,10 +666,15 @@ fn install_chart_functions<'js>(
                     let handle = handle_from_js(&ctx, handle)?;
                     let rows = chart_rows_from_js(rows)?;
                     to_js_result(&ctx, || {
-                        state.submit_ui_command(UiCommand::ChartAppendData {
-                            node_id: handle.node_id,
-                            rows,
-                        })
+                        send_bridge_call(
+                            &state,
+                            "host.ui",
+                            "chartAppendData",
+                            BridgeValue::object([
+                                ("nodeId", BridgeValue::Number(handle.node_id.0 as f64)),
+                                ("rows", node_rows_to_bridge(rows)),
+                            ]),
+                        )
                     })
                 },
             )?,
@@ -704,10 +691,15 @@ fn install_chart_functions<'js>(
                     let handle = handle_from_js(&ctx, handle)?;
                     let rows = chart_rows_from_js(rows)?;
                     to_js_result(&ctx, || {
-                        state.submit_ui_command(UiCommand::ChartReplaceData {
-                            node_id: handle.node_id,
-                            rows,
-                        })
+                        send_bridge_call(
+                            &state,
+                            "host.ui",
+                            "chartReplaceData",
+                            BridgeValue::object([
+                                ("nodeId", BridgeValue::Number(handle.node_id.0 as f64)),
+                                ("rows", node_rows_to_bridge(rows)),
+                            ]),
+                        )
                     })
                 },
             )?,
@@ -721,9 +713,15 @@ fn install_chart_functions<'js>(
             Function::new(ctx.clone(), move |ctx: Ctx<'js>, handle: Value<'js>| {
                 let handle = handle_from_js(&ctx, handle)?;
                 to_js_result(&ctx, || {
-                    state.submit_ui_command(UiCommand::ChartClearData {
-                        node_id: handle.node_id,
-                    })
+                    send_bridge_call(
+                        &state,
+                        "host.ui",
+                        "chartClearData",
+                        BridgeValue::object([(
+                            "nodeId",
+                            BridgeValue::Number(handle.node_id.0 as f64),
+                        )]),
+                    )
                 })
             })?,
         )?;
@@ -744,7 +742,12 @@ fn install_notification_functions<'js>(
             Function::new(ctx.clone(), move |ctx: Ctx<'js>, options: Value<'js>| {
                 let payload = notification_payload_from_js(&ctx, options)?;
                 to_js_result(&ctx, || {
-                    state.submit_ui_command(UiCommand::ShowNotification(payload))
+                    send_bridge_call(
+                        &state,
+                        "host.ui",
+                        "notificationShow",
+                        notification_payload_to_bridge(payload),
+                    )
                 })
             })?,
         )?;
@@ -756,7 +759,12 @@ fn install_notification_functions<'js>(
             "notificationDismiss",
             Function::new(ctx.clone(), move |ctx: Ctx<'js>, id: String| {
                 to_js_result(&ctx, || {
-                    state.submit_ui_command(UiCommand::DismissNotification { id })
+                    send_bridge_call(
+                        &state,
+                        "host.ui",
+                        "notificationDismiss",
+                        BridgeValue::object([("id", BridgeValue::string(id))]),
+                    )
                 })
             })?,
         )?;
@@ -768,7 +776,7 @@ fn install_notification_functions<'js>(
             "notificationClear",
             Function::new(ctx.clone(), move |ctx: Ctx<'js>| {
                 to_js_result(&ctx, || {
-                    state.submit_ui_command(UiCommand::ClearNotifications)
+                    send_bridge_call(&state, "host.ui", "notificationClear", BridgeValue::Null)
                 })
             })?,
         )?;
@@ -1395,4 +1403,35 @@ fn retained_kind_from_native_kind(kind: &str) -> RetainedNodeKind {
 
 fn js_error(ctx: &Ctx<'_>, message: &str) -> llrt_core::Error {
     Exception::throw_message(ctx, message)
+}
+
+fn node_rows_to_bridge(rows: Vec<NodeValue>) -> BridgeValue {
+    BridgeValue::Array(rows.into_iter().map(node_value_to_bridge).collect())
+}
+
+fn notification_payload_to_bridge(payload: NotificationCommandPayload) -> BridgeValue {
+    let mut entries = vec![
+        ("message".to_owned(), BridgeValue::string(payload.message)),
+        ("autohide".to_owned(), BridgeValue::Bool(payload.autohide)),
+        (
+            "type".to_owned(),
+            BridgeValue::string(notification_type_to_str(payload.type_)),
+        ),
+    ];
+    if let Some(id) = payload.id {
+        entries.push(("id".to_owned(), BridgeValue::string(id)));
+    }
+    if let Some(title) = payload.title {
+        entries.push(("title".to_owned(), BridgeValue::string(title)));
+    }
+    BridgeValue::Object(entries.into_iter().collect())
+}
+
+fn notification_type_to_str(value: NotificationType) -> &'static str {
+    match value {
+        NotificationType::Success => "success",
+        NotificationType::Warning => "warning",
+        NotificationType::Error => "error",
+        NotificationType::Info => "info",
+    }
 }

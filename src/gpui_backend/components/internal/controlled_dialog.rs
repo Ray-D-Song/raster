@@ -3,8 +3,8 @@ use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 use gpui::{App, Window};
 
 use crate::{
+    bridge::{SharedBridgeState, emit_handler_invoke},
     common::{
-        channel::{ChannelSender, RuntimeCommand},
         ids::{HandlerId, NativeObjectId},
         mount::NodeValue,
         utils::logger,
@@ -110,36 +110,20 @@ where
 
 pub(in crate::gpui_backend) fn dispatch_string_event(
     handler_id: HandlerId,
-    runtime_commands: &ChannelSender<RuntimeCommand>,
-    label: &str,
+    bridge: &SharedBridgeState,
+    _label: &str,
 ) {
-    if runtime_commands
-        .send(RuntimeCommand::InvokeEvent {
-            handler_id,
-            payload: NodeValue::String(String::new()),
-        })
-        .is_err()
-    {
-        logger::error(format!("failed to enqueue {label} event"));
-    }
+    emit_handler_invoke(bridge, handler_id, NodeValue::String(String::new()));
 }
 
 pub(in crate::gpui_backend) fn dispatch_open_change(
     handler_id: HandlerId,
     reason: &str,
-    runtime_commands: &ChannelSender<RuntimeCommand>,
-    label: &str,
+    bridge: &SharedBridgeState,
+    _label: &str,
 ) {
     let mut payload = BTreeMap::new();
     payload.insert("open".to_owned(), NodeValue::Bool(false));
     payload.insert("reason".to_owned(), NodeValue::String(reason.to_owned()));
-    if runtime_commands
-        .send(RuntimeCommand::InvokeEvent {
-            handler_id,
-            payload: NodeValue::Object(payload),
-        })
-        .is_err()
-    {
-        logger::error(format!("failed to enqueue {label} event"));
-    }
+    emit_handler_invoke(bridge, handler_id, NodeValue::Object(payload));
 }

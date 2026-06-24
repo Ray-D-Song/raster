@@ -1,11 +1,9 @@
-use std::rc::Rc;
-
-use gpui::{AnyElement, App, IntoElement};
+use gpui::{AnyElement, IntoElement};
 use gpui_component::{Disableable, Selectable, Sizable, Size, checkbox::Checkbox};
 
 use crate::{
+    bridge::BridgeEventDispatch,
     common::{
-        channel::RuntimeCommand,
         mount::{NodeValue, RetainedNodeKind},
     },
     gpui_backend::{
@@ -20,7 +18,7 @@ use crate::{
 pub(in crate::gpui_backend) fn render_checkbox_from_node<'a>(
     node: &RetainedNode,
     child_text: impl IntoIterator<Item = &'a str>,
-    dispatch_event: Rc<dyn Fn(RuntimeCommand, &mut App)>,
+    dispatch_event: BridgeEventDispatch,
 ) -> Option<AnyElement> {
     if !is_checkbox_node(node) {
         return None;
@@ -54,25 +52,13 @@ pub(in crate::gpui_backend) fn render_checkbox_from_node<'a>(
     let on_change = event_handler(node, "onChange");
     let on_click = event_handler(node, "onClick");
     if on_change.is_some() || on_click.is_some() {
-        checkbox = checkbox.on_click(move |checked, _window, cx| {
+        checkbox = checkbox.on_click(move |checked, _window, _cx| {
             let payload = NodeValue::Bool(*checked);
             if let Some(handler_id) = on_change {
-                dispatch_event(
-                    RuntimeCommand::InvokeEvent {
-                        handler_id,
-                        payload: payload.clone(),
-                    },
-                    cx,
-                );
+                dispatch_event(handler_id, payload.clone());
             }
             if let Some(handler_id) = on_click {
-                dispatch_event(
-                    RuntimeCommand::InvokeEvent {
-                        handler_id,
-                        payload,
-                    },
-                    cx,
-                );
+                dispatch_event(handler_id, payload);
             }
         });
     }

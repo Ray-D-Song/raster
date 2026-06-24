@@ -4,6 +4,8 @@
 //! mounting diff application, and owner notifications.
 
 pub mod app;
+pub mod asset_context;
+pub mod bridge_host;
 pub mod assets;
 pub mod components;
 pub mod config_provider;

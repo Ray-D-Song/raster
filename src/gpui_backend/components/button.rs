@@ -1,14 +1,12 @@
-use std::rc::Rc;
-
-use gpui::{AnyElement, App, IntoElement, px};
+use gpui::{AnyElement, IntoElement, px};
 use gpui_component::{
     Disableable, Selectable, Sizable, Size,
     button::{Button, ButtonRounded, ButtonVariant, ButtonVariants},
 };
 
 use crate::{
+    bridge::BridgeEventDispatch,
     common::{
-        channel::RuntimeCommand,
         mount::{NodeValue, RetainedNodeKind},
     },
     gpui_backend::{
@@ -27,7 +25,7 @@ use crate::{
 pub fn render_button_from_node<'a>(
     node: &RetainedNode,
     child_text: impl IntoIterator<Item = &'a str>,
-    dispatch_event: Rc<dyn Fn(RuntimeCommand, &mut App)>,
+    dispatch_event: BridgeEventDispatch,
 ) -> Option<AnyElement> {
     if node.kind != RetainedNodeKind::Widget || node.component_name() != "Button" {
         return None;
@@ -84,13 +82,7 @@ pub fn render_button_from_node<'a>(
     }
     if let Some(handler_id) = event_handler(node, "onClick") {
         button = button.on_click(move |_event, _window, _cx| {
-            dispatch_event(
-                RuntimeCommand::InvokeEvent {
-                    handler_id,
-                    payload: NodeValue::String(String::new()),
-                },
-                _cx,
-            );
+            dispatch_event(handler_id, NodeValue::String(String::new()));
         });
     }
 

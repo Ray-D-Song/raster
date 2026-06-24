@@ -5805,6 +5805,7 @@ dependencies = [
  "android-activity",
  "android_logger",
  "anyhow",
+ "base64",
  "chrono",
  "csscolorparser",
  "futures",
@@ -5813,6 +5814,7 @@ dependencies = [
  "gpui-component-assets",
  "gpui-mobile",
  "gpui_platform",
+ "image",
  "jni",
  "libsui",
  "log",
@@ -5822,6 +5824,7 @@ dependencies = [
  "raster_runtime_utils",
  "regex",
  "serde_json",
+ "smallvec",
  "tokio",
 ]
 

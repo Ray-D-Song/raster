@@ -7,8 +7,8 @@ use gpui_component::{
 };
 
 use crate::{
+    bridge::{SharedBridgeState, emit_handler_invoke},
     common::{
-        channel::{ChannelSender, RuntimeCommand},
         ids::HandlerId,
         mount::{NodeValue, RetainedNodeKind},
         utils::logger,
@@ -37,7 +37,7 @@ pub(in crate::gpui_backend) struct RasterColorPickerState {
 impl RasterColorPickerState {
     pub(in crate::gpui_backend) fn new(
         node: &RetainedNode,
-        runtime_commands: ChannelSender<RuntimeCommand>,
+        bridge: SharedBridgeState,
         window: &mut Window,
         cx: &mut Context<crate::gpui_backend::app::NodeOwnerView>,
     ) -> Self {
@@ -55,10 +55,10 @@ impl RasterColorPickerState {
 
         let _subscription = cx.subscribe(&color_picker, {
             let bindings = bindings.clone();
-            let runtime_commands = runtime_commands.clone();
+            let bridge = bridge.clone();
             move |_, _, event: &ColorPickerEvent, _cx| match event {
                 ColorPickerEvent::Change(value) => {
-                    bindings.borrow().dispatch_change(*value, &runtime_commands);
+                    bindings.borrow().dispatch_change(*value, &bridge);
                 }
             }
         });
@@ -176,7 +176,7 @@ impl ColorPickerEventBindings {
     fn dispatch_change(
         &self,
         value: Option<Hsla>,
-        runtime_commands: &ChannelSender<RuntimeCommand>,
+        bridge: &SharedBridgeState,
     ) {
         let value_payload = value
             .map(|color| NodeValue::String(color.to_hex().to_string()))
@@ -189,27 +189,11 @@ impl ColorPickerEventBindings {
                     .collect::<BTreeMap<_, _>>(),
             );
 
-            if runtime_commands
-                .send(RuntimeCommand::InvokeEvent {
-                    handler_id,
-                    payload,
-                })
-                .is_err()
-            {
-                logger::error("failed to enqueue ColorPicker onChange event");
-            }
+            emit_handler_invoke(bridge, handler_id, payload);
         }
 
         if let Some(handler_id) = self.on_value_change {
-            if runtime_commands
-                .send(RuntimeCommand::InvokeEvent {
-                    handler_id,
-                    payload: value_payload,
-                })
-                .is_err()
-            {
-                logger::error("failed to enqueue ColorPicker onValueChange event");
-            }
+            emit_handler_invoke(bridge, handler_id, value_payload);
         }
     }
 }
@@ -266,11 +250,41 @@ fn parse_anchor(value: &str) -> Option<Anchor> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::channel::channel;
+    use crate::bridge::{
+        BridgeEnvelope, BridgeState, BridgeValue, bridge_value_to_node, new_asset_store,
+    };
+
+    fn test_bridge() -> SharedBridgeState {
+        BridgeState::new(new_asset_store())
+    }
+
+    fn drain_invoke_events(bridge: &BridgeState) -> Vec<(HandlerId, NodeValue)> {
+        bridge
+            .drain_egress()
+            .into_iter()
+            .filter_map(|envelope| {
+                let BridgeEnvelope::Event { channel, name, payload } = envelope else {
+                    return None;
+                };
+                if channel != "host.event" || name != "invoke" {
+                    return None;
+                }
+                let BridgeValue::Object(obj) = payload else {
+                    return None;
+                };
+                let handler_id = match obj.get("handlerId")? {
+                    BridgeValue::Number(id) => HandlerId(*id as u64),
+                    _ => return None,
+                };
+                let payload = bridge_value_to_node(obj.get("payload")?.clone());
+                Some((handler_id, payload))
+            })
+            .collect()
+    }
 
     #[test]
     fn dispatch_change_sends_payload_and_value_events() {
-        let (sender, receiver) = channel();
+        let bridge = test_bridge();
         let bindings = ColorPickerEventBindings {
             on_change: Some(HandlerId(1)),
             on_value_change: Some(HandlerId(2)),
@@ -278,44 +292,36 @@ mod tests {
         let color = parse_color("#ff0000").expect("valid color");
         let expected = NodeValue::String(color.to_hex().to_string());
 
-        bindings.dispatch_change(Some(color), &sender);
+        bindings.dispatch_change(Some(color), &bridge);
 
-        let events = receiver.drain();
+        let events = drain_invoke_events(&bridge);
         assert_eq!(events.len(), 2);
         assert!(matches!(
             &events[0],
-            RuntimeCommand::InvokeEvent {
-                handler_id: HandlerId(1),
-                payload: NodeValue::Object(payload),
-            } if payload.get("value") == Some(&expected)
+            (HandlerId(1), NodeValue::Object(payload))
+                if payload.get("value") == Some(&expected)
         ));
         assert!(matches!(
             &events[1],
-            RuntimeCommand::InvokeEvent {
-                handler_id: HandlerId(2),
-                payload,
-            } if payload == &expected
+            (HandlerId(2), payload) if payload == &expected
         ));
     }
 
     #[test]
     fn dispatch_change_sends_null_value_when_cleared() {
-        let (sender, receiver) = channel();
+        let bridge = test_bridge();
         let bindings = ColorPickerEventBindings {
             on_change: None,
             on_value_change: Some(HandlerId(2)),
         };
 
-        bindings.dispatch_change(None, &sender);
+        bindings.dispatch_change(None, &bridge);
 
-        let events = receiver.drain();
+        let events = drain_invoke_events(&bridge);
         assert_eq!(events.len(), 1);
         assert!(matches!(
             &events[0],
-            RuntimeCommand::InvokeEvent {
-                handler_id: HandlerId(2),
-                payload: NodeValue::Null,
-            }
+            (HandlerId(2), NodeValue::Null)
         ));
     }
 }

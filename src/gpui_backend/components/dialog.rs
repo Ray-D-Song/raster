@@ -8,8 +8,8 @@ use gpui_component::{
 };
 
 use crate::{
+    bridge::SharedBridgeState,
     common::{
-        channel::{ChannelSender, RuntimeCommand},
         ids::HandlerId,
         mount::RetainedNodeKind,
     },
@@ -33,7 +33,7 @@ pub(in crate::gpui_backend) struct DialogRenderContext {
     pub(in crate::gpui_backend) tree: Rc<RefCell<RetainedTree>>,
     pub(in crate::gpui_backend) owners: Rc<RefCell<OwnerRegistry>>,
     pub(in crate::gpui_backend) perf: Rc<RefCell<crate::gpui_backend::perf::PerfMonitor>>,
-    pub(in crate::gpui_backend) runtime_commands: ChannelSender<RuntimeCommand>,
+    pub(in crate::gpui_backend) bridge: SharedBridgeState,
     pub(in crate::gpui_backend) root: gpui::WeakEntity<RasterRootView>,
 }
 
@@ -152,38 +152,38 @@ fn open_dialog(
     cx: &mut App,
 ) {
     let children = node.children.clone();
-    let runtime_commands = render_context.runtime_commands.clone();
+    let bridge = render_context.bridge.clone();
 
     window.open_dialog(cx, move |dialog, _window, _cx| {
         let mut dialog = apply_config(dialog, &config);
 
         if config.confirm {
             if let Some(handler_id) = config.on_ok {
-                let runtime_commands = runtime_commands.clone();
+                let bridge = bridge.clone();
                 let on_open_change = config.on_open_change;
                 let suppressed = suppressed.clone();
                 dialog = dialog.on_ok(move |_, _, _| {
                     *suppressed.borrow_mut() = true;
-                    dispatch_string_event(handler_id, &runtime_commands, "Dialog onOk");
+                    dispatch_string_event(handler_id, &bridge, "Dialog onOk");
                     if let Some(handler_id) = on_open_change {
                         dispatch_open_change(
                             handler_id,
                             "ok",
-                            &runtime_commands,
+                            &bridge,
                             "Dialog onOpenChange",
                         );
                     }
                     true
                 });
             } else if let Some(handler_id) = config.on_open_change {
-                let runtime_commands = runtime_commands.clone();
+                let bridge = bridge.clone();
                 let suppressed = suppressed.clone();
                 dialog = dialog.on_ok(move |_, _, _| {
                     *suppressed.borrow_mut() = true;
                     dispatch_open_change(
                         handler_id,
                         "ok",
-                        &runtime_commands,
+                        &bridge,
                         "Dialog onOpenChange",
                     );
                     true
@@ -192,20 +192,20 @@ fn open_dialog(
         }
 
         if config.on_cancel.is_some() || config.on_open_change.is_some() {
-            let runtime_commands = runtime_commands.clone();
+            let bridge = bridge.clone();
             let on_cancel = config.on_cancel;
             let on_open_change = config.on_open_change;
             let suppressed = suppressed.clone();
             dialog = dialog.on_cancel(move |_, _, _| {
                 *suppressed.borrow_mut() = true;
                 if let Some(handler_id) = on_cancel {
-                    dispatch_string_event(handler_id, &runtime_commands, "Dialog onCancel");
+                    dispatch_string_event(handler_id, &bridge, "Dialog onCancel");
                 }
                 if let Some(handler_id) = on_open_change {
                     dispatch_open_change(
                         handler_id,
                         "cancel",
-                        &runtime_commands,
+                        &bridge,
                         "Dialog onOpenChange",
                     );
                 }
@@ -219,7 +219,7 @@ fn open_dialog(
                 &render_context.tree,
                 &render_context.owners,
                 &render_context.perf,
-                render_context.runtime_commands.clone(),
+                render_context.bridge.clone(),
                 render_context.root.clone(),
             ));
         }

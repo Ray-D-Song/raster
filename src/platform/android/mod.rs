@@ -96,7 +96,7 @@ fn android_main(app: AndroidApp) {
         }
     };
     if dev_mode {
-        start_dev_server_reloader(loaded_bundle.dev_urls, prepared.runtime_commands.clone());
+        start_dev_server_reloader(loaded_bundle.dev_urls, prepared.command_sender.clone());
     }
 
     let _platform = gpui_jni::init_platform(&app);
@@ -118,7 +118,7 @@ fn android_main(app: AndroidApp) {
                 ..WindowOptions::default()
             },
             prepared.native_binding.clone(),
-            prepared.runtime_commands.clone(),
+            prepared.bridge.clone(),
         );
         cx.activate(true);
     });

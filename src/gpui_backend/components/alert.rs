@@ -7,8 +7,8 @@ use gpui_component::{
 };
 
 use crate::{
+    bridge::SharedBridgeState,
     common::{
-        channel::{ChannelSender, RuntimeCommand},
         ids::HandlerId,
         mount::RetainedNodeKind,
     },
@@ -34,7 +34,7 @@ pub(in crate::gpui_backend) struct AlertRenderContext {
     pub(in crate::gpui_backend) tree: Rc<RefCell<RetainedTree>>,
     pub(in crate::gpui_backend) owners: Rc<RefCell<OwnerRegistry>>,
     pub(in crate::gpui_backend) perf: Rc<RefCell<crate::gpui_backend::perf::PerfMonitor>>,
-    pub(in crate::gpui_backend) runtime_commands: ChannelSender<RuntimeCommand>,
+    pub(in crate::gpui_backend) bridge: SharedBridgeState,
     pub(in crate::gpui_backend) root: gpui::WeakEntity<RasterRootView>,
 }
 
@@ -159,43 +159,43 @@ fn open_alert(
     cx: &mut App,
 ) {
     let children = node.children.clone();
-    let runtime_commands = render_context.runtime_commands.clone();
+    let bridge = render_context.bridge.clone();
 
     window.open_alert_dialog(cx, move |alert, _window, _cx| {
         let mut alert = apply_config(alert, &config);
 
         if config.on_ok.is_some() || config.on_open_change.is_some() {
-            let runtime_commands = runtime_commands.clone();
+            let bridge = bridge.clone();
             let on_ok = config.on_ok;
             let on_open_change = config.on_open_change;
             let suppressed = suppressed.clone();
             alert = alert.on_ok(move |_, _, _| {
                 *suppressed.borrow_mut() = true;
                 if let Some(handler_id) = on_ok {
-                    dispatch_string_event(handler_id, &runtime_commands, "Alert onOk");
+                    dispatch_string_event(handler_id, &bridge, "Alert onOk");
                 }
                 if let Some(handler_id) = on_open_change {
-                    dispatch_open_change(handler_id, "ok", &runtime_commands, "Alert onOpenChange");
+                    dispatch_open_change(handler_id, "ok", &bridge, "Alert onOpenChange");
                 }
                 true
             });
         }
 
         if config.on_cancel.is_some() || config.on_open_change.is_some() {
-            let runtime_commands = runtime_commands.clone();
+            let bridge = bridge.clone();
             let on_cancel = config.on_cancel;
             let on_open_change = config.on_open_change;
             let suppressed = suppressed.clone();
             alert = alert.on_cancel(move |_, _, _| {
                 *suppressed.borrow_mut() = true;
                 if let Some(handler_id) = on_cancel {
-                    dispatch_string_event(handler_id, &runtime_commands, "Alert onCancel");
+                    dispatch_string_event(handler_id, &bridge, "Alert onCancel");
                 }
                 if let Some(handler_id) = on_open_change {
                     dispatch_open_change(
                         handler_id,
                         "cancel",
-                        &runtime_commands,
+                        &bridge,
                         "Alert onOpenChange",
                     );
                 }
@@ -204,9 +204,9 @@ fn open_alert(
         }
 
         if let Some(handler_id) = config.on_close {
-            let runtime_commands = runtime_commands.clone();
+            let bridge = bridge.clone();
             alert = alert.on_close(move |_, _, _| {
-                dispatch_string_event(handler_id, &runtime_commands, "Alert onClose");
+                dispatch_string_event(handler_id, &bridge, "Alert onClose");
             });
         }
 
@@ -216,7 +216,7 @@ fn open_alert(
                 &render_context.tree,
                 &render_context.owners,
                 &render_context.perf,
-                render_context.runtime_commands.clone(),
+                render_context.bridge.clone(),
                 render_context.root.clone(),
             ));
         }

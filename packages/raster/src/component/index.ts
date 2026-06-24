@@ -9,6 +9,7 @@ import {
   type IconifyIcon,
   type IconSrc,
 } from "../icons/iconify.js";
+import { usePrefetchAvatarSpecs, usePrefetchImageSrc } from "../internal/prefetchImageSrc.js";
 import { useTheme } from "../core/theme.js";
 import type {
   ButtonCustomVariant,
@@ -786,12 +787,14 @@ function normalizeAvatarSpecEntry(entry: string | AvatarSpec): string | AvatarSp
 
 export function Avatar(input: AvatarProps): ReactElement {
   const { props, style, children, events, queries } = splitComponentProps(input);
+  usePrefetchImageSrc(input.src);
   attachIconSvgProp(props, "placeholder");
   return jsx(Widget, { name: "Avatar", props, queries, style, children, ...events });
 }
 
 export function AvatarGroup(input: AvatarGroupProps): ReactElement {
   const { avatars, items, ...rest } = input;
+  usePrefetchAvatarSpecs(items ?? avatars);
   const normalized: AvatarGroupProps = {
     ...rest,
     ...(avatars != null ? { avatars: avatars.map(normalizeAvatarSpecEntry) } : {}),

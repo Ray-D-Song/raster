@@ -1,4 +1,5 @@
 pub mod app;
+pub mod bridge;
 pub mod common;
 pub mod config;
 pub mod gpui_backend;

@@ -8,8 +8,8 @@ use gpui_component::{
 };
 
 use crate::{
+    bridge::{SharedBridgeState, emit_handler_invoke},
     common::{
-        channel::{ChannelSender, RuntimeCommand},
         ids::HandlerId,
         mount::{NodeValue, RetainedNodeKind},
         utils::logger,
@@ -32,7 +32,7 @@ pub(in crate::gpui_backend) struct RasterTimePickerState {
 impl RasterTimePickerState {
     pub(in crate::gpui_backend) fn new(
         node: &RetainedNode,
-        runtime_commands: ChannelSender<RuntimeCommand>,
+        bridge: SharedBridgeState,
         window: &mut Window,
         cx: &mut Context<crate::gpui_backend::app::NodeOwnerView>,
     ) -> Self {
@@ -48,13 +48,13 @@ impl RasterTimePickerState {
 
         let _subscription = cx.subscribe(&time_picker, {
             let bindings = bindings.clone();
-            let runtime_commands = runtime_commands.clone();
+            let bridge = bridge.clone();
             let format = config.format;
             move |_, _, event: &TimePickerEvent, _cx| match event {
                 TimePickerEvent::Change(time) => {
                     bindings
                         .borrow()
-                        .dispatch_change(*time, format, &runtime_commands);
+                        .dispatch_change(*time, format, &bridge);
                 }
             }
         });
@@ -166,7 +166,7 @@ impl TimePickerEventBindings {
         &self,
         time: Option<NaiveTime>,
         format: TimeFormat,
-        runtime_commands: &ChannelSender<RuntimeCommand>,
+        bridge: &SharedBridgeState,
     ) {
         let value_payload = time_to_value(time, format);
 
@@ -174,27 +174,11 @@ impl TimePickerEventBindings {
             let payload = NodeValue::Object(
                 [("value".to_owned(), value_payload.clone())].into(),
             );
-            if runtime_commands
-                .send(RuntimeCommand::InvokeEvent {
-                    handler_id,
-                    payload,
-                })
-                .is_err()
-            {
-                logger::error("failed to enqueue TimePicker onChange event");
-            }
+            emit_handler_invoke(bridge, handler_id, payload);
         }
 
         if let Some(handler_id) = self.on_value_change {
-            if runtime_commands
-                .send(RuntimeCommand::InvokeEvent {
-                    handler_id,
-                    payload: value_payload,
-                })
-                .is_err()
-            {
-                logger::error("failed to enqueue TimePicker onValueChange event");
-            }
+            emit_handler_invoke(bridge, handler_id, value_payload);
         }
     }
 }
@@ -236,8 +220,6 @@ fn time_to_value(time: Option<NaiveTime>, format: TimeFormat) -> NodeValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::channel::channel;
-
     #[test]
     fn hm_value_round_trips() {
         let time = value_to_time(
@@ -264,32 +246,56 @@ mod tests {
         );
     }
 
+    fn test_bridge() -> SharedBridgeState {
+        crate::bridge::BridgeState::new(crate::bridge::new_asset_store())
+    }
+
+    fn drain_invoke_events(bridge: &crate::bridge::BridgeState) -> Vec<(HandlerId, NodeValue)> {
+        use crate::bridge::{BridgeEnvelope, BridgeValue, bridge_value_to_node};
+        bridge
+            .drain_egress()
+            .into_iter()
+            .filter_map(|envelope| {
+                let BridgeEnvelope::Event { channel, name, payload } = envelope else {
+                    return None;
+                };
+                if channel != "host.event" || name != "invoke" {
+                    return None;
+                }
+                let BridgeValue::Object(obj) = payload else {
+                    return None;
+                };
+                let handler_id = match obj.get("handlerId")? {
+                    BridgeValue::Number(id) => HandlerId(*id as u64),
+                    _ => return None,
+                };
+                let payload = bridge_value_to_node(obj.get("payload")?.clone());
+                Some((handler_id, payload))
+            })
+            .collect()
+    }
+
     #[test]
     fn dispatch_change_sends_payload_and_value_events() {
-        let (sender, receiver) = channel();
+        let bridge = test_bridge();
         let bindings = TimePickerEventBindings {
             on_change: Some(HandlerId(1)),
             on_value_change: Some(HandlerId(2)),
         };
         let time = NaiveTime::parse_from_str("08:15", "%H:%M").unwrap();
 
-        bindings.dispatch_change(Some(time), TimeFormat::Hm, &sender);
+        bindings.dispatch_change(Some(time), TimeFormat::Hm, &bridge);
 
-        let events = receiver.drain();
+        let events = drain_invoke_events(&bridge);
         assert_eq!(events.len(), 2);
         assert!(matches!(
             &events[0],
-            RuntimeCommand::InvokeEvent {
-                handler_id: HandlerId(1),
-                payload: NodeValue::Object(payload),
-            } if payload.get("value") == Some(&NodeValue::String("08:15".to_owned()))
+            (HandlerId(1), NodeValue::Object(payload))
+                if payload.get("value") == Some(&NodeValue::String("08:15".to_owned()))
         ));
         assert!(matches!(
             &events[1],
-            RuntimeCommand::InvokeEvent {
-                handler_id: HandlerId(2),
-                payload: NodeValue::String(value),
-            } if value == "08:15"
+            (HandlerId(2), NodeValue::String(value)) if value == "08:15"
         ));
     }
 }

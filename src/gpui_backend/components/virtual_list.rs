@@ -7,8 +7,8 @@ use gpui::{
 use gpui_component::{VirtualListScrollHandle, h_virtual_list, v_virtual_list};
 
 use crate::{
+    bridge::SharedBridgeState,
     common::{
-        channel::{ChannelSender, RuntimeCommand},
         ids::NativeObjectId,
         mount::RetainedNodeKind,
     },
@@ -55,7 +55,7 @@ pub(in crate::gpui_backend) fn render_virtual_list_from_node(
     tree: Rc<RefCell<RetainedTree>>,
     owners: Rc<RefCell<OwnerRegistry>>,
     perf: Rc<RefCell<PerfMonitor>>,
-    runtime_commands: ChannelSender<RuntimeCommand>,
+    bridge: SharedBridgeState,
     root: WeakEntity<RasterRootView>,
 ) -> Option<AnyElement> {
     if !is_virtual_list_node(node) {
@@ -79,7 +79,7 @@ pub(in crate::gpui_backend) fn render_virtual_list_from_node(
                 &tree,
                 &owners,
                 &perf,
-                runtime_commands.clone(),
+                bridge.clone(),
                 root.clone(),
                 range,
             )
@@ -91,7 +91,7 @@ pub(in crate::gpui_backend) fn render_virtual_list_from_node(
                 &tree,
                 &owners,
                 &perf,
-                runtime_commands.clone(),
+                bridge.clone(),
                 root.clone(),
                 range,
             )
@@ -146,7 +146,7 @@ fn render_visible_items(
     tree: &Rc<RefCell<RetainedTree>>,
     owners: &Rc<RefCell<OwnerRegistry>>,
     perf: &Rc<RefCell<PerfMonitor>>,
-    runtime_commands: ChannelSender<RuntimeCommand>,
+    bridge: SharedBridgeState,
     root: WeakEntity<RasterRootView>,
     range: std::ops::Range<usize>,
 ) -> Vec<AnyElement> {
@@ -158,7 +158,7 @@ fn render_visible_items(
                     tree,
                     owners,
                     perf,
-                    runtime_commands.clone(),
+                    bridge.clone(),
                     root.clone(),
                 );
             }

@@ -11,6 +11,7 @@
   "include": [
     "src/component/**/*.ts",
     "src/core/**/*.ts",
-    "src/react/index.ts"
+    "src/react/index.ts",
+    "src/bridge/**/*.ts"
   ]
 }

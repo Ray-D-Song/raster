@@ -24,12 +24,14 @@ use crate::gpui_backend::assets::RasterAssets;
 use gpui_component_assets::Assets;
 
 use crate::{
+    bridge::{BridgeEventDispatch, SharedBridgeState, emit_handler_invoke, emit_runtime_event},
     common::{
-        channel::{ChannelSender, RuntimeCommand, UiCommand, WakeSignal},
+        channel::{UiCommand, WakeSignal},
         ids::{NativeObjectId, SurfaceId},
         mount::{NodeValue, RetainedNodeKind},
         utils::logger,
     },
+    gpui_backend::{asset_context::with_render_assets, bridge_host::drain_bridge_ingress},
     gpui_backend::{
         components::{
             alert::{AlertRenderContext, RasterAlertState, is_alert_node},
@@ -102,7 +104,7 @@ pub fn start_desktop(
     height: u32,
     dev_reload: Option<DevReloadConfig>,
     native_binding: NativeBindingState,
-    runtime_commands: ChannelSender<RuntimeCommand>,
+    bridge: SharedBridgeState,
 ) {
     logger::info("gpui_backend initialize start");
     gpui_platform::application()
@@ -132,7 +134,7 @@ pub fn start_desktop(
                 ..WindowOptions::default()
             };
 
-            open_raster_window(cx, options, native_binding, runtime_commands);
+            open_raster_window(cx, options, native_binding, bridge);
             cx.activate(true);
             logger::info("gpui_backend initialize success");
         });
@@ -142,7 +144,7 @@ pub fn open_raster_window(
     cx: &mut App,
     options: WindowOptions,
     native_binding: NativeBindingState,
-    runtime_commands: ChannelSender<RuntimeCommand>,
+    bridge: SharedBridgeState,
 ) {
     gpui_component::init(cx);
     load_embedded_themes(cx);
@@ -157,7 +159,7 @@ pub fn open_raster_window(
     .detach();
 
     cx.open_window(options, |window, cx| {
-        let raster_root = cx.new(|cx| RasterRootView::new(native_binding, runtime_commands, cx));
+        let raster_root = cx.new(|cx| RasterRootView::new(native_binding, bridge, cx));
         cx.new(|cx| gpui_component::Root::new(raster_root, window, cx))
     })
     .expect("failed to open Raster GPUI window");
@@ -165,7 +167,7 @@ pub fn open_raster_window(
 
 pub(in crate::gpui_backend) struct RasterRootView {
     native_binding: NativeBindingState,
-    runtime_commands: ChannelSender<RuntimeCommand>,
+    bridge: SharedBridgeState,
     tree: Rc<RefCell<RetainedTree>>,
     owners: Rc<RefCell<OwnerRegistry>>,
     perf: Rc<RefCell<PerfMonitor>>,
@@ -180,16 +182,17 @@ pub(in crate::gpui_backend) struct RasterRootView {
 impl RasterRootView {
     fn new(
         native_binding: NativeBindingState,
-        runtime_commands: ChannelSender<RuntimeCommand>,
+        _bridge: SharedBridgeState,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut tree = RetainedTree::new();
         let surface_id = tree.create_surface();
         let perfdetect = native_binding.surface_options(surface_id).perfdetect;
+        let bridge = native_binding.bridge();
         install_commit_wake(native_binding.clone(), cx);
         Self {
             native_binding,
-            runtime_commands,
+            bridge,
             tree: Rc::new(RefCell::new(tree)),
             owners: Rc::new(RefCell::new(OwnerRegistry::new())),
             perf: Rc::new(RefCell::new(PerfMonitor::new(perfdetect))),
@@ -202,29 +205,29 @@ impl RasterRootView {
         }
     }
 
-    fn drain_ui_commands(&mut self, cx: &mut Context<Self>) {
-        for command in self.native_binding.drain_ui_commands() {
-            match command {
-                UiCommand::ShowNotification(_)
-                | UiCommand::DismissNotification { .. }
-                | UiCommand::ClearNotifications => {
-                    self.notification_center
-                        .update(cx, |center, cx| center.apply_command(command, cx));
-                }
-                UiCommand::ChartAppendData { node_id, rows } => {
-                    self.dispatch_chart_command(node_id, cx, move |state| state.append_data(rows));
-                }
-                UiCommand::ChartReplaceData { node_id, rows } => {
-                    self.dispatch_chart_command(node_id, cx, move |state| state.replace_data(rows));
-                }
-                UiCommand::ChartClearData { node_id } => {
-                    self.dispatch_chart_command(node_id, cx, |state| state.clear_data());
-                }
+    pub(in crate::gpui_backend) fn bridge(&self) -> SharedBridgeState {
+        self.bridge.clone()
+    }
+
+    pub(in crate::gpui_backend) fn apply_ui_command(
+        &mut self,
+        command: UiCommand,
+        cx: &mut Context<Self>,
+    ) {
+        match command {
+            UiCommand::ShowNotification(_)
+            | UiCommand::DismissNotification { .. }
+            | UiCommand::ClearNotifications => {
+                self.notification_center
+                    .update(cx, |center, cx| center.apply_command(command, cx));
             }
+            UiCommand::ChartAppendData { .. }
+            | UiCommand::ChartReplaceData { .. }
+            | UiCommand::ChartClearData { .. } => {}
         }
     }
 
-    fn dispatch_chart_command(
+    pub(in crate::gpui_backend) fn dispatch_chart_command(
         &self,
         node_id: NativeObjectId,
         cx: &mut Context<Self>,
@@ -262,7 +265,7 @@ impl RasterRootView {
     }
 
     fn drain_commits_and_notify(&mut self, cx: &mut Context<Self>) -> bool {
-        self.drain_ui_commands(cx);
+        drain_bridge_ingress(self, cx);
         let outcome = self.drain_commits();
         let has_dirty = !outcome.is_clean();
         let theme_changed = self.sync_config_provider_theme(cx);
@@ -287,7 +290,7 @@ impl RasterRootView {
                         tree: self.tree.clone(),
                         owners: self.owners.clone(),
                         perf: self.perf.clone(),
-                        runtime_commands: self.runtime_commands.clone(),
+                        bridge: self.bridge.clone(),
                         root: cx.entity().downgrade(),
                     },
                     window,
@@ -315,7 +318,7 @@ impl RasterRootView {
                         tree: self.tree.clone(),
                         owners: self.owners.clone(),
                         perf: self.perf.clone(),
-                        runtime_commands: self.runtime_commands.clone(),
+                        bridge: self.bridge.clone(),
                         root: cx.entity().downgrade(),
                     },
                     window,
@@ -343,7 +346,7 @@ impl RasterRootView {
                         tree: self.tree.clone(),
                         owners: self.owners.clone(),
                         perf: self.perf.clone(),
-                        runtime_commands: self.runtime_commands.clone(),
+                        bridge: self.bridge.clone(),
                         root: cx.entity().downgrade(),
                     },
                     window,
@@ -370,17 +373,7 @@ impl RasterRootView {
         }
         self.native_binding
             .set_theme_snapshot_json(theme_snapshot_json(cx));
-        if let Err(error) = self
-            .runtime_commands
-            .send(RuntimeCommand::EmitRuntimeEvent {
-                name: "themechange".to_owned(),
-                payload: NodeValue::Null,
-            })
-        {
-            logger::error(format!(
-                "failed to enqueue themechange runtime event: {error}"
-            ));
-        }
+        emit_runtime_event(&self.bridge, "themechange", NodeValue::Null);
         self.applied_theme = snapshot;
         true
     }
@@ -394,7 +387,7 @@ impl RasterRootView {
             self.tree.clone(),
             self.owners.clone(),
             self.perf.clone(),
-            self.runtime_commands.clone(),
+            self.bridge.clone(),
             root.clone(),
             cx,
         );
@@ -414,10 +407,21 @@ impl RasterRootView {
                 self.tree.clone(),
                 self.owners.clone(),
                 self.perf.clone(),
-                self.runtime_commands.clone(),
+                self.bridge.clone(),
                 root.clone(),
                 cx,
             );
+        }
+    }
+
+    pub(in crate::gpui_backend) fn notify_all_owners(&self, cx: &mut Context<Self>) {
+        cx.notify();
+        let owners = self.owners.borrow();
+        for entity in owners.surface_owners.values() {
+            entity.update(cx, |_, cx| cx.notify());
+        }
+        for entity in owners.node_owners.values() {
+            entity.update(cx, |_, cx| cx.notify());
         }
     }
 
@@ -452,7 +456,16 @@ impl RasterRootView {
 
 impl Render for RasterRootView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.drain_ui_commands(cx);
+        let assets = self.bridge.assets();
+        with_render_assets(assets, || {
+            self.render_inner(window, cx)
+        })
+    }
+}
+
+impl RasterRootView {
+    fn render_inner(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        drain_bridge_ingress(self, cx);
         self.drain_commits();
         self.sync_config_provider_theme(cx);
         self.ensure_owner_entities(cx);
@@ -506,7 +519,7 @@ impl OwnerRegistry {
         tree: Rc<RefCell<RetainedTree>>,
         owners: Rc<RefCell<OwnerRegistry>>,
         perf: Rc<RefCell<PerfMonitor>>,
-        runtime_commands: ChannelSender<RuntimeCommand>,
+        bridge: SharedBridgeState,
         root: WeakEntity<RasterRootView>,
         cx: &mut Context<RasterRootView>,
     ) {
@@ -516,7 +529,7 @@ impl OwnerRegistry {
                 tree,
                 owners,
                 perf,
-                runtime_commands,
+                bridge,
                 root,
             })
         });
@@ -528,7 +541,7 @@ impl OwnerRegistry {
         tree: Rc<RefCell<RetainedTree>>,
         owners: Rc<RefCell<OwnerRegistry>>,
         perf: Rc<RefCell<PerfMonitor>>,
-        runtime_commands: ChannelSender<RuntimeCommand>,
+        bridge: SharedBridgeState,
         root: WeakEntity<RasterRootView>,
         cx: &mut Context<RasterRootView>,
     ) {
@@ -546,7 +559,7 @@ impl OwnerRegistry {
                 slider_state: None,
                 chart_state: None,
                 virtual_list_state: None,
-                runtime_commands,
+                bridge,
                 root,
             })
         });
@@ -558,31 +571,33 @@ struct SurfaceOwnerView {
     tree: Rc<RefCell<RetainedTree>>,
     owners: Rc<RefCell<OwnerRegistry>>,
     perf: Rc<RefCell<PerfMonitor>>,
-    runtime_commands: ChannelSender<RuntimeCommand>,
+    bridge: SharedBridgeState,
     root: WeakEntity<RasterRootView>,
 }
 
 impl Render for SurfaceOwnerView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let roots = self
-            .tree
-            .borrow()
-            .surface(self.surface_id)
-            .map(|surface| surface.roots.clone())
-            .unwrap_or_default();
-        let mut element = div().size_full().flex().flex_col().gap_2();
-        for root in roots {
-            element = append_surface_child(
-                element,
-                root,
-                &self.tree,
-                &self.owners,
-                &self.perf,
-                self.runtime_commands.clone(),
-                self.root.clone(),
-            );
-        }
-        element
+        with_render_assets(self.bridge.assets(), || {
+            let roots = self
+                .tree
+                .borrow()
+                .surface(self.surface_id)
+                .map(|surface| surface.roots.clone())
+                .unwrap_or_default();
+            let mut element = div().size_full().flex().flex_col().gap_2();
+            for root in roots {
+                element = append_surface_child(
+                    element,
+                    root,
+                    &self.tree,
+                    &self.owners,
+                    &self.perf,
+                    self.bridge.clone(),
+                    self.root.clone(),
+                );
+            }
+            element
+        })
     }
 }
 
@@ -592,7 +607,7 @@ fn append_surface_child(
     tree: &Rc<RefCell<RetainedTree>>,
     owners: &Rc<RefCell<OwnerRegistry>>,
     perf: &Rc<RefCell<PerfMonitor>>,
-    runtime_commands: ChannelSender<RuntimeCommand>,
+    bridge: SharedBridgeState,
     root: WeakEntity<RasterRootView>,
 ) -> gpui::Div {
     let config_provider_children = {
@@ -611,7 +626,7 @@ fn append_surface_child(
                 tree,
                 owners,
                 perf,
-                runtime_commands.clone(),
+                bridge.clone(),
                 root.clone(),
             );
         }
@@ -627,7 +642,7 @@ fn append_surface_child(
         tree,
         owners,
         perf,
-        runtime_commands,
+        bridge,
         root,
     ))
 }
@@ -726,12 +741,18 @@ pub(super) struct NodeOwnerView {
     slider_state: Option<RasterSliderState>,
     chart_state: Option<RasterChartState>,
     virtual_list_state: Option<RasterVirtualListState>,
-    runtime_commands: ChannelSender<RuntimeCommand>,
+    bridge: SharedBridgeState,
     root: WeakEntity<RasterRootView>,
 }
 
 impl Render for NodeOwnerView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        with_render_assets(self.bridge.assets(), || self.render_impl(window, cx))
+    }
+}
+
+impl NodeOwnerView {
+    fn render_impl(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let highlight = self.perf.borrow_mut().highlight(self.node_id);
         if let Some(node) = self.tree.borrow().node(self.node_id).cloned() {
             if is_text_control_node(&node) {
@@ -742,7 +763,7 @@ impl Render for NodeOwnerView {
                 self.slider_state = None;
                 self.chart_state = None;
                 self.virtual_list_state = None;
-                let dispatcher = event_dispatcher(self.runtime_commands.clone(), self.root.clone());
+                let dispatcher = event_dispatcher(self.bridge.clone(), self.root.clone());
                 if self
                     .input_state
                     .as_ref()
@@ -771,7 +792,7 @@ impl Render for NodeOwnerView {
                 {
                     self.select_state = Some(RasterSelectState::new(
                         &node,
-                        self.runtime_commands.clone(),
+                        self.bridge.clone(),
                         window,
                         cx,
                     ));
@@ -797,7 +818,7 @@ impl Render for NodeOwnerView {
                 {
                     self.color_picker_state = Some(RasterColorPickerState::new(
                         &node,
-                        self.runtime_commands.clone(),
+                        self.bridge.clone(),
                         window,
                         cx,
                     ));
@@ -825,7 +846,7 @@ impl Render for NodeOwnerView {
                 {
                     self.date_picker_state = Some(RasterDatePickerState::new(
                         &node,
-                        self.runtime_commands.clone(),
+                        self.bridge.clone(),
                         window,
                         cx,
                     ));
@@ -853,7 +874,7 @@ impl Render for NodeOwnerView {
                 {
                     self.time_picker_state = Some(RasterTimePickerState::new(
                         &node,
-                        self.runtime_commands.clone(),
+                        self.bridge.clone(),
                         window,
                         cx,
                     ));
@@ -881,7 +902,7 @@ impl Render for NodeOwnerView {
                 {
                     self.slider_state = Some(RasterSliderState::new(
                         &node,
-                        self.runtime_commands.clone(),
+                        self.bridge.clone(),
                         cx,
                     ));
                 }
@@ -911,7 +932,7 @@ impl Render for NodeOwnerView {
                         self.tree.clone(),
                         self.owners.clone(),
                         self.perf.clone(),
-                        self.runtime_commands.clone(),
+                        self.bridge.clone(),
                         self.root.clone(),
                     ) {
                         return decorate_refresh(virtual_list, highlight);
@@ -951,7 +972,7 @@ impl Render for NodeOwnerView {
                     if let Some(button_group) = render_button_group_from_node(
                         &node,
                         &self.tree,
-                        self.runtime_commands.clone(),
+                        self.bridge.clone(),
                     ) {
                         return decorate_refresh(button_group, highlight);
                     }
@@ -959,7 +980,7 @@ impl Render for NodeOwnerView {
                 let child_text = child_text(&self.tree, &node.children);
                 if is_checkbox_node(&node) {
                     let dispatcher =
-                        event_dispatcher(self.runtime_commands.clone(), self.root.clone());
+                        event_dispatcher(self.bridge.clone(), self.root.clone());
                     if let Some(checkbox) = render_checkbox_from_node(
                         &node,
                         child_text.iter().map(String::as_str),
@@ -970,7 +991,7 @@ impl Render for NodeOwnerView {
                 }
                 if is_switch_node(&node) {
                     let dispatcher =
-                        event_dispatcher(self.runtime_commands.clone(), self.root.clone());
+                        event_dispatcher(self.bridge.clone(), self.root.clone());
                     if let Some(switch) = render_switch_from_node(
                         &node,
                         child_text.iter().map(String::as_str),
@@ -983,14 +1004,14 @@ impl Render for NodeOwnerView {
                     if let Some(radio_group) = render_radio_group_from_node(
                         &node,
                         &self.tree,
-                        self.runtime_commands.clone(),
+                        self.bridge.clone(),
                     ) {
                         return decorate_refresh(radio_group, highlight);
                     }
                 }
                 if is_radio_node(&node) {
                     let dispatcher =
-                        event_dispatcher(self.runtime_commands.clone(), self.root.clone());
+                        event_dispatcher(self.bridge.clone(), self.root.clone());
                     if let Some(radio) = render_radio_from_node(
                         &node,
                         child_text.iter().map(String::as_str),
@@ -1020,7 +1041,7 @@ impl Render for NodeOwnerView {
                         &self.tree,
                         &self.owners,
                         &self.perf,
-                        self.runtime_commands.clone(),
+                        self.bridge.clone(),
                         self.root.clone(),
                     ) {
                         return decorate_refresh(tab_bar, highlight);
@@ -1030,7 +1051,7 @@ impl Render for NodeOwnerView {
                     if let Some(tab) = render_tab_from_node(
                         &node,
                         child_text.iter().map(String::as_str),
-                        self.runtime_commands.clone(),
+                        self.bridge.clone(),
                     ) {
                         return decorate_refresh(tab, highlight);
                     }
@@ -1052,7 +1073,7 @@ impl Render for NodeOwnerView {
                 &self.tree,
                 &self.owners,
                 &self.perf,
-                self.runtime_commands.clone(),
+                self.bridge.clone(),
                 self.root.clone(),
             ),
             highlight,
@@ -1083,13 +1104,13 @@ pub(in crate::gpui_backend) fn render_node_child(
     tree: &Rc<RefCell<RetainedTree>>,
     owners: &Rc<RefCell<OwnerRegistry>>,
     perf: &Rc<RefCell<PerfMonitor>>,
-    runtime_commands: ChannelSender<RuntimeCommand>,
+    bridge: SharedBridgeState,
     root: WeakEntity<RasterRootView>,
 ) -> AnyElement {
     if let Some(owner) = owners.borrow().node_owners.get(&id).cloned() {
         return owner.into_any_element();
     }
-    render_node_inline(id, tree, owners, perf, runtime_commands, root)
+    render_node_inline(id, tree, owners, perf, bridge, root)
 }
 
 fn render_node_inline(
@@ -1097,7 +1118,7 @@ fn render_node_inline(
     tree: &Rc<RefCell<RetainedTree>>,
     owners: &Rc<RefCell<OwnerRegistry>>,
     perf: &Rc<RefCell<PerfMonitor>>,
-    runtime_commands: ChannelSender<RuntimeCommand>,
+    bridge: SharedBridgeState,
     root: WeakEntity<RasterRootView>,
 ) -> AnyElement {
     let Some(node) = tree.borrow().node(id).cloned() else {
@@ -1121,17 +1142,9 @@ fn render_node_inline(
                 })
                 .flex_1();
                 if let Some(handler_id) = event_handler(&node, "onClick") {
-                    let runtime_commands = runtime_commands.clone();
+                    let bridge = bridge.clone();
                     element = element.on_click(move |_, _, _| {
-                        if runtime_commands
-                            .send(RuntimeCommand::InvokeEvent {
-                                handler_id,
-                                payload: NodeValue::String(String::new()),
-                            })
-                            .is_err()
-                        {
-                            logger::error("failed to enqueue View onClick event");
-                        }
+                        emit_handler_invoke(&bridge, handler_id, NodeValue::String(String::new()));
                     });
                 }
                 for child in children {
@@ -1143,7 +1156,7 @@ fn render_node_inline(
                         tree,
                         owners,
                         perf,
-                        runtime_commands.clone(),
+                        bridge.clone(),
                         root.clone(),
                     ));
                 }
@@ -1154,17 +1167,9 @@ fn render_node_inline(
                     &view.style,
                 );
                 if let Some(handler_id) = event_handler(&node, "onClick") {
-                    let runtime_commands = runtime_commands.clone();
+                    let bridge = bridge.clone();
                     element = element.on_click(move |_, _, _| {
-                        if runtime_commands
-                            .send(RuntimeCommand::InvokeEvent {
-                                handler_id,
-                                payload: NodeValue::String(String::new()),
-                            })
-                            .is_err()
-                        {
-                            logger::error("failed to enqueue View onClick event");
-                        }
+                        emit_handler_invoke(&bridge, handler_id, NodeValue::String(String::new()));
                     });
                 }
                 for child in children {
@@ -1176,7 +1181,7 @@ fn render_node_inline(
                         tree,
                         owners,
                         perf,
-                        runtime_commands.clone(),
+                        bridge.clone(),
                         root.clone(),
                     ));
                 }
@@ -1188,7 +1193,7 @@ fn render_node_inline(
             .into_any_element(),
         RenderModel::Widget(widget) => {
             let child_text = child_text(tree, &children);
-            let dispatcher = event_dispatcher(runtime_commands.clone(), root.clone());
+            let dispatcher = event_dispatcher(bridge.clone(), root.clone());
             if is_config_provider_node(&node) {
                 let mut element = apply_style(div(), &widget.style);
                 for child in children {
@@ -1200,7 +1205,7 @@ fn render_node_inline(
                         tree,
                         owners,
                         perf,
-                        runtime_commands.clone(),
+                        bridge.clone(),
                         root.clone(),
                     ));
                 }
@@ -1221,7 +1226,7 @@ fn render_node_inline(
                     tree,
                     owners,
                     perf,
-                    runtime_commands.clone(),
+                    bridge.clone(),
                     root.clone(),
                 ) {
                     return form;
@@ -1233,7 +1238,7 @@ fn render_node_inline(
                     tree,
                     owners,
                     perf,
-                    runtime_commands.clone(),
+                    bridge.clone(),
                     root.clone(),
                 ) {
                     return field;
@@ -1249,7 +1254,7 @@ fn render_node_inline(
             }
             if is_button_group_node(&node) {
                 if let Some(button_group) =
-                    render_button_group_from_node(&node, tree, runtime_commands.clone())
+                    render_button_group_from_node(&node, tree, bridge.clone())
                 {
                     return button_group;
                 }
@@ -1274,7 +1279,7 @@ fn render_node_inline(
             }
             if is_radio_group_node(&node) {
                 if let Some(radio_group) =
-                    render_radio_group_from_node(&node, tree, runtime_commands.clone())
+                    render_radio_group_from_node(&node, tree, bridge.clone())
                 {
                     return radio_group;
                 }
@@ -1307,7 +1312,7 @@ fn render_node_inline(
                     tree,
                     owners,
                     perf,
-                    runtime_commands.clone(),
+                    bridge.clone(),
                     root.clone(),
                 ) {
                     return tab_bar;
@@ -1317,7 +1322,7 @@ fn render_node_inline(
                 if let Some(tab) = render_tab_from_node(
                     &node,
                     child_text.iter().map(String::as_str),
-                    runtime_commands.clone(),
+                    bridge.clone(),
                 ) {
                     return tab;
                 }
@@ -1365,7 +1370,7 @@ fn render_node_inline(
                     tree,
                     owners,
                     perf,
-                    runtime_commands.clone(),
+                    bridge.clone(),
                     root.clone(),
                 ));
             }
@@ -1384,23 +1389,21 @@ fn child_text(tree: &Rc<RefCell<RetainedTree>>, children: &[NativeObjectId]) -> 
 }
 
 fn event_dispatcher(
-    runtime_commands: ChannelSender<RuntimeCommand>,
+    bridge: SharedBridgeState,
     _root: WeakEntity<RasterRootView>,
-) -> Rc<dyn Fn(RuntimeCommand, &mut App)> {
-    Rc::new(move |command, _cx| {
-        if let Err(error) = runtime_commands.send(command) {
-            logger::error(format!("failed to enqueue runtime command: {error}"));
-        }
-    })
+) -> BridgeEventDispatch {
+    crate::bridge::bridge_event_dispatcher(bridge)
 }
 
 fn install_commit_wake(native_binding: NativeBindingState, cx: &mut Context<RasterRootView>) {
     let (sender, mut receiver) = mpsc::unbounded::<()>();
     let pending = Arc::new(AtomicBool::new(false));
-    native_binding.set_commit_wake(Arc::new(GpuiCommitWake {
+    let wake: Arc<dyn WakeSignal> = Arc::new(GpuiCommitWake {
         sender,
         pending: pending.clone(),
-    }));
+    });
+    native_binding.set_commit_wake(wake.clone());
+    native_binding.bridge().set_host_wake(wake);
 
     cx.spawn(async move |root, cx| {
         while receiver.next().await.is_some() {

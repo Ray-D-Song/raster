@@ -21,6 +21,9 @@ function normalizeJsonObject(value: object, path: string, label: string): JsonOb
 
   const object: JsonObject = {};
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (child === undefined) {
+      continue;
+    }
     object[key] = normalizeJsonValue(child, path + "." + key, label);
   }
   return object;

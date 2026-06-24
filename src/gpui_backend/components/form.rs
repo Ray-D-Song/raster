@@ -9,8 +9,8 @@ use gpui_component::{
 };
 
 use crate::{
+    bridge::SharedBridgeState,
     common::{
-        channel::{ChannelSender, RuntimeCommand},
         ids::NativeObjectId,
         mount::RetainedNodeKind,
     },
@@ -30,7 +30,7 @@ pub(in crate::gpui_backend) fn render_form_from_node(
     tree: &Rc<RefCell<RetainedTree>>,
     owners: &Rc<RefCell<OwnerRegistry>>,
     perf: &Rc<RefCell<PerfMonitor>>,
-    runtime_commands: ChannelSender<RuntimeCommand>,
+    bridge: SharedBridgeState,
     root: WeakEntity<RasterRootView>,
 ) -> Option<AnyElement> {
     if !is_form_node(node) {
@@ -71,7 +71,7 @@ pub(in crate::gpui_backend) fn render_form_from_node(
             tree,
             owners,
             perf,
-            runtime_commands.clone(),
+            bridge.clone(),
             root.clone(),
         );
         if let Some(field) = field {
@@ -87,7 +87,7 @@ pub(in crate::gpui_backend) fn render_field_from_node(
     tree: &Rc<RefCell<RetainedTree>>,
     owners: &Rc<RefCell<OwnerRegistry>>,
     perf: &Rc<RefCell<PerfMonitor>>,
-    runtime_commands: ChannelSender<RuntimeCommand>,
+    bridge: SharedBridgeState,
     root: WeakEntity<RasterRootView>,
 ) -> Option<AnyElement> {
     if !is_field_node(node) || !field_visible(node) {
@@ -100,7 +100,7 @@ pub(in crate::gpui_backend) fn render_field_from_node(
             tree,
             owners,
             perf,
-            runtime_commands.clone(),
+            bridge.clone(),
             root.clone(),
         )
         .into_any_element(),
@@ -120,20 +120,20 @@ fn form_field_from_child(
     tree: &Rc<RefCell<RetainedTree>>,
     owners: &Rc<RefCell<OwnerRegistry>>,
     perf: &Rc<RefCell<PerfMonitor>>,
-    runtime_commands: ChannelSender<RuntimeCommand>,
+    bridge: SharedBridgeState,
     root: WeakEntity<RasterRootView>,
 ) -> Option<NativeField> {
     let child = tree.borrow().node(child_id).cloned()?;
     if is_field_node(&child) {
         field_visible(&child)
-            .then(|| build_field_from_node(&child, tree, owners, perf, runtime_commands, root))
+            .then(|| build_field_from_node(&child, tree, owners, perf, bridge.clone(), root))
     } else {
         Some(field().label_indent(false).child(render_node_child(
             child_id,
             tree,
             owners,
             perf,
-            runtime_commands,
+            bridge,
             root,
         )))
     }
@@ -144,7 +144,7 @@ fn build_field_from_node(
     tree: &Rc<RefCell<RetainedTree>>,
     owners: &Rc<RefCell<OwnerRegistry>>,
     perf: &Rc<RefCell<PerfMonitor>>,
-    runtime_commands: ChannelSender<RuntimeCommand>,
+    bridge: SharedBridgeState,
     root: WeakEntity<RasterRootView>,
 ) -> NativeField {
     let RenderModel::Widget(model) = &node.render_model else {
@@ -198,7 +198,7 @@ fn build_field_from_node(
             tree,
             owners,
             perf,
-            runtime_commands.clone(),
+            bridge.clone(),
             root.clone(),
         ));
     }

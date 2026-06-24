@@ -4,8 +4,8 @@ use gpui::{App, ParentElement, Window, px};
 use gpui_component::{Placement, WindowExt};
 
 use crate::{
+    bridge::{SharedBridgeState, emit_handler_invoke},
     common::{
-        channel::{ChannelSender, RuntimeCommand},
         ids::HandlerId,
         mount::{NodeValue, RetainedNodeKind},
         utils::logger,
@@ -30,7 +30,7 @@ pub(in crate::gpui_backend) struct SheetRenderContext {
     pub(in crate::gpui_backend) tree: Rc<RefCell<RetainedTree>>,
     pub(in crate::gpui_backend) owners: Rc<RefCell<OwnerRegistry>>,
     pub(in crate::gpui_backend) perf: Rc<RefCell<crate::gpui_backend::perf::PerfMonitor>>,
-    pub(in crate::gpui_backend) runtime_commands: ChannelSender<RuntimeCommand>,
+    pub(in crate::gpui_backend) bridge: SharedBridgeState,
     pub(in crate::gpui_backend) root: gpui::WeakEntity<RasterRootView>,
 }
 
@@ -168,7 +168,7 @@ fn open_sheet(
 ) {
     let children = node.children.clone();
     let placement = config.placement;
-    let runtime_commands = render_context.runtime_commands.clone();
+    let bridge = render_context.bridge.clone();
 
     window.open_sheet_at(placement, cx, move |sheet, _window, _cx| {
         let mut sheet = sheet
@@ -182,11 +182,11 @@ fn open_sheet(
         }
 
         if let Some(handler_id) = config.on_open_change {
-            let runtime_commands = runtime_commands.clone();
+            let bridge = bridge.clone();
             let suppressed = suppressed.clone();
             sheet = sheet.on_close(move |_, _, _| {
                 *suppressed.borrow_mut() = true;
-                dispatch_open_change(handler_id, "cancel", &runtime_commands);
+                dispatch_open_change(handler_id, "cancel", &bridge);
             });
         }
 
@@ -196,7 +196,7 @@ fn open_sheet(
                 &render_context.tree,
                 &render_context.owners,
                 &render_context.perf,
-                render_context.runtime_commands.clone(),
+                render_context.bridge.clone(),
                 render_context.root.clone(),
             ));
         }
@@ -205,23 +205,11 @@ fn open_sheet(
     });
 }
 
-fn dispatch_open_change(
-    handler_id: HandlerId,
-    reason: &str,
-    runtime_commands: &ChannelSender<RuntimeCommand>,
-) {
+fn dispatch_open_change(handler_id: HandlerId, reason: &str, bridge: &SharedBridgeState) {
     let mut payload = BTreeMap::new();
     payload.insert("open".to_owned(), NodeValue::Bool(false));
     payload.insert("reason".to_owned(), NodeValue::String(reason.to_owned()));
-    if runtime_commands
-        .send(RuntimeCommand::InvokeEvent {
-            handler_id,
-            payload: NodeValue::Object(payload),
-        })
-        .is_err()
-    {
-        logger::error("failed to enqueue Sheet onOpenChange event");
-    }
+    emit_handler_invoke(bridge, handler_id, NodeValue::Object(payload));
 }
 
 fn placement_prop(props: &BTreeMap<String, NodeValue>) -> Option<Placement> {

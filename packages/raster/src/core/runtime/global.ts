@@ -1,3 +1,4 @@
+import type { BridgeDispatchMessage } from "../../bridge/types.js";
 import type { RasterNativeBinding } from "../types/index.js";
 import type { HandlerId, RasterHandler, RasterHandlerRegistry } from "../events/state.js";
 import type { RasterFabricMaterializeDiagnostics } from "../renderer/materialize.js";
@@ -19,6 +20,7 @@ export type RasterRuntimeGlobal = typeof globalThis & {
   __rasterReadMaterializeDiagnostics?: () => RasterFabricMaterializeDiagnostics;
   __rasterResetMaterializeDiagnostics?: () => void;
   __rasterRunEvent?: (handler: RasterHandler, payload: unknown, event: RasterEventMetadata | null) => unknown;
+  __rasterBridgeDispatch?: (message: BridgeDispatchMessage) => void;
 };
 
 export const rasterGlobal = globalThis as RasterRuntimeGlobal;

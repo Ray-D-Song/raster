@@ -7,6 +7,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crate::{
+    bridge::BridgeEnvelope,
     common::{
         channel::{ChannelSender, RuntimeCommand, RuntimeCommandQueue},
         mount::NodeValue,
@@ -19,6 +20,8 @@ use crate::{
         module_loader::build_module_builder,
     },
 };
+
+mod bridge_loop;
 
 pub struct JsRuntime {
     vm: Vm,
@@ -84,9 +87,16 @@ impl JsRuntime {
         self.commands.sender()
     }
 
-    pub fn spawn_command_loop(self) {
+    pub fn spawn_bridge_loop(self) {
+        let bridge = self.native_binding.bridge();
+        let (wake_tx, wake_rx) = mpsc::channel::<()>();
+        bridge.set_js_wake(std::sync::Arc::new(bridge_loop::JsBridgeWake::new(
+            wake_tx,
+        )));
+
         std::thread::spawn(move || {
             let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_io()
                 .enable_time()
                 .build()
             {
@@ -101,6 +111,8 @@ impl JsRuntime {
                 tokio::spawn(self.vm.runtime.drive());
                 let mut pending_reload: Option<(std::path::PathBuf, Instant)> = None;
                 loop {
+                    bridge_loop::drain_bridge_egress(&self, &bridge).await;
+
                     if let Some((path, deadline)) = pending_reload.as_ref()
                         && Instant::now() >= *deadline
                     {
@@ -111,26 +123,35 @@ impl JsRuntime {
                         }
                     }
 
+                    let mut woke = false;
                     match self.commands.try_recv() {
                         Ok(RuntimeCommand::Shutdown) => break,
                         Ok(RuntimeCommand::ReloadAppBundle { path }) => {
                             pending_reload =
                                 Some((path, Instant::now() + Duration::from_millis(50)));
+                            woke = true;
                         }
                         Ok(RuntimeCommand::ReloadAppBundleSource { name, source }) => {
                             if let Err(error) = self.reload_app_bundle_source(name, source).await {
                                 logger::error(format!("failed to reload app bundle: {error}"));
                             }
+                            woke = true;
                         }
-                        Ok(command) => {
-                            if let Err(error) = self.handle_runtime_command(command).await {
-                                logger::error(format!("failed to handle runtime command: {error}"));
+                        Ok(RuntimeCommand::InvokeEvent { .. })
+                        | Ok(RuntimeCommand::InvokeQuery { .. })
+                        | Ok(RuntimeCommand::EmitRuntimeEvent { .. }) => {}
+                        Err(mpsc::TryRecvError::Empty) => {}
+                        Err(mpsc::TryRecvError::Disconnected) => break,
+                    }
+
+                    if !woke {
+                        match wake_rx.try_recv() {
+                            Ok(()) => {}
+                            Err(mpsc::TryRecvError::Disconnected) => break,
+                            Err(mpsc::TryRecvError::Empty) => {
+                                tokio::time::sleep(Duration::from_millis(1)).await;
                             }
                         }
-                        Err(mpsc::TryRecvError::Empty) => {
-                            tokio::time::sleep(Duration::from_millis(4)).await;
-                        }
-                        Err(mpsc::TryRecvError::Disconnected) => break,
                     }
                 }
             });
@@ -276,6 +297,24 @@ impl JsRuntime {
         Ok(())
     }
 
+    async fn dispatch_bridge_envelope(&self, envelope: BridgeEnvelope) -> anyhow::Result<()> {
+        let json = serde_json::to_string(&crate::bridge::js::bridge_envelope_to_json_value(
+            &envelope,
+        ))?;
+        let script = format!("globalThis.__rasterBridgeDispatch?.(JSON.parse({json:?}));");
+        self.vm
+            .ctx
+            .with(|ctx| {
+                ctx.eval::<(), _>(script).catch(&ctx).map_err(|error| {
+                    anyhow::anyhow!("failed to dispatch bridge envelope: {error:?}")
+                })?;
+                while ctx.execute_pending_job() {}
+                Ok::<_, anyhow::Error>(())
+            })
+            .await
+    }
+
+    #[allow(dead_code)]
     async fn handle_runtime_command(&self, command: RuntimeCommand) -> anyhow::Result<()> {
         match command {
             RuntimeCommand::InvokeEvent {

@@ -18,7 +18,8 @@ pub struct RasterRunOptions {
 
 pub struct PreparedRasterApp {
     pub native_binding: NativeBindingState,
-    pub runtime_commands: crate::common::channel::ChannelSender<RuntimeCommand>,
+    pub bridge: crate::bridge::SharedBridgeState,
+    pub command_sender: crate::common::channel::ChannelSender<RuntimeCommand>,
 }
 
 pub async fn prepare_raster_app(options: &RasterRunOptions) -> anyhow::Result<PreparedRasterApp> {
@@ -42,12 +43,14 @@ pub async fn prepare_raster_app(options: &RasterRunOptions) -> anyhow::Result<Pr
     }
 
     let native_binding = js_runtime.native_binding();
-    let runtime_commands = js_runtime.runtime_command_sender();
-    js_runtime.spawn_command_loop();
+    let bridge = native_binding.bridge();
+    let command_sender = js_runtime.runtime_command_sender();
+    js_runtime.spawn_bridge_loop();
 
     Ok(PreparedRasterApp {
         native_binding,
-        runtime_commands,
+        bridge,
+        command_sender,
     })
 }
 
@@ -69,7 +72,7 @@ pub fn run_desktop_raster_app(options: RasterRunOptions) -> anyhow::Result<()> {
         height,
         dev_reload,
         prepared.native_binding,
-        prepared.runtime_commands,
+        prepared.bridge,
     );
     Ok(())
 }

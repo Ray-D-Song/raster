@@ -1,14 +1,14 @@
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
-use gpui::{AnyElement, App, Axis, IntoElement};
+use gpui::{AnyElement, Axis, IntoElement};
 use gpui_component::{
     Sizable, Size,
     radio::{Radio, RadioGroup},
 };
 
 use crate::{
+    bridge::{BridgeEventDispatch, SharedBridgeState, emit_handler_invoke},
     common::{
-        channel::{ChannelSender, RuntimeCommand},
         ids::HandlerId,
         mount::{NodeValue, RetainedNodeKind},
         utils::logger,
@@ -25,7 +25,7 @@ use crate::{
 pub(in crate::gpui_backend) fn render_radio_from_node<'a>(
     node: &RetainedNode,
     child_text: impl IntoIterator<Item = &'a str>,
-    dispatch_event: Rc<dyn Fn(RuntimeCommand, &mut App)>,
+    dispatch_event: BridgeEventDispatch,
 ) -> Option<AnyElement> {
     if !is_radio_node(node) {
         return None;
@@ -41,25 +41,13 @@ pub(in crate::gpui_backend) fn render_radio_from_node<'a>(
     let on_change = event_handler(node, "onChange");
     let on_click = event_handler(node, "onClick");
     if on_change.is_some() || on_click.is_some() {
-        radio = radio.on_click(move |checked, _window, cx| {
+        radio = radio.on_click(move |checked, _window, _cx| {
             let payload = NodeValue::Bool(*checked);
             if let Some(handler_id) = on_change {
-                dispatch_event(
-                    RuntimeCommand::InvokeEvent {
-                        handler_id,
-                        payload: payload.clone(),
-                    },
-                    cx,
-                );
+                dispatch_event(handler_id, payload.clone());
             }
             if let Some(handler_id) = on_click {
-                dispatch_event(
-                    RuntimeCommand::InvokeEvent {
-                        handler_id,
-                        payload,
-                    },
-                    cx,
-                );
+                dispatch_event(handler_id, payload);
             }
         });
     }
@@ -70,7 +58,7 @@ pub(in crate::gpui_backend) fn render_radio_from_node<'a>(
 pub(in crate::gpui_backend) fn render_radio_group_from_node(
     node: &RetainedNode,
     tree: &Rc<RefCell<RetainedTree>>,
-    runtime_commands: ChannelSender<RuntimeCommand>,
+    bridge: SharedBridgeState,
 ) -> Option<AnyElement> {
     if !is_radio_group_node(node) {
         return None;
@@ -127,7 +115,7 @@ pub(in crate::gpui_backend) fn render_radio_group_from_node(
         group = group.on_click(move |index, _window, _cx| {
             if let Some(Some(handler_id)) = radio_clicks.get(*index) {
                 send_event(
-                    &runtime_commands,
+                    &bridge,
                     *handler_id,
                     NodeValue::String(String::new()),
                     "RadioGroup child onClick",
@@ -135,7 +123,7 @@ pub(in crate::gpui_backend) fn render_radio_group_from_node(
             }
             if let Some(handler_id) = group_on_change {
                 send_event(
-                    &runtime_commands,
+                    &bridge,
                     handler_id,
                     NodeValue::String(index.to_string()),
                     "RadioGroup onChange",
@@ -143,7 +131,7 @@ pub(in crate::gpui_backend) fn render_radio_group_from_node(
             }
             if let Some(handler_id) = group_on_click {
                 send_event(
-                    &runtime_commands,
+                    &bridge,
                     handler_id,
                     NodeValue::String(index.to_string()),
                     "RadioGroup onClick",
@@ -203,20 +191,12 @@ fn radio_label(node: &RetainedNode, tree: &RetainedTree) -> Option<String> {
 }
 
 fn send_event(
-    runtime_commands: &ChannelSender<RuntimeCommand>,
+    bridge: &SharedBridgeState,
     handler_id: HandlerId,
     payload: NodeValue,
-    label: &str,
+    _label: &str,
 ) {
-    if runtime_commands
-        .send(RuntimeCommand::InvokeEvent {
-            handler_id,
-            payload,
-        })
-        .is_err()
-    {
-        logger::error(format!("failed to enqueue {label} event"));
-    }
+    emit_handler_invoke(bridge, handler_id, payload);
 }
 
 fn parse_axis(value: &str) -> Axis {

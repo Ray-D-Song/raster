@@ -1,14 +1,14 @@
 use std::{cell::RefCell, rc::Rc};
 
-use gpui::{AnyElement, App, AppContext, Context, Entity, IntoElement, Subscription, Window};
+use gpui::{AnyElement, AppContext, Context, Entity, IntoElement, Subscription, Window};
 use gpui_component::{
     Selectable, Sizable, Size,
     input::{Input, InputEvent, InputState},
 };
 
 use crate::{
+    bridge::BridgeEventDispatch,
     common::{
-        channel::RuntimeCommand,
         ids::HandlerId,
         mount::{NodeValue, RetainedNodeKind},
     },
@@ -33,7 +33,7 @@ pub(in crate::gpui_backend) struct RasterInputState {
 impl RasterInputState {
     pub(in crate::gpui_backend) fn new(
         node: &RetainedNode,
-        dispatch_event: Rc<dyn Fn(RuntimeCommand, &mut App)>,
+        dispatch_event: BridgeEventDispatch,
         window: &mut Window,
         cx: &mut Context<crate::gpui_backend::app::NodeOwnerView>,
     ) -> Self {
@@ -78,27 +78,24 @@ impl RasterInputState {
                         event_bindings.dispatch_change(
                             &value,
                             event_count,
-                            dispatch_event.as_ref(),
-                            cx,
+                            &dispatch_event,
                         );
                     }
                     InputEvent::PressEnter { .. } => {
-                        event_bindings.dispatch_submit(&value, dispatch_event.as_ref(), cx);
+                        event_bindings.dispatch_submit(&value, &dispatch_event);
                     }
                     InputEvent::Focus => {
                         event_bindings.dispatch_string(
                             "onFocus",
                             &value,
-                            dispatch_event.as_ref(),
-                            cx,
+                            &dispatch_event,
                         );
                     }
                     InputEvent::Blur => {
                         event_bindings.dispatch_string(
                             "onBlur",
                             &value,
-                            dispatch_event.as_ref(),
-                            cx,
+                            &dispatch_event,
                         );
                     }
                 }
@@ -242,8 +239,7 @@ impl InputEventBindings {
         &self,
         value: &str,
         event_count: u64,
-        dispatch_event: &dyn Fn(RuntimeCommand, &mut App),
-        cx: &mut App,
+        dispatch_event: &BridgeEventDispatch,
     ) {
         let payload = NodeValue::Object(
             [
@@ -256,39 +252,16 @@ impl InputEventBindings {
             .into(),
         );
         if let Some(handler_id) = self.on_change {
-            dispatch_event(
-                RuntimeCommand::InvokeEvent {
-                    handler_id,
-                    payload: payload.clone(),
-                },
-                cx,
-            );
+            dispatch_event(handler_id, payload.clone());
         }
         if let Some(handler_id) = self.on_change_text {
-            dispatch_event(
-                RuntimeCommand::InvokeEvent {
-                    handler_id,
-                    payload,
-                },
-                cx,
-            );
+            dispatch_event(handler_id, payload);
         }
     }
 
-    fn dispatch_submit(
-        &self,
-        value: &str,
-        dispatch_event: &dyn Fn(RuntimeCommand, &mut App),
-        cx: &mut App,
-    ) {
+    fn dispatch_submit(&self, value: &str, dispatch_event: &BridgeEventDispatch) {
         if let Some(handler_id) = self.on_submit_editing {
-            dispatch_event(
-                RuntimeCommand::InvokeEvent {
-                    handler_id,
-                    payload: NodeValue::String(value.to_owned()),
-                },
-                cx,
-            );
+            dispatch_event(handler_id, NodeValue::String(value.to_owned()));
         }
     }
 
@@ -296,8 +269,7 @@ impl InputEventBindings {
         &self,
         property: &str,
         value: &str,
-        dispatch_event: &dyn Fn(RuntimeCommand, &mut App),
-        cx: &mut App,
+        dispatch_event: &BridgeEventDispatch,
     ) {
         let handler_id = match property {
             "onFocus" => self.on_focus,
@@ -305,13 +277,7 @@ impl InputEventBindings {
             _ => None,
         };
         if let Some(handler_id) = handler_id {
-            dispatch_event(
-                RuntimeCommand::InvokeEvent {
-                    handler_id,
-                    payload: NodeValue::String(value.to_owned()),
-                },
-                cx,
-            );
+            dispatch_event(handler_id, NodeValue::String(value.to_owned()));
         }
     }
 }

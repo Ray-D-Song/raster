@@ -4,8 +4,8 @@ use gpui::{AnyElement, AppContext, Context, Entity, IntoElement, Subscription, W
 use gpui_component::slider::{Slider, SliderEvent, SliderState, SliderValue};
 
 use crate::{
+    bridge::{SharedBridgeState, emit_handler_invoke},
     common::{
-        channel::{ChannelSender, RuntimeCommand},
         ids::HandlerId,
         mount::{NodeValue, RetainedNodeKind},
     },
@@ -29,7 +29,7 @@ pub(in crate::gpui_backend) struct RasterSliderState {
 impl RasterSliderState {
     pub(in crate::gpui_backend) fn new(
         node: &RetainedNode,
-        runtime_commands: ChannelSender<RuntimeCommand>,
+        bridge: SharedBridgeState,
         cx: &mut Context<crate::gpui_backend::app::NodeOwnerView>,
     ) -> Self {
         let config = SliderConfig::from_node(node);
@@ -46,14 +46,14 @@ impl RasterSliderState {
 
         let _subscription = cx.subscribe(&slider, {
             let bindings = bindings.clone();
-            let runtime_commands = runtime_commands.clone();
+            let bridge = bridge.clone();
             move |_, _, event: &SliderEvent, _cx| {
                 if let SliderEvent::Change(value) = event
                     && let SliderValue::Single(value) = value
                 {
                     bindings
                         .borrow()
-                        .dispatch_change(*value, &runtime_commands);
+                        .dispatch_change(*value, &bridge);
                 }
             }
         });
@@ -165,14 +165,15 @@ impl SliderEventBindings {
         }
     }
 
-    fn dispatch_change(&self, value: f32, runtime_commands: &ChannelSender<RuntimeCommand>) {
+    fn dispatch_change(&self, value: f32, bridge: &SharedBridgeState) {
         if let Some(handler_id) = self.on_change {
-            let _ = runtime_commands.send(RuntimeCommand::InvokeEvent {
+            emit_handler_invoke(
+                bridge,
                 handler_id,
-                payload: NodeValue::Object(
+                NodeValue::Object(
                     [("value".to_owned(), NodeValue::Number(value as f64))].into(),
                 ),
-            });
+            );
         }
     }
 }

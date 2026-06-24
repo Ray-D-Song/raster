@@ -194,7 +194,7 @@ unsafe fn run_app(
     };
     let prepared = pollster::block_on(prepare_raster_app(&options))?;
     if dev_mode {
-        start_dev_server_reloader(loaded_bundle.dev_urls, prepared.runtime_commands.clone());
+        start_dev_server_reloader(loaded_bundle.dev_urls, prepared.command_sender.clone());
     }
 
     gpui_mobile::ios::ffi::set_app_callback(Box::new(move |cx: &mut App| {
@@ -208,7 +208,7 @@ unsafe fn run_app(
                 ..WindowOptions::default()
             },
             prepared.native_binding.clone(),
-            prepared.runtime_commands.clone(),
+            prepared.bridge.clone(),
         );
         cx.activate(true);
     }));
