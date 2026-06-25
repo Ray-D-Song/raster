@@ -1,3 +1,3 @@
 1. localStorage
-2. support dynamic iconify icon
-3. responsive design
+2. responsive design
+3. backdrop-filter
