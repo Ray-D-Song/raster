@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::io::Cursor;
 
-use gpui::ImageSource;
+use gpui::{ImageSource, Resource};
 
 use crate::{
     bridge::{BridgeState, new_asset_store},
@@ -12,7 +12,7 @@ use crate::{
     gpui_backend::{
         asset_context::with_render_assets,
         components::{
-            helper::image_source::resolve_image_source,
+            helper::image_source::{resolve_image_source, resource_from_src},
             image::{is_image_node, render_image_from_node},
         },
         retained_tree::node::RetainedNode,
@@ -44,6 +44,32 @@ fn image_renders_for_each_object_fit_value() {
             "Image with objectFit={fit} should render"
         );
     }
+}
+
+#[test]
+fn resource_from_src_maps_file_uri_to_path() {
+    let resource = resource_from_src("file:///tmp/x.png").expect("file uri should resolve");
+    assert!(matches!(resource, Resource::Path(_)));
+}
+
+#[test]
+fn resource_from_src_maps_embed_uri_to_embedded() {
+    let resource = resource_from_src("embed://icons/foo.svg").expect("embed uri should resolve");
+    assert!(matches!(resource, Resource::Embedded(path) if path.as_ref() == "icons/foo.svg"));
+}
+
+#[test]
+fn resource_from_src_rejects_unknown_scheme() {
+    assert!(resource_from_src("unknown://foo").is_none());
+}
+
+#[test]
+fn image_renders_for_invalid_src_with_fallback() {
+    let node = image_node([(
+        "src",
+        NodeValue::String("unknown://bad".to_owned()),
+    )]);
+    assert!(render_image_from_node(&node, dummy_dispatch()).is_some());
 }
 
 #[test]

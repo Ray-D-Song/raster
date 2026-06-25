@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
 use gpui::{
-    AnyElement, App, ImgResourceLoader, IntoElement, ObjectFit, ParentElement, Resource, Styled,
+    AnyElement, App, ImgResourceLoader, IntoElement, ObjectFit, ParentElement, Styled,
     StyledImage, Window, div, hsla, img, px,
 };
 
@@ -14,7 +14,10 @@ use crate::{
     },
     gpui_backend::{
         components::helper::{
-            image_source::{is_remote_uri, resolve_image_source},
+            image_source::{
+                classify_image_src, is_remote_uri, resolve_image_source, resource_from_src,
+                ImageSrcKind,
+            },
             props::{bool_prop, component_props, event_handler, number_prop, string_prop},
         },
         render_model::{model::RenderModel, style::apply_style},
@@ -44,6 +47,13 @@ pub(in crate::gpui_backend) fn render_image_from_node(
     let on_load = event_handler(node, "onLoad");
     let on_error = event_handler(node, "onError");
     let node_id = node.id.0;
+
+    let src_kind = classify_image_src(&src);
+
+    if matches!(src_kind, ImageSrcKind::Invalid) {
+        fire_image_event_once(node_id, &src, "error", on_error, &dispatch_event);
+        return Some(fallback_element(&alt));
+    }
 
     if is_remote_uri(&src) && resolve_image_source(&src).is_none() {
         if show_loading {
@@ -116,21 +126,15 @@ fn local_tracked_source(
     dispatch_event: BridgeEventDispatch,
 ) -> gpui::ImageSource {
     gpui::ImageSource::from(move |window: &mut Window, cx: &mut App| {
-        let resource = resource_from_src(&src);
+        let Some(resource) = resource_from_src(&src) else {
+            return None;
+        };
         let result = window.use_asset::<ImgResourceLoader>(&resource, cx);
         if let Some(Ok(_)) = &result {
             fire_image_event_once(node_id, &src, "load", on_load, &dispatch_event);
         }
         result
     })
-}
-
-fn resource_from_src(src: &str) -> Resource {
-    if is_remote_uri(src) {
-        Resource::Uri(src.to_string().into())
-    } else {
-        Resource::Embedded(src.to_string().into())
-    }
 }
 
 fn fire_image_event_once(

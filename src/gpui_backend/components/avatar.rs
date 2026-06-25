@@ -10,7 +10,7 @@ use crate::{
     common::mount::{NodeValue, RetainedNodeKind},
     gpui_backend::{
         components::helper::{
-            image_source::{is_remote_uri, resolve_image_source},
+            image_source::{classify_image_src, resolve_image_source, ImageSrcKind},
             props::{
                 bool_prop, component_props, display_value, number_prop, string_prop,
             },
@@ -146,13 +146,11 @@ fn build_avatar(node: &RetainedNode) -> Avatar {
 }
 
 fn avatar_from_src(src: &str, avatar: Avatar) -> Avatar {
-    if is_remote_uri(src) {
-        if let Some(source) = resolve_image_source(src) {
-            avatar.src(source)
-        } else {
-            avatar
-        }
-    } else {
-        avatar.src(src)
+    match classify_image_src(src) {
+        ImageSrcKind::Invalid => avatar,
+        _ => match resolve_image_source(src) {
+            Some(source) => avatar.src(source),
+            None => avatar,
+        },
     }
 }

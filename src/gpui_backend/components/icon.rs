@@ -1,10 +1,10 @@
-use gpui::{AnyElement, IntoElement, Radians, Styled, px};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use gpui::{AnyElement, IntoElement, Radians, SharedString, Styled, px};
 use gpui_component::{Icon, Sizable, Size};
 
 use crate::{
     common::mount::RetainedNodeKind,
     gpui_backend::{
-        assets::register_inline_svg,
         components::helper::props::{bool_prop, component_props, number_prop, string_prop},
         render_model::{
             model::RenderModel,
@@ -15,7 +15,12 @@ use crate::{
 };
 
 pub(in crate::gpui_backend) fn icon_from_svg(svg: &str) -> Icon {
-    Icon::empty().path(register_inline_svg(svg))
+    Icon::empty().path(svg_to_data_url(svg))
+}
+
+fn svg_to_data_url(svg: &str) -> SharedString {
+    let encoded = STANDARD.encode(svg.as_bytes());
+    format!("data:image/svg+xml;base64,{encoded}").into()
 }
 
 pub(in crate::gpui_backend) fn render_icon_from_node(node: &RetainedNode) -> Option<AnyElement> {
@@ -115,5 +120,12 @@ mod tests {
 
         let rendered = render_icon_from_node(&icon_node(props));
         assert!(rendered.is_some());
+    }
+
+    #[test]
+    fn svg_to_data_url_uses_base64_payload() {
+        let svg = "<svg></svg>";
+        let data_url = svg_to_data_url(svg);
+        assert!(data_url.starts_with("data:image/svg+xml;base64,"));
     }
 }
