@@ -7,8 +7,6 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test:plugin": "pnpm --dir packages/unplugin-raster test",
-    "docs:dev": "pnpm --dir docs dev",
-    "docs:preview": "pnpm --dir docs preview",
     "build:js": "pnpm run typecheck && pnpm run build:runtime && pnpm run build:plugin && pnpm run build:template",
     "build:runtime": "pnpm --dir packages/raster build:runtime",
     "build:plugin": "pnpm --dir packages/unplugin-raster build",
@@ -17,7 +15,6 @@
     "build": "pnpm build:js && pnpm build:platforms",
     "build:android": "node scripts/build.mjs --platform android-arm64",
     "build:ios": "node scripts/build.mjs --platform ios-xcframework",
-    "docs:build": "pnpm --dir docs build",
     "pack:ios:spm": "node scripts/build.mjs --platform ios-xcframework",
     "dev:ios": "pnpm --dir packages/cli exec raster dev ios",
     "dev:debug": "pnpm --dir apps/debug dev",
