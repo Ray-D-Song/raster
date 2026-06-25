@@ -29,7 +29,10 @@ import {
   updateFabricTextNode,
   type RasterFabricContainer,
 } from "../core/renderer/index.js";
-import { resetRasterRuntimeGlobals } from "../core/runtime/teardown.js";
+import {
+  resetRasterRuntimeGlobals,
+  resetRasterRuntimeHandlerState,
+} from "../core/runtime/teardown.js";
 import type {
   RasterEventHandler,
   RasterNativeChildSet,
@@ -582,7 +585,7 @@ export function createFabricRoot(options?: RasterRootOptions): RasterDevRoot {
     }
   };
 
-  const unmountFabricRoot = () => {
+  const unmountFabricRoot = (options?: { fullTeardown?: boolean }) => {
     const previousSurfaceId = currentFabricSurfaceId;
     currentFabricSurfaceId = root.surfaceId;
     currentEventReconciler = fabricReconciler;
@@ -590,7 +593,11 @@ export function createFabricRoot(options?: RasterRootOptions): RasterDevRoot {
       fabricReconciler.updateContainerSync(null, container, null, null);
       flushRasterWork(fabricReconciler);
       clearFabricSurface(root, getRasterNativeBinding());
-      resetRasterRuntimeGlobals();
+      if (options?.fullTeardown === true) {
+        resetRasterRuntimeGlobals();
+      } else {
+        resetRasterRuntimeHandlerState();
+      }
     } finally {
       currentFabricSurfaceId = previousSurfaceId;
     }
@@ -622,7 +629,7 @@ export function createFabricRoot(options?: RasterRootOptions): RasterDevRoot {
         return;
       }
       disposed = true;
-      unmountFabricRoot();
+      unmountFabricRoot({ fullTeardown: true });
       releaseFabricReconcilerContainer(container);
       disconnectRasterRootGlobals(rasterRoot);
     },

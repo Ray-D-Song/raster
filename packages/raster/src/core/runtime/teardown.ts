@@ -2,9 +2,14 @@ import { resetRasterHandlerRegistry } from "../events/state.js";
 import { resetRasterRuntimeEventListeners } from "../runtime-events.js";
 import type { RasterRuntimeGlobal } from "./global.js";
 
-export function resetRasterRuntimeGlobals(): void {
+/** Clears handler/event state while keeping installed runtime globals alive. */
+export function resetRasterRuntimeHandlerState(): void {
   resetRasterRuntimeEventListeners();
   resetRasterHandlerRegistry();
+}
+
+export function resetRasterRuntimeGlobals(): void {
+  resetRasterRuntimeHandlerState();
 
   const runtimeGlobal = globalThis as RasterRuntimeGlobal;
   delete runtimeGlobal.__rasterHandlerRegistry;

@@ -69,6 +69,9 @@ function createMockBinding(): RasterNativeBinding & { calls: NativeCall[] } {
     clearContainerChildren(surfaceId) {
       calls.push({ name: "clearContainerChildren", args: [surfaceId] });
     },
+    clearSurface(surfaceId) {
+      calls.push({ name: "clearSurface", args: [surfaceId] });
+    },
     appendChild(parent, child) {
       calls.push({ name: "appendChild", args: [parent, child] });
     },
@@ -255,3 +258,47 @@ function handlerUpdateReusesStableSlot(): void {
 }
 
 handlerUpdateReusesStableSlot();
+
+async function devReloadClearKeepsInvokeHandlers(): Promise<void> {
+  const { installRasterEventHandlers } = await import("../core/events/invoke.js");
+  const binding = createMockBinding();
+  rasterGlobal.__rasterNative = binding;
+  installRasterEventHandlers();
+
+  const devReloadGlobal = rasterGlobal as RasterTestGlobal & {
+    __rasterDevReload?: boolean;
+    __rasterPrepareDevReload?: () => void;
+    __rasterDevRoot?: ReturnType<typeof createRoot>;
+  };
+
+  try {
+    const invokeHandler = devReloadGlobal.__rasterInvokeHandler;
+    expect(typeof invokeHandler === "function", "invoke handler should be installed before dev reload");
+
+    devReloadGlobal.__rasterDevReload = true;
+    const root = createRoot({ width: 800, height: 600 });
+    root.render(jsx("View", { id: "root", children: null }));
+
+    devReloadGlobal.__rasterPrepareDevReload?.();
+
+    expect(
+      typeof devReloadGlobal.__rasterInvokeHandler === "function",
+      "dev reload clear should keep invoke handlers installed"
+    );
+    expect(
+      devReloadGlobal.__rasterInvokeHandler === invokeHandler,
+      "dev reload clear should preserve the installed invoke handler function"
+    );
+
+    const reloadedRoot = createRoot({ width: 800, height: 600 });
+    expect(reloadedRoot === root, "dev reload should reuse the same reconciler root");
+    reloadedRoot.render(jsx("View", { id: "reloaded-root", children: null }));
+  } finally {
+    delete rasterGlobal.__rasterNative;
+    delete devReloadGlobal.__rasterDevReload;
+    delete devReloadGlobal.__rasterPrepareDevReload;
+    delete devReloadGlobal.__rasterDevRoot;
+  }
+}
+
+await devReloadClearKeepsInvokeHandlers();
