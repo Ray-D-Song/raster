@@ -1280,6 +1280,10 @@ impl WgpuRenderer {
                             // Not implemented for Linux/wgpu
                             true
                         }
+                        PrimitiveBatch::BackdropBlurs(_backdrop_blurs) => {
+                            // Backdrop blur is not yet implemented for WGPU
+                            true
+                        }
                     };
                     if !ok {
                         overflow = true;

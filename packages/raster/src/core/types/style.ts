@@ -109,5 +109,6 @@ export interface RasterStyle {
   fontStyle?: "normal" | "italic";
   textDecorationLine?: "none" | "underline";
   boxShadow?: BoxShadowInput;
+  backdropBlur?: number;
 }
 

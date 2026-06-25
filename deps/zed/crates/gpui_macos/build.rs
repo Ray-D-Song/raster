@@ -50,6 +50,8 @@ mod macos_build {
             "PathRasterizationVertex".into(),
             "ShadowInputIndex".into(),
             "Shadow".into(),
+            "BackdropBlur".into(),
+            "BackdropBlurInputIndex".into(),
             "QuadInputIndex".into(),
             "Underline".into(),
             "UnderlineInputIndex".into(),

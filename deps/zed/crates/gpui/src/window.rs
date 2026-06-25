@@ -13,7 +13,8 @@ use crate::{
     PointerId, PointerInputEvent, PointerPhase, PointerSource, PolychromeSprite, Priority,
     PromptButton, PromptLevel, Quad, Render, RenderGlyphParams, RenderImage, RenderImageParams,
     RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X,
-    SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow, SharedString, Size, StrikethroughStyle,
+    SUBPIXEL_VARIANTS_Y, BackdropBlur, ScaledPixels, Scene, Shadow, SharedString, Size,
+    StrikethroughStyle,
     Style, SubpixelSprite, SubscriberSet, Subscription, SystemWindowTab, SystemWindowTabController,
     TabStopMap, TaffyLayoutEngine, Task, TextRenderingMode, TextStyle, TextStyleRefinement,
     ThermalState, TransformationMatrix, Underline, UnderlineStyle, WindowAppearance,
@@ -3262,6 +3263,32 @@ impl Window {
                 color: shadow.color.opacity(opacity),
             });
         }
+    }
+
+    /// Paint a backdrop blur region into the scene for the next frame at the current z-index.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn paint_backdrop_blur(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        blur_radius: Pixels,
+    ) {
+        self.invalidator.debug_assert_paint();
+
+        let scale_factor = self.scale_factor();
+        let scaled_bounds = bounds.scale(scale_factor);
+        let content_mask = self.content_mask();
+        let opacity = self.element_opacity();
+        self.next_frame.scene.insert_primitive(BackdropBlur {
+            order: 0,
+            bounds: scaled_bounds,
+            corner_radii: corner_radii.scale(scale_factor),
+            content_mask: content_mask.scale(scale_factor),
+            blur_radius: blur_radius.scale(scale_factor),
+            opacity,
+            pad: 0,
+        });
     }
 
     /// Paint one or more quads into the scene for the next frame at the current stacking context.

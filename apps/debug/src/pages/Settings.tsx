@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Avatar, Button, ButtonGroup, DatePicker, Icon, Input, Switch, Text, View } from "raster-js/components";
 import type { IconifyIcon } from "raster-js/components";
+import { BackdropBlurDemo } from "../components/BackdropBlurDemo";
 import { Card } from "../components/Card";
 import { SectionTitle } from "../components/SectionTitle";
 import { userProfile, vitalityColors } from "../data";
@@ -58,6 +59,8 @@ export function Settings({ settings, theme, entryCount, onChange }: SettingsProp
   return (
     <View style={{ backgroundColor: theme.background }}>
       <View style={[pagePadding, { gap: 32 }]}>
+        <BackdropBlurDemo />
+
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 16 }}>
           <Card theme={theme} style={{ flex: 1, minWidth: 160, alignItems: "center", gap: 12 }}>
             <Avatar src={userProfile.avatarUrl} size="large" />

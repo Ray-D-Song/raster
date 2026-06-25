@@ -49,6 +49,7 @@ pub struct RenderStyle {
     pub font_style: Option<FontStyle>,
     pub underline: Option<bool>,
     pub box_shadow: Vec<BoxShadow>,
+    pub backdrop_blur: Option<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -133,6 +134,7 @@ pub fn parse_render_style(style: &BTreeMap<String, NodeValue>) -> RenderStyle {
             .get("boxShadow")
             .map(parse_box_shadow)
             .unwrap_or_default(),
+        backdrop_blur: number_value(style, "backdropBlur"),
     };
 
     if let Some(flex) = number_value(style, "flex") {
@@ -333,6 +335,10 @@ pub fn apply_style<T: Styled>(mut element: T, style: &RenderStyle) -> T {
     }
     if style.underline == Some(true) {
         element = element.underline();
+    }
+
+    if let Some(radius) = style.backdrop_blur.filter(|radius| *radius > 0.0) {
+        element = element.backdrop_blur(px(radius));
     }
 
     if style.box_shadow.is_empty() {

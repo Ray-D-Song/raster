@@ -1264,3 +1264,161 @@ float4 fill_color(Background background,
 
   return color;
 }
+
+struct BackdropBlurVertexOutput {
+  uint backdrop_blur_id [[flat]];
+  float4 position [[position]];
+  float2 screen_position;
+  float clip_distance [[clip_distance]][4];
+};
+
+struct BackdropBlurFragmentInput {
+  uint backdrop_blur_id [[flat]];
+  float4 position [[position]];
+  float2 screen_position;
+};
+
+#define BACKDROP_BLUR_SAMPLE_RADIUS 16
+
+float backdrop_blur_sample_step(float sigma) {
+  return max(sigma / float(BACKDROP_BLUR_SAMPLE_RADIUS), 1.0);
+}
+
+float backdrop_blur_sample_extent(float sigma) {
+  return backdrop_blur_sample_step(sigma) * float(BACKDROP_BLUR_SAMPLE_RADIUS);
+}
+
+vertex BackdropBlurVertexOutput backdrop_blur_vertex(
+    uint unit_vertex_id [[vertex_id]], uint backdrop_blur_id [[instance_id]],
+    constant float2 *unit_vertices [[buffer(BackdropBlurInputIndex_Vertices)]],
+    constant BackdropBlur *backdrop_blurs
+    [[buffer(BackdropBlurInputIndex_BackdropBlurs)]],
+    constant Size_DevicePixels *viewport_size
+    [[buffer(BackdropBlurInputIndex_ViewportSize)]]) {
+  float2 unit_vertex = unit_vertices[unit_vertex_id];
+  BackdropBlur blur = backdrop_blurs[backdrop_blur_id];
+  float4 device_position =
+      to_device_position(unit_vertex, blur.bounds, viewport_size);
+  float4 clip_distance = distance_from_clip_rect(
+      unit_vertex, blur.bounds, blur.content_mask.bounds);
+  float2 screen_position =
+      float2(blur.bounds.origin.x, blur.bounds.origin.y) +
+      unit_vertex * float2(blur.bounds.size.width, blur.bounds.size.height);
+  return BackdropBlurVertexOutput{
+      backdrop_blur_id,
+      device_position,
+      screen_position,
+      {clip_distance.x, clip_distance.y, clip_distance.z, clip_distance.w}};
+}
+
+vertex BackdropBlurVertexOutput backdrop_blur_horizontal_vertex(
+    uint unit_vertex_id [[vertex_id]], uint backdrop_blur_id [[instance_id]],
+    constant float2 *unit_vertices [[buffer(BackdropBlurInputIndex_Vertices)]],
+    constant BackdropBlur *backdrop_blurs
+    [[buffer(BackdropBlurInputIndex_BackdropBlurs)]],
+    constant Size_DevicePixels *viewport_size
+    [[buffer(BackdropBlurInputIndex_ViewportSize)]]) {
+  float2 unit_vertex = unit_vertices[unit_vertex_id];
+  BackdropBlur blur = backdrop_blurs[backdrop_blur_id];
+  Bounds_ScaledPixels bounds = blur.bounds;
+  float extent = backdrop_blur_sample_extent(max(blur.blur_radius, 1.0));
+  bounds.origin.y -= extent;
+  bounds.size.height += extent * 2.0;
+
+  float4 device_position = to_device_position(unit_vertex, bounds, viewport_size);
+  float4 clip_distance = distance_from_clip_rect(
+      unit_vertex, bounds, blur.content_mask.bounds);
+  float2 screen_position =
+      float2(bounds.origin.x, bounds.origin.y) +
+      unit_vertex * float2(bounds.size.width, bounds.size.height);
+  return BackdropBlurVertexOutput{
+      backdrop_blur_id,
+      device_position,
+      screen_position,
+      {clip_distance.x, clip_distance.y, clip_distance.z, clip_distance.w}};
+}
+
+float2 backdrop_blur_viewport(constant Size_DevicePixels *viewport_size) {
+  return float2(float(viewport_size->width), float(viewport_size->height));
+}
+
+float4 sample_blur_horizontal(texture2d<float> source_texture, sampler texture_sampler,
+                              float2 screen_position, float sigma,
+                              constant Size_DevicePixels *viewport_size) {
+  float2 viewport = backdrop_blur_viewport(viewport_size);
+  float2 texel = float2(1.0 / viewport.x, 1.0 / viewport.y);
+  float step = backdrop_blur_sample_step(sigma);
+  float4 color = float4(0.0);
+  float total = 0.0;
+  for (int i = -BACKDROP_BLUR_SAMPLE_RADIUS; i <= BACKDROP_BLUR_SAMPLE_RADIUS; i++) {
+    float offset_pixels = float(i) * step;
+    float weight = gaussian(offset_pixels, sigma);
+    float2 offset = float2(offset_pixels * texel.x, 0.0);
+    float2 uv = screen_position / viewport + offset;
+    color += source_texture.sample(texture_sampler, uv) * weight;
+    total += weight;
+  }
+  return color / max(total, 0.0001);
+}
+
+float4 sample_blur_vertical(texture2d<float> source_texture, sampler texture_sampler,
+                            float2 screen_position, float sigma,
+                            constant Size_DevicePixels *viewport_size) {
+  float2 viewport = backdrop_blur_viewport(viewport_size);
+  float2 texel = float2(1.0 / viewport.x, 1.0 / viewport.y);
+  float step = backdrop_blur_sample_step(sigma);
+  float4 color = float4(0.0);
+  float total = 0.0;
+  for (int i = -BACKDROP_BLUR_SAMPLE_RADIUS; i <= BACKDROP_BLUR_SAMPLE_RADIUS; i++) {
+    float offset_pixels = float(i) * step;
+    float weight = gaussian(offset_pixels, sigma);
+    float2 offset = float2(0.0, offset_pixels * texel.y);
+    float2 uv = screen_position / viewport + offset;
+    color += source_texture.sample(texture_sampler, uv) * weight;
+    total += weight;
+  }
+  return color / max(total, 0.0001);
+}
+
+fragment float4 backdrop_blur_horizontal_fragment(
+    BackdropBlurFragmentInput input [[stage_in]],
+    constant BackdropBlur *backdrop_blurs
+    [[buffer(BackdropBlurInputIndex_BackdropBlurs)]],
+    constant Size_DevicePixels *viewport_size
+    [[buffer(BackdropBlurInputIndex_ViewportSize)]],
+    texture2d<float> source_texture
+    [[texture(BackdropBlurInputIndex_SourceTexture)]]) {
+  constexpr sampler texture_sampler(mag_filter::linear, min_filter::linear,
+                                    s_address::clamp_to_edge,
+                                    t_address::clamp_to_edge);
+  BackdropBlur blur = backdrop_blurs[input.backdrop_blur_id];
+  float sigma = max(blur.blur_radius, 1.0);
+  return sample_blur_horizontal(source_texture, texture_sampler, input.screen_position,
+                                sigma, viewport_size);
+}
+
+fragment float4 backdrop_blur_vertical_fragment(
+    BackdropBlurFragmentInput input [[stage_in]],
+    constant BackdropBlur *backdrop_blurs
+    [[buffer(BackdropBlurInputIndex_BackdropBlurs)]],
+    constant Size_DevicePixels *viewport_size
+    [[buffer(BackdropBlurInputIndex_ViewportSize)]],
+    texture2d<float> intermediate_texture
+    [[texture(BackdropBlurInputIndex_IntermediateTexture)]]) {
+  constexpr sampler texture_sampler(mag_filter::linear, min_filter::linear,
+                                    s_address::clamp_to_edge,
+                                    t_address::clamp_to_edge);
+  BackdropBlur blur = backdrop_blurs[input.backdrop_blur_id];
+  float sigma = max(blur.blur_radius, 1.0);
+  float4 blurred = sample_blur_vertical(intermediate_texture, texture_sampler,
+                                         input.screen_position, sigma, viewport_size);
+
+  float2 center_to_point = input.screen_position
+      - float2(blur.bounds.origin.x, blur.bounds.origin.y)
+      - float2(blur.bounds.size.width, blur.bounds.size.height) / 2.0;
+  float corner_radius = pick_corner_radius(center_to_point, blur.corner_radii);
+  float distance = quad_sdf_impl(center_to_point, corner_radius);
+  float alpha = saturate(0.5 - distance) * blur.opacity;
+  blurred.a *= alpha;
+  return blurred;
+}
