@@ -4,6 +4,9 @@ import addIcon from "@iconify-icons/material-symbols/add";
 import arrowDownwardIcon from "@iconify-icons/material-symbols/arrow-downward";
 import arrowUpwardIcon from "@iconify-icons/material-symbols/arrow-upward";
 import calendarMonthIcon from "@iconify-icons/material-symbols/calendar-month";
+import cameraIcon from "@iconify-icons/material-symbols/photo-camera";
+import contentCopyIcon from "@iconify-icons/material-symbols/content-copy";
+import imageIcon from "@iconify-icons/material-symbols/image";
 import checkIcon from "@iconify-icons/material-symbols/check";
 import chevronLeftIcon from "@iconify-icons/material-symbols/chevron-left";
 import chevronRightIcon from "@iconify-icons/material-symbols/chevron-right";
@@ -26,6 +29,9 @@ export const appIcons = {
   arrowDown: arrowDownwardIcon,
   arrowUp: arrowUpwardIcon,
   calendar: calendarMonthIcon,
+  camera: cameraIcon,
+  copy: contentCopyIcon,
+  image: imageIcon,
   check: checkIcon,
   chevronLeft: chevronLeftIcon,
   chevronRight: chevronRightIcon,

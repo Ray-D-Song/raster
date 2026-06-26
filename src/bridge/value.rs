@@ -65,6 +65,13 @@ impl BridgeValue {
             _ => None,
         }
     }
+
+    pub fn get(&self, key: &str) -> Option<&BridgeValue> {
+        match self {
+            Self::Object(map) => map.get(key),
+            _ => None,
+        }
+    }
 }
 
 impl From<NodeValue> for BridgeValue {

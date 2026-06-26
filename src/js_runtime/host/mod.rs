@@ -77,6 +77,7 @@ struct HandlerSlotKey {
 pub fn new_native_binding_state() -> NativeBindingState {
     let commits = CommitQueue::new();
     let bridge = crate::bridge::BridgeState::new(new_asset_store());
+    crate::plugin::install_plugin_host(bridge.clone());
     Arc::new(NativeBinding {
         inner: Mutex::new(NativeHostState::new(commits.sender())),
         commits: Mutex::new(commits),

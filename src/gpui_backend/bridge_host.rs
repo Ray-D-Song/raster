@@ -5,6 +5,7 @@ use crate::bridge::{
     host::handle_assets_call,
     value::bridge_value_to_node,
 };
+use crate::plugin::{ffi::plugin_host, handle_plugin_invoke};
 use crate::common::{
     channel::{NotificationCommandPayload, NotificationType, UiCommand},
     ids::NativeObjectId,
@@ -29,26 +30,75 @@ pub(in crate::gpui_backend) fn drain_bridge_ingress(
         {
             let channel_name = channel.as_str();
             let method_name = method.as_str();
-            let reply = match channel_name {
-                "host.assets" => handle_assets_call(&bridge, method_name, payload),
-                "host.ui" => handle_ui_call(root, cx, method_name, payload),
-                _ => Err(anyhow::anyhow!("unknown bridge channel: {channel}")),
+            let deferred = match channel_name {
+                "host.assets" => {
+                    let reply = handle_assets_call(&bridge, method_name, payload);
+                    if method_name == "load" && reply.is_ok() {
+                        asset_loaded = true;
+                    }
+                    send_bridge_reply(&bridge, id, reply);
+                    false
+                }
+                "host.ui" => {
+                    let reply = handle_ui_call(root, cx, method_name, payload);
+                    send_bridge_reply(&bridge, id, reply);
+                    false
+                }
+                "host.plugin" => {
+                    if method_name != "invoke" {
+                        send_bridge_reply(
+                            &bridge,
+                            id,
+                            Err(anyhow::anyhow!("unknown host.plugin method: {method_name}")),
+                        );
+                        false
+                    } else if let Some(host_state) = plugin_host() {
+                        match handle_plugin_invoke(host_state.host(), id, payload) {
+                            Ok(()) => true,
+                            Err(error) => {
+                                send_bridge_reply(&bridge, id, Err(error));
+                                false
+                            }
+                        }
+                    } else {
+                        send_bridge_reply(
+                            &bridge,
+                            id,
+                            Err(anyhow::anyhow!("plugin host not initialized")),
+                        );
+                        false
+                    }
+                }
+                _ => {
+                    send_bridge_reply(
+                        &bridge,
+                        id,
+                        Err(anyhow::anyhow!("unknown bridge channel: {channel}")),
+                    );
+                    false
+                }
             };
-            if channel_name == "host.assets" && method_name == "load" && reply.is_ok() {
-                asset_loaded = true;
-            }
-            if id != 0 {
-                let envelope = match reply {
-                    Ok(value) => BridgeEnvelope::reply_ok(id, value),
-                    Err(error) => BridgeEnvelope::reply_err(id, error.to_string()),
-                };
-                let _ = bridge.send_egress(envelope);
-            }
+            let _ = deferred;
         }
     }
     if asset_loaded {
         root.notify_all_owners(cx);
     }
+}
+
+fn send_bridge_reply(
+    bridge: &crate::bridge::SharedBridgeState,
+    id: u64,
+    reply: anyhow::Result<BridgeValue>,
+) {
+    if id == 0 {
+        return;
+    }
+    let envelope = match reply {
+        Ok(value) => BridgeEnvelope::reply_ok(id, value),
+        Err(error) => BridgeEnvelope::reply_err(id, error.to_string()),
+    };
+    let _ = bridge.send_egress(envelope);
 }
 
 fn handle_ui_call(

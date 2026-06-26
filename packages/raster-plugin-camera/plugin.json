@@ -1,0 +1,24 @@
+{
+  "name": "Camera",
+  "npm": "@raster/raster-plugin-camera",
+  "ios": {
+    "pod": "RasterPluginCamera",
+    "register": "CameraPlugin.register"
+  },
+  "android": {
+    "package": "dev.raster.plugin.camera",
+    "register": "CameraPlugin.register"
+  },
+  "permissions": {
+    "ios": {
+      "usageDescriptions": {
+        "NSCameraUsageDescription": "用于拍摄照片",
+        "NSPhotoLibraryUsageDescription": "用于选择图片"
+      }
+    },
+    "android": [
+      "android.permission.CAMERA",
+      "android.permission.READ_MEDIA_IMAGES"
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "Clipboard",
+  "npm": "@raster/raster-plugin-clipboard",
+  "ios": {
+    "register": "ClipboardPlugin.register"
+  },
+  "android": {
+    "package": "dev.raster.plugin.clipboard",
+    "register": "ClipboardPlugin.register"
+  },
+  "permissions": {}
+}

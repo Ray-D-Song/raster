@@ -11,9 +11,18 @@ let package = Package(
         .library(
             name: "RasterIOS",
             targets: ["RasterIOS"]
+        ),
+        .library(
+            name: "RasterPluginSDK",
+            targets: ["RasterPluginSDK"]
         )
     ],
     targets: [
+        .target(
+            name: "RasterPluginSDK",
+            dependencies: ["RasterRuntime"],
+            path: "Sources/RasterPluginSDK"
+        ),
         .target(
             name: "RasterIOS",
             dependencies: ["RasterRuntime"],

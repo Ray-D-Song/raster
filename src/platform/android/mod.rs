@@ -1,7 +1,8 @@
 use std::{
-    ffi::CString,
+    ffi::{c_void, CString},
     io::{Read, Write},
     net::{TcpStream, ToSocketAddrs},
+    sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
 
@@ -19,6 +20,11 @@ use crate::{
     config::{DEFAULT_ROOT_HEIGHT, DEFAULT_ROOT_WIDTH},
     gpui_backend,
 };
+
+#[path = "plugin_jni.rs"]
+mod plugin_jni;
+
+static ANDROID_ACTIVITY: AtomicU64 = AtomicU64::new(0);
 
 const ANDROID_BUNDLE_ASSET: &str = "raster/app.js";
 const ANDROID_DEV_CONFIG_ASSET: &str = "raster/dev.json";
@@ -46,7 +52,14 @@ struct HttpStream {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn raster_android_current_activity() -> *mut c_void {
+    ANDROID_ACTIVITY.load(Ordering::Acquire) as *mut c_void
+}
+
 fn android_main(app: AndroidApp) {
+    let activity = app.activity_as_ptr().cast::<c_void>();
+    ANDROID_ACTIVITY.store(activity as u64, Ordering::Release);
+
     android_logger::init_once(
         android_logger::Config::default()
             .with_max_level(log::LevelFilter::Info)
@@ -59,6 +72,8 @@ fn android_main(app: AndroidApp) {
         file_path: None,
     });
     logger::info("android_main entered");
+    plugin_jni::bind_plugin_activity();
+    plugin_jni::register_linked_plugins();
 
     let debuggable = match is_app_debuggable(&app) {
         Ok(debuggable) => debuggable,

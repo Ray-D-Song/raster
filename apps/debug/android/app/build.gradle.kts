@@ -33,6 +33,13 @@ android {
     sourceSets {
         getByName("main") {
             assets.srcDirs("src/main/assets")
+            java.srcDirs(
+                "src/main/java",
+                "../../../../packages/raster-plugin-camera/android/src/main/java",
+                "../../../../packages/raster-plugin-clipboard/android/src/main/java",
+                "../../../../packages/raster-plugin-haptics/android/src/main/java",
+                "../../../../packages/raster-plugin-filesystem/android/src/main/java",
+            )
         }
     }
 

@@ -2,3 +2,4 @@
 /build/
 /raster-android/build/
 /src/main/jniLibs/
+/local.properties

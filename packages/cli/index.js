@@ -21,12 +21,16 @@ Usage:
   raster add <platforms>
   raster dev android|ios
   raster build android|ios
+  raster plugin link
+  raster plugin new <name>
 
 Commands:
   create <project-name>       Create a new Raster app.
   add <platforms>             Add platform shell apps. Example: android,ios,win
   dev android|ios             Start mobile bundle watch and dev server.
   build android|ios           Build the mobile shell app.
+  plugin link                 Generate native plugin registration files.
+  plugin new <name>           Scaffold a Raster plugin package.
 
 Supported platform inputs:
   android, ios, win, windows, osx, macos, linux
@@ -85,7 +89,94 @@ async function main(argv) {
     return;
   }
 
+  if (command === "plugin") {
+    await pluginCommand(args);
+    return;
+  }
+
   throw new CliError(`Unknown command: ${command}\n\n${HELP}`);
+}
+
+async function pluginCommand(args) {
+  const [subcommand, ...rest] = args;
+  if (subcommand === "link") {
+    const { linkPlugins } = await import("raster-plugin-link");
+    const root = process.cwd();
+    const iosRasterDir = path.join(root, "ios", "RasterIOS");
+    const iosDir = (await pathExists(iosRasterDir))
+      ? iosRasterDir
+      : path.join(root, "ios");
+    const androidDir = path.join(root, "android", "app", "src", "main", "java", "dev", "raster", "generated");
+    const result = await linkPlugins({
+      root,
+      iosDir: (await pathExists(path.dirname(iosDir))) ? iosDir : undefined,
+      androidDir: (await pathExists(path.dirname(androidDir))) ? androidDir : undefined,
+    });
+    console.log(`Linked ${result.plugins.length} Raster plugin(s).`);
+    if (result.iosRegisterFile) console.log(`iOS: ${result.iosRegisterFile}`);
+    if (result.androidRegisterFile) console.log(`Android: ${result.androidRegisterFile}`);
+    return;
+  }
+  if (subcommand === "new") {
+    await createPluginPackage(rest);
+    return;
+  }
+  throw new CliError(`Unknown plugin command: ${subcommand ?? "(missing)"}\n\n${HELP}`);
+}
+
+async function createPluginPackage(args) {
+  const rawName = args[0];
+  if (!rawName) {
+    throw new CliError("Missing plugin name. Usage: raster plugin new <name>");
+  }
+  const slug = rawName.trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-");
+  const className = slug
+    .split("-")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join("");
+  const packageName = `raster-plugin-${slug}`;
+  const targetDir = path.resolve(process.cwd(), "packages", packageName);
+  if (await pathExists(targetDir)) {
+    throw new CliError(`Target already exists: ${targetDir}`);
+  }
+  const templateDir = path.join(__dirname, "templates", "plugin");
+  await copyDirectory(templateDir, targetDir, {
+    "__PLUGIN_NAME__": className,
+    "__PLUGIN_SLUG__": slug,
+    "__PLUGIN_PACKAGE__": packageName,
+    "__NPM_NAME__": `@raster/${packageName}`,
+  });
+  console.log(`Created plugin scaffold at ${targetDir}`);
+  console.log("Next: pnpm install && raster plugin link");
+}
+
+async function pathExists(targetPath) {
+  try {
+    await fs.access(targetPath, fsConstants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function copyDirectory(sourceDir, targetDir, replacements) {
+  await fs.mkdir(targetDir, { recursive: true });
+  const entries = await fs.readdir(sourceDir, { withFileTypes: true });
+  for (const entry of entries) {
+    const sourcePath = path.join(sourceDir, entry.name);
+    const targetPath = path.join(targetDir, entry.name);
+    if (entry.isDirectory()) {
+      await copyDirectory(sourcePath, targetPath, replacements);
+      continue;
+    }
+    const raw = await fs.readFile(sourcePath, "utf8");
+    let next = raw;
+    for (const [token, value] of Object.entries(replacements)) {
+      next = next.replaceAll(token, value);
+    }
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(targetPath, next, "utf8");
+  }
 }
 
 async function dev(args) {

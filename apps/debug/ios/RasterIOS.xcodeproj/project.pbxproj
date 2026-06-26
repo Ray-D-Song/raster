@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		C9CC21BB2FDBEAC00025D2F2 /* RasterIOS in Frameworks */ = {isa = PBXBuildFile; productRef = C9CC21BC2FDBEAC00025D2F2 /* RasterIOS */; };
+		C9CC21BF2FDBEAC00025D2F3 /* RasterPluginSDK in Frameworks */ = {isa = PBXBuildFile; productRef = C9CC21C02FDBEAC00025D2F3 /* RasterPluginSDK */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -28,6 +29,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C9CC21BB2FDBEAC00025D2F2 /* RasterIOS in Frameworks */,
+				C9CC21BF2FDBEAC00025D2F3 /* RasterPluginSDK in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -72,6 +74,7 @@
 			name = RasterIOS;
 			packageProductDependencies = (
 				C9CC21BC2FDBEAC00025D2F2 /* RasterIOS */,
+				C9CC21C02FDBEAC00025D2F3 /* RasterPluginSDK */,
 			);
 			productName = RasterIOS;
 			productReference = C9CC21AD2FDBEABF0025D2F2 /* RasterIOS.app */;
@@ -297,6 +300,8 @@
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Allow Raster to connect to the local dev server.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Raster uses the camera to capture debug photos.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Raster uses the photo library to pick debug images.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -390,6 +395,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = C9CC21BD2FDBEAC00025D2F2 /* XCLocalSwiftPackageReference "../../../packages/raster-ios" */;
 			productName = RasterIOS;
+		};
+		C9CC21C02FDBEAC00025D2F3 /* RasterPluginSDK */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C9CC21BD2FDBEAC00025D2F2 /* XCLocalSwiftPackageReference "../../../packages/raster-ios" */;
+			productName = RasterPluginSDK;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

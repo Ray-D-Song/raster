@@ -2,7 +2,10 @@ use std::{
     ffi::{CStr, CString, c_char, c_void},
     io::{ErrorKind, Read, Write},
     net::{TcpStream, ToSocketAddrs},
-    sync::{Mutex, OnceLock},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex, OnceLock,
+    },
     time::Duration,
 };
 
@@ -25,6 +28,7 @@ const IOS_DEV_SSE_RECONNECT_INTERVAL: Duration = Duration::from_millis(500);
 const IOS_DEV_SSE_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 static LAST_ERROR: OnceLock<Mutex<Option<CString>>> = OnceLock::new();
+static HOST_VIEW_CONTROLLER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug)]
 struct IosDevConfig {
@@ -82,6 +86,16 @@ pub extern "C" fn raster_ios_request_frame() {
     if !window.is_null() {
         gpui_mobile::ios::ffi::gpui_ios_request_frame(window);
     }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn raster_ios_set_host_view_controller(view_controller: *mut c_void) {
+    HOST_VIEW_CONTROLLER.store(view_controller as u64, Ordering::Release);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn raster_ios_host_view_controller() -> *mut c_void {
+    HOST_VIEW_CONTROLLER.load(Ordering::Acquire) as *mut c_void
 }
 
 #[unsafe(no_mangle)]

@@ -1,0 +1,6 @@
+# tsc must use: pnpm build  →  tsc -p tsconfig.build.json  (outDir: dist)
+# Running plain `tsc` emits build artifacts into src/ — ignore them:
+src/**/*.js
+src/**/*.d.ts.map
+src/**/*.d.ts
+!src/core/jsx.d.ts

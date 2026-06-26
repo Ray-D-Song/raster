@@ -50,6 +50,25 @@ function handleBridgeEvent(message: BridgeDispatchMessage): void {
     if (typeof rasterGlobal.__rasterFlushSyncWork === "function") {
       rasterGlobal.__rasterFlushSyncWork();
     }
+    return;
+  }
+
+  if (message.channel === "plugin.event" && message.name != null) {
+    const payload = message.payload;
+    const eventName =
+      payload != null && typeof payload === "object" && !Array.isArray(payload)
+        ? (payload as Record<string, unknown>).event
+        : null;
+    const data =
+      payload != null && typeof payload === "object" && !Array.isArray(payload)
+        ? (payload as Record<string, unknown>).data ?? null
+        : null;
+    if (typeof eventName === "string") {
+      dispatchRasterRuntimeEvent(`plugin:${message.name}:${eventName}`, data);
+      if (typeof rasterGlobal.__rasterFlushSyncWork === "function") {
+        rasterGlobal.__rasterFlushSyncWork();
+      }
+    }
   }
 }
 

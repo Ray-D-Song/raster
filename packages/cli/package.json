@@ -9,6 +9,9 @@
     "index.js",
     "templates"
   ],
+  "dependencies": {
+    "raster-plugin-link": "workspace:*"
+  },
   "engines": {
     "node": ">=18.0.0"
   },

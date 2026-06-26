@@ -36,6 +36,8 @@ function renderPage(
     setSettings: (settings: UserSettings) => void;
     setTab: (tab: AppTab) => void;
     submitDraft: () => void;
+    photoUri: string | null;
+    setPhotoUri: (uri: string | null) => void;
   }
 ) {
   if (tab === "entry") {
@@ -76,7 +78,9 @@ function renderPage(
         settings={props.settings}
         theme={appTheme}
         entryCount={props.entries.length}
+        photoUri={props.photoUri}
         onChange={props.setSettings}
+        onPhotoChange={props.setPhotoUri}
       />
     );
   }
@@ -103,6 +107,7 @@ export function App() {
   });
   const [selectedDay, setSelectedDay] = useState<number | null>(null);
   const [nextId, setNextId] = useState(1);
+  const [photoUri, setPhotoUri] = useState<string | null>(null);
 
   const nativeTheme = useTheme();
   const appTheme = nativeTheme?.colors ?? null;
@@ -166,6 +171,8 @@ export function App() {
               setSettings,
               setTab,
               submitDraft,
+              photoUri,
+              setPhotoUri,
             })
           : <View />}
       </AppShell>

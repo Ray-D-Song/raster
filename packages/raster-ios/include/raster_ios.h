@@ -9,6 +9,8 @@ extern "C" {
 
 bool raster_ios_run_app(const char *bundle_name, const char *bundle_source, const char *dev_config_json);
 const char *raster_ios_last_error(void);
+void raster_ios_set_host_view_controller(void *view_controller);
+void *raster_ios_host_view_controller(void);
 void *raster_ios_root_view(void);
 void raster_ios_request_frame(void);
 void raster_ios_will_enter_foreground(void);

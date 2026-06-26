@@ -64,6 +64,7 @@ public struct RasterAppView: UIViewRepresentable {
     public func makeUIView(context: Context) -> UIView {
         let view = RasterHostView(frame: UIScreen.main.bounds)
         view.backgroundColor = .clear
+        registerHostViewController(from: view)
         context.coordinator.start()
         context.coordinator.attachRootView(to: view)
         return view
@@ -244,6 +245,20 @@ public struct RasterAppView: UIViewRepresentable {
         }
     }
 }
+
+private func registerHostViewController(from view: UIView) {
+    var responder: UIResponder? = view
+    while let current = responder {
+        if let viewController = current as? UIViewController {
+            raster_ios_set_host_view_controller(Unmanaged.passUnretained(viewController).toOpaque())
+            return
+        }
+        responder = current.next
+    }
+}
+
+@_silgen_name("raster_ios_set_host_view_controller")
+private func raster_ios_set_host_view_controller(_ viewController: UnsafeMutableRawPointer?)
 
 private final class RasterHostView: UIView {
     override var intrinsicContentSize: CGSize {

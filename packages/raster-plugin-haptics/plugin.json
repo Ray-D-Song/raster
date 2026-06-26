@@ -1,0 +1,14 @@
+{
+  "name": "Haptics",
+  "npm": "@raster/raster-plugin-haptics",
+  "ios": {
+    "register": "HapticsPlugin.register"
+  },
+  "android": {
+    "package": "dev.raster.plugin.haptics",
+    "register": "HapticsPlugin.register"
+  },
+  "permissions": {
+    "android": ["android.permission.VIBRATE"]
+  }
+}

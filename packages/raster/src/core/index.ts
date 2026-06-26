@@ -2,6 +2,7 @@ export { ConfigProvider, Input, Label, Slot, Text, Textarea, View, Widget } from
 export { ThemePreset } from "./types/theme.js";
 export type * from "./types/index.js";
 export { useTheme } from "./theme.js";
+export { addRasterRuntimeEventListener, dispatchRasterRuntimeEvent } from "./runtime-events.js";
 export { createFabricContainer, getRasterNativeBinding, type RasterFabricContainer } from "./runtime/index.js";
 export {
   appendFabricChild,

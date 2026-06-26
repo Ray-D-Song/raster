@@ -1,0 +1,11 @@
+{
+  "name": "Echo",
+  "npm": "@raster/raster-plugin-echo",
+  "ios": {
+    "register": "EchoPlugin.register"
+  },
+  "android": {
+    "register": "EchoPlugin.register"
+  },
+  "permissions": {}
+}

@@ -16,6 +16,11 @@
   },
   "dependencies": {
     "@iconify-icons/material-symbols": "^1.2.58",
+    "@raster/plugin-core": "workspace:*",
+    "@raster/raster-plugin-camera": "workspace:*",
+    "@raster/raster-plugin-clipboard": "workspace:*",
+    "@raster/raster-plugin-filesystem": "workspace:*",
+    "@raster/raster-plugin-haptics": "workspace:*",
     "raster-js": "workspace:*",
     "react": "19.2.6"
   },

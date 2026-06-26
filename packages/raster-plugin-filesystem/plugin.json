@@ -1,0 +1,12 @@
+{
+  "name": "Filesystem",
+  "npm": "@raster/raster-plugin-filesystem",
+  "ios": {
+    "register": "FilesystemPlugin.register"
+  },
+  "android": {
+    "package": "dev.raster.plugin.filesystem",
+    "register": "FilesystemPlugin.register"
+  },
+  "permissions": {}
+}

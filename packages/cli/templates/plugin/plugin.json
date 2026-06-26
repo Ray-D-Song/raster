@@ -1,0 +1,12 @@
+{
+  "name": "__PLUGIN_NAME__",
+  "npm": "__NPM_NAME__",
+  "ios": {
+    "register": "__PLUGIN_NAME__Plugin.register"
+  },
+  "android": {
+    "package": "dev.raster.plugin.__PLUGIN_SLUG__",
+    "register": "__PLUGIN_NAME__Plugin.register"
+  },
+  "permissions": {}
+}

@@ -33,6 +33,10 @@ android {
     }
 }
 
+dependencies {
+    implementation("androidx.core:core-ktx:1.15.0")
+}
+
 publishing {
     publications {
         create<MavenPublication>("release") {

@@ -1,5 +1,9 @@
+import { useState } from "react";
 import type { ReactNode } from "react";
-import { Avatar, Button, ButtonGroup, DatePicker, Icon, Input, Switch, Text, View } from "raster-js/components";
+import { Camera } from "@raster/raster-plugin-camera";
+import { Clipboard } from "@raster/raster-plugin-clipboard";
+import { Haptics } from "@raster/raster-plugin-haptics";
+import { Avatar, Button, ButtonGroup, DatePicker, Icon, Image, Input, Switch, Text, View } from "raster-js/components";
 import type { IconifyIcon } from "raster-js/components";
 import { Card } from "../components/Card";
 import { SectionTitle } from "../components/SectionTitle";
@@ -12,7 +16,9 @@ interface SettingsProps {
   settings: UserSettings;
   theme: AppTheme;
   entryCount: number;
+  photoUri: string | null;
   onChange: (settings: UserSettings) => void;
+  onPhotoChange: (uri: string | null) => void;
 }
 
 const weeklyGoalOptions: WeeklyGoal[] = [0.25, 0.5, 1.0];
@@ -54,7 +60,20 @@ function PreferenceRow({ icon, label, control, bordered = false }: PreferenceRow
   );
 }
 
-export function Settings({ settings, theme, entryCount, onChange }: SettingsProps) {
+export function Settings({ settings, theme, entryCount, photoUri, onChange, onPhotoChange }: SettingsProps) {
+  const [pluginStatus, setPluginStatus] = useState("");
+
+  async function runPluginAction(label: string, action: () => Promise<unknown>) {
+    try {
+      setPluginStatus(`${label}...`);
+      await action();
+      setPluginStatus(`${label} succeeded`);
+      await Haptics.impact({ style: "light" });
+    } catch (error) {
+      setPluginStatus(`${label} failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   return (
     <View style={{ backgroundColor: theme.background }}>
       <View style={[pagePadding, { gap: 32 }]}>
@@ -214,6 +233,65 @@ export function Settings({ settings, theme, entryCount, onChange }: SettingsProp
                 />
               }
             />
+          </Card>
+        </View>
+
+        <View style={{ gap: 16 }}>
+          <SectionTitle src={appIcons.camera} title="Plugin Debug" />
+          <Card theme={theme} style={{ gap: 16 }}>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+              <Button
+                label="Take Photo"
+                icon={appIcons.camera}
+                variant="primary"
+                onClick={() =>
+                  runPluginAction("Take photo", async () => {
+                    const photo = await Camera.takePhoto({ quality: 85 });
+                    onPhotoChange(photo.uri);
+                  })
+                }
+              />
+              <Button
+                label="Pick Image"
+                icon={appIcons.image}
+                variant="primary"
+                outline
+                onClick={() =>
+                  runPluginAction("Pick image", async () => {
+                    const photo = await Camera.pickImage({ quality: 90 });
+                    onPhotoChange(photo.uri);
+                  })
+                }
+              />
+              <Button
+                label="Copy URI"
+                icon={appIcons.copy}
+                variant="secondary"
+                outline
+                onClick={() =>
+                  runPluginAction("Copy URI", async () => {
+                    if (!photoUri) {
+                      throw new Error("No photo selected");
+                    }
+                    await Clipboard.setString({ value: photoUri });
+                  })
+                }
+              />
+            </View>
+            {photoUri ? (
+              <Image
+                src={photoUri}
+                objectFit="cover"
+                style={{ width: "100%", height: 220, borderRadius: 12 }}
+              />
+            ) : (
+              <Text style={{ fontSize: 14, color: vitalityColors.outline }}>
+                Capture or pick an image to preview it here.
+              </Text>
+            )}
+            {pluginStatus ? (
+              <Text style={{ fontSize: 12, color: vitalityColors.onSurfaceVariant }}>{pluginStatus}</Text>
+            ) : null}
           </Card>
         </View>
 

@@ -1,0 +1,23 @@
+{
+  "name": "@raster/raster-plugin-filesystem",
+  "version": "0.1.0-alpha.1",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "plugin.json"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@raster/plugin-core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
