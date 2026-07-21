@@ -4,5 +4,14 @@
   "rust-analyzer.showUnlinkedFileNotification": false,
   "editor.formatOnPaste": true,
   "editor.formatOnSave": true,
+  "files.exclude": {
+    "**/refs": true
+  },
+  "files.watcherExclude": {
+    "**/refs/**": true
+  },
+  "search.exclude": {
+    "**/refs/**": true
+  },
   "yaml.format.singleQuote": false
 }
