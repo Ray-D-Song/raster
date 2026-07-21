@@ -1,0 +1,39 @@
+name: Compatibility
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  compatibility:
+    name: ${{ matrix.case }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        case: [next, vite-plus]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+          cache: yarn
+      - run: yarn install --frozen-lockfile
+      - run: make js JS_MINIFY=0
+      - run: rustup toolchain install nightly
+      - run: cargo +nightly build
+      - run: make compat-${{ matrix.case }}
+      - if: always()
+        run: |
+          ./target/debug/raster_runtime --version || true
+          find compat/${{ matrix.case }} -maxdepth 4 -type f | sort
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compat-${{ matrix.case }}-logs
+          path: |
+            compat/${{ matrix.case }}/compat.log
+            compat/${{ matrix.case }}/.next
+            compat/${{ matrix.case }}/dist
+          if-no-files-found: ignore

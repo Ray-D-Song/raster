@@ -1,0 +1,12 @@
+# Compatibility fixtures
+
+Each fixture installs its own locked dependencies, then asks Raster to run the upstream tool's JavaScript CLI. The build output is inspected but never executed.
+
+| Case | Versions | Raster command | Status |
+| --- | --- | --- | --- |
+| Next App Router build | Next 16.2.10, React 19.2.5 | `next build` | Observing: local baseline stops in Next's require hook |
+| Vite+ React library build | Vite+ 0.2.5, React 19.2.5 | `vp build` | Observing: local baseline stops while resolving Vite+'s native binding |
+
+Run `make compat-next` or `make compat-vite-plus` after building Raster. Upgrade a fixture only in a dedicated change that updates its exact dependency versions and lockfile.
+
+Failures are compatibility results. In particular, the Vite+ CLI wrapper and all of its Node API and native-addon requirements run unchanged under Raster. The workflow is non-blocking until a CI baseline is recorded, then should become a required check.

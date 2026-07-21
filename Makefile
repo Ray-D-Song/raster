@@ -9,6 +9,7 @@ TOOLCHAIN = +$(RUST_VERSION)
 BUILD_ARG = $(TOOLCHAIN) build -r
 BUILD_DIR = ./target/release
 BUNDLE_DIR = bundle
+RASTER_RUNTIME ?= ./target/debug/raster_runtime
 
 TS_SOURCES = $(wildcard raster_runtime_core/src/modules/js/*.ts) $(wildcard raster_runtime_core/src/modules/js/@raster_runtime/test/*.ts) $(wildcard raster_runtime_core/src/modules/js/@raster_runtime/*.ts) $(wildcard tests/unit/*.ts)
 STD_JS_FILE = $(BUNDLE_DIR)/js/@raster_runtime/std.js
@@ -142,6 +143,16 @@ run-ssr: js
 	cargo build
 	cd example/functions && yarn build && cd build && ../../../target/debug/raster_runtime
 
+compat: compat-next compat-vite-plus
+
+compat-next: js
+	cd compat/next && yarn install --frozen-lockfile
+	node compat/run.mjs next $(RASTER_RUNTIME)
+
+compat-vite-plus: js
+	cd compat/vite-plus && yarn install --frozen-lockfile
+	node compat/run.mjs vite-plus $(RASTER_RUNTIME)
+
 flame:
 	cargo flamegraph --profile flame -- index.mjs
 
@@ -246,4 +257,4 @@ check-crates:
 	  cargo check -p "$$crate"; \
 	done
 
-.PHONY: libs check check-all check-crates libs-arm64 libs-x64 toolchain clean-js release-linux release-darwin release-windows stdlib stdlib-x64 stdlib-arm64 test test-ci run js run-release build release clean flame deploy
+.PHONY: libs check check-all check-crates libs-arm64 libs-x64 toolchain clean-js release-linux release-darwin release-windows stdlib stdlib-x64 stdlib-arm64 test test-ci run js run-release build release clean flame deploy compat compat-next compat-vite-plus

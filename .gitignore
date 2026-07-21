@@ -23,6 +23,9 @@ bootstrap
 
 node_modules
 !/fixtures/node_modules
+compat/**/compat.log
+compat/**/.next
+compat/**/dist
 
 tests/wpt/revision
 /wpt
