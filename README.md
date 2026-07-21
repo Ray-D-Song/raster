@@ -57,7 +57,7 @@ The test runner also has support for filters. Using filters is as simple as addi
 | node:events                                      | ✔︎       | ✔︎⚠️   |
 | node:fs                                          | ✔︎       | ✔︎⚠️   |
 | node:fs/promises                                 | ✔︎       | ✔︎⚠️   |
-| node:http                                        | ✔︎       | ✘⏱    |
+| node:http                                        | ✔︎       | ✔︎⚠️   |
 | node:http2                                       | ✔︎       | ✘     |
 | node:https                                       | ✔︎       | ✘⏱    |
 | node:inspector                                   | ✔︎       | ✘     |

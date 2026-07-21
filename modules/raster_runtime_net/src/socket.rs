@@ -1,7 +1,11 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
-use std::sync::{Arc, RwLock};
+use std::{
+    net::Shutdown,
+    sync::{Arc, Mutex, RwLock},
+};
 
+use raster_runtime_buffer::Buffer;
 use raster_runtime_context::CtxExtension;
 use raster_runtime_events::{EmitError, Emitter, EventEmitter, EventKey, EventList};
 use raster_runtime_stream::{
@@ -14,20 +18,26 @@ use raster_runtime_utils::{object::ObjectExt, result::ResultExt};
 use rquickjs::{
     class::{Trace, Tracer},
     prelude::{Opt, Rest, This},
-    Class, Ctx, Error, Exception, Function, JsLifetime, Object, Result, Value,
+    Class, Ctx, Error, Exception, Function, IntoJs, JsLifetime, Object, Result, Value,
 };
 #[cfg(unix)]
 use tokio::net::UnixStream;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpStream,
-    sync::oneshot::Receiver,
+    sync::{mpsc::UnboundedSender, oneshot::Receiver},
 };
 use tracing::trace;
 
 use super::{ensure_access, get_address_parts, get_hostname, rw_join, ReadyState, LOCALHOST};
 
 impl_stream_events!(Socket);
+
+enum RawShutdown {
+    Tcp(Arc<std::net::TcpStream>),
+    #[cfg(unix)]
+    Unix(Arc<std::os::unix::net::UnixStream>),
+}
 
 #[rquickjs::class]
 #[allow(dead_code)]
@@ -46,6 +56,9 @@ pub struct Socket<'js> {
     remote_port: Option<u16>,
     ready_state: ReadyState,
     allow_half_open: bool,
+    raw_writer: Option<UnboundedSender<Vec<u8>>>,
+    raw_reader: Option<Arc<Mutex<Vec<u8>>>>,
+    raw_shutdown: Option<RawShutdown>,
 }
 
 unsafe impl<'js> JsLifetime<'js> for Socket<'js> {
@@ -123,19 +136,52 @@ impl<'js> Socket<'js> {
         value: Value<'js>,
         cb: Opt<Function<'js>>,
     ) -> Result<()> {
+        if let Some(writer) = this.borrow().raw_writer.clone() {
+            let bytes =
+                raster_runtime_utils::bytes::ObjectBytes::from(&ctx, &value)?.into_bytes(&ctx)?;
+            writer
+                .send(bytes)
+                .map_err(|_| Exception::throw_message(&ctx, "Socket is closed"))?;
+            if let Some(callback) = cb.0 {
+                callback.call::<_, ()>(())?;
+            }
+            return Ok(());
+        }
         WritableStream::write_flushed(this, ctx.clone(), value, cb)?;
         Ok(())
     }
 
-    pub fn end(
-        this: This<Class<'js, Self>>,
-        ctx: Ctx<'js>,
-        callback: Opt<Function<'js>>,
-    ) -> Result<()> {
-        if let Some(cb) = callback.0 {
+    pub fn end(this: This<Class<'js, Self>>, ctx: Ctx<'js>, args: Rest<Value<'js>>) -> Result<()> {
+        let mut args = args.0.into_iter();
+        let first = args.next();
+        let (value, callback) = match first {
+            Some(value) if value.is_function() => (None, value.into_function()),
+            Some(value) => (
+                Some(value),
+                args.next().and_then(|value| value.into_function()),
+            ),
+            None => (None, None),
+        };
+        if let Some(cb) = callback {
             Self::add_event_listener_str(this.clone(), &ctx, "end", cb, true, true)?;
         }
 
+        if this.borrow().raw_writer.is_some() {
+            if let Some(value) = value {
+                let bytes = raster_runtime_utils::bytes::ObjectBytes::from(&ctx, &value)?
+                    .into_bytes(&ctx)?;
+                if let Some(writer) = &this.borrow().raw_writer {
+                    writer
+                        .send(bytes)
+                        .map_err(|_| Exception::throw_message(&ctx, "Socket is closed"))?;
+                }
+            }
+            this.borrow_mut().raw_writer.take();
+            return Ok(());
+        }
+        if let Some(value) = value {
+            WritableStream::write_flushed(This(this.0.clone()), ctx.clone(), value, Opt(None))?;
+        }
         //ReadableStream::destroy(This(this.clone()), ctx.clone())?;
         WritableStream::end(this);
 
@@ -143,6 +189,17 @@ impl<'js> Socket<'js> {
     }
 
     pub fn destroy(this: This<Class<'js, Self>>, error: Opt<Value<'js>>) -> Class<'js, Self> {
+        if let Some(stream) = &this.borrow().raw_shutdown {
+            match stream {
+                RawShutdown::Tcp(stream) => {
+                    let _ = stream.shutdown(Shutdown::Both);
+                },
+                #[cfg(unix)]
+                RawShutdown::Unix(stream) => {
+                    let _ = stream.shutdown(Shutdown::Both);
+                },
+            }
+        }
         this.borrow_mut().destroyed = true;
         ReadableStream::destroy(This(this.clone()), Opt(None));
         WritableStream::destroy(This(this.clone()), error);
@@ -154,6 +211,13 @@ impl<'js> Socket<'js> {
         ctx: Ctx<'js>,
         size: Opt<usize>,
     ) -> Result<Value<'js>> {
+        if let Some(reader) = &this.borrow().raw_reader {
+            let mut bytes = reader.lock().unwrap();
+            if !bytes.is_empty() {
+                let count = size.0.unwrap_or(bytes.len()).min(bytes.len());
+                return Buffer(bytes.drain(..count).collect()).into_js(&ctx);
+            }
+        }
         ReadableStream::read(this, ctx, size)
     }
 
@@ -330,6 +394,9 @@ impl<'js> Socket<'js> {
                 readable_stream_inner,
                 writable_stream_inner,
                 allow_half_open,
+                raw_writer: None,
+                raw_reader: None,
+                raw_shutdown: None,
             },
         )?;
         Ok(instance)
@@ -347,6 +414,39 @@ impl<'js> Socket<'js> {
         Self::process_stream(this, ctx, reader, writer, allow_half_open)
     }
 
+    /// Attach a raw byte writer for upgraded HTTP connections. The HTTP
+    /// connection owns the transport, so this bypasses the normal socket
+    /// stream driver for the write half while preserving the public API.
+    pub fn attach_raw_writer(this: &Class<'js, Self>, writer: UnboundedSender<Vec<u8>>) {
+        this.borrow_mut().raw_writer = Some(writer);
+    }
+
+    pub fn attach_raw_reader(this: &Class<'js, Self>, reader: Arc<Mutex<Vec<u8>>>) {
+        this.borrow_mut().raw_reader = Some(reader);
+    }
+
+    pub fn attach_raw_tcp_shutdown(this: &Class<'js, Self>, stream: Arc<std::net::TcpStream>) {
+        this.borrow_mut().raw_shutdown = Some(RawShutdown::Tcp(stream));
+    }
+
+    #[cfg(unix)]
+    pub fn attach_raw_unix_shutdown(
+        this: &Class<'js, Self>,
+        stream: Arc<std::os::unix::net::UnixStream>,
+    ) {
+        this.borrow_mut().raw_shutdown = Some(RawShutdown::Unix(stream));
+    }
+
+    /// Marks a socket supplied by a server listener as an already-open
+    /// connection. Unlike an outbound `connect()`, there is no connect event
+    /// or pending phase for an accepted socket.
+    pub fn mark_connected(this: &Class<'js, Self>) {
+        let mut socket = this.borrow_mut();
+        socket.connecting = false;
+        socket.pending = false;
+        socket.ready_state = ReadyState::Open;
+    }
+
     #[cfg(unix)]
     pub fn process_unix_stream(
         this: &Class<'js, Self>,
@@ -355,6 +455,16 @@ impl<'js> Socket<'js> {
         allow_half_open: bool,
     ) -> Result<(Receiver<bool>, Receiver<bool>)> {
         let (reader, writer) = stream.into_split();
+        Self::process_stream(this, ctx, reader, writer, allow_half_open)
+    }
+
+    pub fn process_io<T: AsyncRead + AsyncWrite + 'js + Unpin>(
+        this: &Class<'js, Self>,
+        ctx: &Ctx<'js>,
+        stream: T,
+        allow_half_open: bool,
+    ) -> Result<(Receiver<bool>, Receiver<bool>)> {
+        let (reader, writer) = tokio::io::split(stream);
         Self::process_stream(this, ctx, reader, writer, allow_half_open)
     }
 

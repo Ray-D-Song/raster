@@ -37,6 +37,8 @@ mod modules {
     pub use raster_runtime_fetch as fetch;
     #[cfg(feature = "fs")]
     pub use raster_runtime_fs as fs;
+    #[cfg(feature = "http")]
+    pub use raster_runtime_http as http;
     #[cfg(feature = "https")]
     pub use raster_runtime_http as https;
     #[cfg(feature = "intl")]

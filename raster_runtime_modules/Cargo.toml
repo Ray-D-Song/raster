@@ -48,6 +48,7 @@ base = [
   "exceptions",
   "fetch",
   "fs",
+  "http",
   "https",
   "intl",
   "navigator",
@@ -93,6 +94,7 @@ compression-rust = [
   "raster_runtime_zlib?/compression-rust",
 ]
 fs = ["raster_runtime_fs"]
+http = ["raster_runtime_http", "raster_runtime_http?/http1"]
 https = [
   "raster_runtime_http",
   "raster_runtime_http?/webpki-roots",

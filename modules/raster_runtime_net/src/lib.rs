@@ -26,7 +26,8 @@ mod security;
 mod server;
 mod socket;
 
-use self::{server::Server, socket::Socket};
+use self::server::Server;
+pub use self::socket::Socket;
 
 const LOCALHOST: &str = "localhost";
 

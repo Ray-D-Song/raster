@@ -146,7 +146,7 @@ declare module "net" {
      * @param callback Optional callback for when the socket is finished.
      * @return The socket itself.
      */
-    end(callback?: () => void): this;
+    end(chunk?: string | Buffer, callback?: () => void): this;
 
     /**
      * events.EventEmitter

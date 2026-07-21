@@ -53,9 +53,10 @@ tls-openssl = [
 [dependencies]
 bytes = { version = "1", default-features = false }
 http-body-util = { version = "0.1", default-features = false }
-hyper = { version = "1", features = ["client"], default-features = false }
+hyper = { version = "1", features = ["client", "server", "http1"], default-features = false }
 hyper-util = { version = "0.1", features = [
   "client-legacy",
+  "server",
   "tokio",
 ], default-features = false }
 hyper-rustls = { version = "0.27", default-features = false, optional = true }
@@ -66,13 +67,20 @@ openssl = { version = "0.10", optional = true }
 raster_runtime_dns_cache = { version = "0.8.1-beta", path = "../../libs/raster_runtime_dns_cache" }
 raster_runtime_tls = { version = "0.8.1-beta", default-features = false, path = "../raster_runtime_tls" }
 raster_runtime_utils = { version = "0.8.1-beta", path = "../../libs/raster_runtime_utils", default-features = false }
+raster_runtime_context = { version = "0.8.1-beta", path = "../../libs/raster_runtime_context" }
+raster_runtime_events = { version = "0.8.1-beta", path = "../raster_runtime_events" }
+raster_runtime_buffer = { version = "0.8.1-beta", path = "../raster_runtime_buffer" }
+raster_runtime_net = { version = "0.8.1-beta", path = "../raster_runtime_net" }
 once_cell = { version = "1", features = ["std"], default-features = false }
 rquickjs = { version = "0.11", git = "https://github.com/DelSkayn/rquickjs", features = [
   "either",
   "std",
 ], default-features = false }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "time"], default-features = false }
+tokio-stream = { version = "0.1", features = ["sync"], default-features = false }
 rustls = { version = "0.23", features = [
   "tls12",
 ], default-features = false, optional = true }
 
 [dev-dependencies]
+raster_runtime_test = { path = "../../libs/raster_runtime_test" }

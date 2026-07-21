@@ -217,7 +217,6 @@ where
     ) -> Result<Receiver<bool>> {
         let mut borrow = this.borrow_mut();
         let inner = borrow.inner_mut();
-        let is_ended = inner.is_finished;
         let mut is_destroyed = inner.is_destroyed;
         let emit_close = inner.emit_close;
         let mut command_rx = inner
@@ -237,7 +236,11 @@ where
             let write_function = async move {
                 let mut writer = BufWriter::new(writable);
 
-                if !is_ended && !is_destroyed {
+                // `end()` may be called before a transport is attached (for
+                // example immediately from a HTTP upgrade handler).  In that
+                // case queued writes must still be flushed before the End
+                // command shuts the transport down.
+                if !is_destroyed {
                     loop {
                         tokio::select! {
                             command = command_rx.recv() => {

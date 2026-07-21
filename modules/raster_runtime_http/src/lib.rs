@@ -7,6 +7,8 @@ use rquickjs::{
 };
 
 pub use self::config::*;
+mod server;
+pub use self::server::HttpModule;
 
 #[cfg(any(
     feature = "tls-ring",

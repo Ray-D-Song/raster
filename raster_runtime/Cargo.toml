@@ -5,7 +5,9 @@ edition = "2021"
 license-file = "LICENSE"
 
 [features]
-default = ["macro", "tls-ring", "crypto-rust"]
+default = ["base", "macro", "tls-ring", "crypto-rust"]
+base = ["raster_runtime_core/base"]
+http = ["raster_runtime_core/http"]
 macro = ["raster_runtime_core/macro"]
 uncompressed = ["raster_runtime_core/uncompressed"]
 bindgen = ["raster_runtime_core/bindgen"]
