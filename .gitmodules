@@ -8,3 +8,6 @@
 	url = https://github.com/web-platform-tests/wpt
 	branch = master
 	update = none # Workaround for https://github.com/rust-lang/cargo/issues/4247
+[submodule "refs/node"]
+	path = refs/node
+	url = https://github.com/nodejs/node.git
