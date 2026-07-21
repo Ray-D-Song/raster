@@ -11,3 +11,6 @@
 [submodule "refs/node"]
 	path = refs/node
 	url = https://github.com/nodejs/node.git
+[submodule "refs/bun"]
+	path = refs/bun
+	url = https://github.com/oven-sh/bun.git
