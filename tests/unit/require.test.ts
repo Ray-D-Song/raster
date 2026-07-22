@@ -64,6 +64,34 @@ it("should handle cyclic requires", () => {
   expect(a.done).toEqual(b.done);
 });
 
+it("should provide module-local __filename and __dirname for CommonJS modules", () => {
+  const parentPath = `${CWD}/fixtures/cjs-dirname-parent.cjs`;
+  const childPath = `${CWD}/fixtures/cjs-dirname-child/child.cjs`;
+  const normalize = (value: string) => value.replace(/\\/g, "/");
+
+  const parent = _require(parentPath);
+
+  expect(normalize(parent.__filename)).toBe(normalize(parentPath));
+  expect(normalize(parent.__dirname)).toBe(normalize(`${CWD}/fixtures`));
+  expect(normalize(parent.__dirname)).toBe(normalize(parent.__filename.replace(/\/[^/]+$/, "")));
+
+  expect(normalize(parent.child.__filename)).toBe(normalize(childPath));
+  expect(normalize(parent.child.__dirname)).toBe(normalize(`${CWD}/fixtures/cjs-dirname-child`));
+  expect(parent.child.__filename).not.toBe(parent.__filename);
+  expect(parent.child.__dirname).not.toBe(parent.__dirname);
+});
+
+it("should allow reassignment of module-local __filename and __dirname", () => {
+  const normalize = (value: string) => value.replace(/\\/g, "/");
+  const modulePath = `${CWD}/fixtures/cjs-dirname-reassign.cjs`;
+  const result = _require(modulePath);
+
+  expect(normalize(result.originalDirname)).toBe(normalize(`${CWD}/fixtures`));
+  expect(normalize(result.originalFilename)).toBe(normalize(modulePath));
+  expect(result.mutatedDirname).toBe("/mutated-dirname");
+  expect(result.mutatedFilename).toBe("/mutated-filename");
+});
+
 it("should handle cjs requires", () => {
   const a = _require(`${CWD}/fixtures/import.cjs`);
 

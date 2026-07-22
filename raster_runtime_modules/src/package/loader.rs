@@ -6,12 +6,29 @@ use raster_runtime_json::escape::escape_json_string;
 use raster_runtime_utils::result::ResultExt;
 use rquickjs::{
     loader::{ImportAttributes, Loader},
-    Ctx, Exception, Function, Module, Object, Result, Value,
+    Ctx, Error, Exception, Function, Module, Object, Result, Value,
 };
 use tracing::trace;
 
-use crate::modules::path;
+use crate::modules::path::{self, replace_backslash};
 use crate::{module::ModuleCache, CJS_IMPORT_PREFIX, CJS_LOADER_PREFIX};
+
+fn prepend_cjs_dirname_filename(filename: &str, source: &[u8]) -> Result<String> {
+    let filename = replace_backslash(filename);
+    let dirname = replace_backslash(path::dirname(&filename));
+    let source = std::str::from_utf8(source).map_err(|_| {
+        Error::new_loading_message(filename.as_str(), "invalid UTF-8 in CommonJS module")
+    })?;
+
+    let mut result = String::with_capacity(source.len() + filename.len() + dirname.len() + 48);
+    result.push_str("var __filename=\"");
+    escape_json_string(&mut result, filename.as_bytes());
+    result.push_str("\";var __dirname=\"");
+    escape_json_string(&mut result, dirname.as_bytes());
+    result.push_str("\";\n");
+    result.push_str(source);
+    Ok(result)
+}
 
 #[derive(Debug, Default)]
 pub struct PackageLoader;
@@ -129,19 +146,25 @@ impl PackageLoader {
             (module, None)
         } else {
             let bytes = std::fs::read(path)?;
-            let mut bytes: &[u8] = &bytes;
+            let module = if from_cjs_import {
+                trace!("+- Loading cjs module via import: {}\n", path);
+                let source = prepend_cjs_dirname_filename(path, &bytes)?;
+                Module::declare(ctx.clone(), normalized_name, source)?
+            } else {
+                let mut source: &[u8] = &bytes;
 
-            if !from_cjs_import && bytes.starts_with(b"#!") {
-                bytes = bytes.splitn(2, |&c| c == b'\n').nth(1).unwrap_or(bytes);
-            }
+                if source.starts_with(b"#!") {
+                    source = source.splitn(2, |&c| c == b'\n').nth(1).unwrap_or(source);
+                }
 
-            let module = Module::declare(ctx.clone(), normalized_name, bytes)?;
+                trace!("+- Loading esm module: {}\n", path);
+                Module::declare(ctx.clone(), normalized_name, source)?
+            };
             {
                 let mut cache = binding.borrow_mut();
                 cache.esm.insert(path.into(), module.clone());
             }
 
-            trace!("+- Loading esm module: {}\n", path);
             (module, Some(["file://", path].concat()))
         };
 
@@ -164,5 +187,39 @@ impl Loader for PackageLoader {
         }
 
         Ok(module)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prepend_cjs_dirname_filename;
+
+    #[test]
+    fn prepend_cjs_dirname_filename_escapes_special_characters() {
+        let source = b"module.exports = __filename;";
+        let result =
+            prepend_cjs_dirname_filename(r#"C:\proj\quote"path\file.cjs"#, source).unwrap();
+        assert!(result.starts_with("var __filename=\""));
+        assert!(result.contains("quote\\\"path"));
+        assert!(result.contains("var __dirname="));
+        assert!(!result.contains("const __filename"));
+        assert!(!result.contains("const __dirname"));
+        assert!(result.ends_with("module.exports = __filename;"));
+    }
+
+    #[test]
+    fn prepend_cjs_dirname_filename_uses_forward_slashes() {
+        let source = b"module.exports = { __filename, __dirname };";
+        let result = prepend_cjs_dirname_filename("/a/b/module.cjs", source).unwrap();
+        assert!(result.contains("var __filename=\"/a/b/module.cjs\""));
+        assert!(result.contains("var __dirname=\"/a/b\""));
+    }
+
+    #[test]
+    fn prepend_cjs_dirname_filename_uses_var_bindings() {
+        let source = b"__dirname = '/mutated';";
+        let result = prepend_cjs_dirname_filename("/a/b/module.cjs", source).unwrap();
+        assert!(result.starts_with("var __filename="));
+        assert!(result.contains(";var __dirname="));
     }
 }

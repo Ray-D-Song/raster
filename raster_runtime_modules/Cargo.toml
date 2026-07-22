@@ -104,7 +104,7 @@ https = [
 intl = ["raster_runtime_intl"]
 navigator = ["raster_runtime_navigator"]
 net = ["raster_runtime_net"]
-os = ["raster_runtime_os"]
+os = ["raster_runtime_os/default"]
 path = ["raster_runtime_path"]
 process = ["raster_runtime_process"]
 perf-hooks = ["raster_runtime_perf_hooks"]
@@ -147,7 +147,7 @@ raster_runtime_http = { version = "0.8.1-beta", path = "../modules/raster_runtim
 raster_runtime_intl = { version = "0.8.1-beta", path = "../modules/raster_runtime_intl", optional = true }
 raster_runtime_navigator = { version = "0.8.1-beta", path = "../modules/raster_runtime_navigator", optional = true }
 raster_runtime_net = { version = "0.8.1-beta", path = "../modules/raster_runtime_net", optional = true }
-raster_runtime_os = { version = "0.8.1-beta", path = "../modules/raster_runtime_os", default-features = false, optional = true }
+raster_runtime_os = { version = "0.8.1-beta", path = "../modules/raster_runtime_os", optional = true }
 raster_runtime_path = { version = "0.8.1-beta", path = "../modules/raster_runtime_path", optional = true }
 raster_runtime_process = { version = "0.8.1-beta", path = "../modules/raster_runtime_process", optional = true }
 raster_runtime_perf_hooks = { version = "0.8.1-beta", path = "../modules/raster_runtime_perf_hooks", optional = true }
