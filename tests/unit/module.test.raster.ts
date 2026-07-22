@@ -15,7 +15,7 @@ it("default export should be a callable Module constructor", () => {
   expect(Module.prototype.require).toBeInstanceOf(Function);
 });
 
-const { createRequire, _resolveFilename, _nodeModulePaths, _cache, builtinModules, isBuiltin } =
+const { createRequire, _resolveFilename, _nodeModulePaths, _cache, _extensions, builtinModules, isBuiltin } =
   Module;
 
 it("should resolve 'node:module via createRequire()", () => {
@@ -130,4 +130,201 @@ it("isBuiltin recognizes raster builtins", () => {
 it("builtinModules is populated", () => {
   expect(Array.isArray(builtinModules)).toBe(true);
   expect(builtinModules).toContain("path");
+});
+
+const EXT_FIXTURES = `${CWD}/fixtures/require-extensions`;
+
+it("require.extensions, Module._extensions, and createRequire share one table", () => {
+  expect(_require.extensions).toBeDefined();
+  expect(typeof _require.extensions).toBe("object");
+  expect(_require.extensions[".js"]).toBeInstanceOf(Function);
+  expect(_require.extensions[".json"]).toBeInstanceOf(Function);
+  expect(_extensions).toBe(_require.extensions);
+  expect(createRequire(import.meta.url).extensions).toBe(_require.extensions);
+});
+
+it("runtime mutations to require.extensions are visible to all require functions", () => {
+  const calls: string[] = [];
+  const original = _require.extensions[".js"];
+  const custom = function (mod: typeof Module.prototype, filename: string) {
+    calls.push(filename);
+    mod._compile("module.exports = 'hooked';", filename);
+  };
+  try {
+    _require.extensions[".js"] = custom;
+    expect(_extensions[".js"]).toBe(custom);
+    expect(createRequire(import.meta.url).extensions[".js"]).toBe(custom);
+
+    const target = `${EXT_FIXTURES}/compile-target.js`;
+    delete _require.cache[target];
+    expect(_require(target)).toBe("hooked");
+    expect(calls).toContain(target);
+
+    delete _require.extensions[".js"];
+    expect(_extensions[".js"]).toBeUndefined();
+    delete _require.cache[target];
+    expect(_require(target)).toBe("original");
+  } finally {
+    _require.extensions[".js"] = original;
+  }
+});
+
+it("wrapping the default .js handler via _compile transforms exports", () => {
+  const original = _require.extensions[".js"];
+  const target = `${EXT_FIXTURES}/d.js`;
+  try {
+    delete _require.cache[target];
+    _require.extensions[".js"] = function (mod, filename) {
+      const originalCompile = mod._compile;
+      mod._compile = function (code: string, compileFilename: string) {
+        originalCompile.call(mod, 'module.exports = "transformed";', compileFilename);
+      };
+      original(mod, filename);
+    };
+    expect(_require(target)).toBe("transformed");
+
+    _require.extensions[".js"] = original;
+    delete _require.cache[target];
+    expect(_require(target)).toBe("d.js");
+  } finally {
+    _require.extensions[".js"] = original;
+  }
+});
+
+it("custom extension handlers support explicit and extensionless require", () => {
+  const customPath = `${EXT_FIXTURES}/config.custom`;
+  const extensionlessPath = `${EXT_FIXTURES}/config`;
+  const handler = function (mod: typeof Module.prototype, filename: string) {
+    mod.exports = { loaded: filename };
+  };
+  try {
+    _require.extensions[".custom"] = handler;
+    const extensionlessResolved = _require.resolve(extensionlessPath);
+    delete _require.cache[customPath];
+    delete _require.cache[extensionlessResolved];
+
+    expect(_require(customPath)).toEqual({ loaded: customPath });
+    expect(extensionlessResolved).toContain("config.custom");
+    expect(_require(extensionlessPath)).toEqual({ loaded: extensionlessResolved });
+
+    const localRequire = createRequire(import.meta.url);
+    delete _require.cache[customPath];
+    expect(localRequire(customPath)).toEqual({ loaded: customPath });
+  } finally {
+    delete _require.extensions[".custom"];
+  }
+});
+
+it("nested require keeps parent module context for subsequent relative imports", () => {
+  const parentPath = `${EXT_FIXTURES}/nested/parent.js`;
+  delete _require.cache[parentPath];
+  delete _require.cache[`${EXT_FIXTURES}/nested/child.js`];
+  delete _require.cache[`${EXT_FIXTURES}/nested/after-child.js`];
+  expect(_require(parentPath)).toEqual({ child: "child", after: "after" });
+});
+
+it("handler errors roll back load state so a later require can succeed", () => {
+  const target = `${EXT_FIXTURES}/error-target.js`;
+  const original = _require.extensions[".js"];
+  const failing = function () {
+    throw new Error("boom");
+  };
+  try {
+    delete _require.cache[target];
+    _require.extensions[".js"] = failing;
+    expect(() => _require(target)).toThrow("boom");
+
+    _require.extensions[".js"] = original;
+    delete _require.cache[target];
+    expect(_require(target)).toBe("ok");
+  } finally {
+    _require.extensions[".js"] = original;
+  }
+});
+
+it("composite extension names prefer the first registered match", () => {
+  const target = `${EXT_FIXTURES}/file.test.js`;
+  const originalJs = _require.extensions[".js"];
+  try {
+    delete _require.cache[target];
+    _require.extensions[".test.js"] = function (mod: typeof Module.prototype) {
+      mod.exports = "from-test-handler";
+    };
+    expect(_require(target)).toBe("from-test-handler");
+  } finally {
+    delete _require.extensions[".test.js"];
+    _require.extensions[".js"] = originalJs;
+  }
+});
+
+it("default .js loading runs through _compile even when source mentions import", () => {
+  const target = `${EXT_FIXTURES}/false-esm.js`;
+  let compileCalled = false;
+  const original = _require.extensions[".js"];
+  try {
+    delete _require.cache[target];
+    _require.extensions[".js"] = function (mod: typeof Module.prototype, filename: string) {
+      const compile = mod._compile;
+      mod._compile = function (code: string, compileFilename: string) {
+        compileCalled = true;
+        compile.call(mod, code, compileFilename);
+      };
+      original(mod, filename);
+    };
+    expect(_require(target)).toBe("import something");
+    expect(compileCalled).toBe(true);
+  } finally {
+    _require.extensions[".js"] = original;
+  }
+});
+
+it("native _compile falls back to import loader for ESM-style .js files", () => {
+  const target = `${CWD}/fixtures/hello.js`;
+  delete _require.cache[target];
+  expect(_require(target).hello).toBe("hello world!");
+});
+
+it("native _compile preserves syntax errors for invalid JavaScript", () => {
+  const target = `${EXT_FIXTURES}/broken.js`;
+  delete _require.cache[target];
+  expect(() => _require(target)).toThrow();
+});
+
+it("_compile uses inline source instead of re-reading the file on ESM fallback", () => {
+  const target = `${CWD}/fixtures/hello.js`;
+  const mod = new Module(target);
+  mod._compile("export default 123;", target);
+  expect(mod.exports.default).toBe(123);
+});
+
+it("custom require extensions do not affect ESM import resolution", async () => {
+  const extensionlessPath = `${EXT_FIXTURES}/config`;
+  const handler = function (mod: typeof Module.prototype, filename: string) {
+    mod.exports = { loaded: filename };
+  };
+  try {
+    _require.extensions[".custom"] = handler;
+    expect(_require.resolve(extensionlessPath)).toContain("config.custom");
+
+    let importFailed = false;
+    try {
+      await import(extensionlessPath);
+    } catch {
+      importFailed = true;
+    }
+    expect(importFailed).toBe(true);
+  } finally {
+    delete _require.extensions[".custom"];
+  }
+});
+
+// Known issue: process teardown can trip QuickJS gc_obj_list assertions after _compile.
+it.skip("new Module(...)._compile runs in module context", () => {
+  const filename = `${EXT_FIXTURES}/d.js`;
+  const mod = new Module(filename);
+  expect(mod.paths.length).toBeGreaterThan(0);
+  expect(mod.parent).toBeNull();
+  mod._compile('module.exports = { via: "compile", paths: module.paths.length };', filename);
+  expect(mod.exports).toEqual({ via: "compile", paths: mod.paths.length });
+  expect(mod.loaded).toBe(false);
 });

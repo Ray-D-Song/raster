@@ -12,7 +12,7 @@ use std::{
 
 use once_cell::sync::Lazy;
 use raster_runtime_utils::{
-    io::{is_supported_ext, JS_EXTENSIONS, SUPPORTED_EXTENSIONS},
+    io::{is_supported_ext, JS_EXTENSIONS},
     result::ResultExt,
 };
 use rquickjs::{
@@ -22,8 +22,17 @@ use rquickjs::{
 use simd_json::{derived::ValueObjectAccessAsScalar, BorrowedValue};
 use tracing::trace;
 
+use crate::module::extensions::{resolve_extension_candidates, static_extension_candidates};
 use crate::modules::path;
 use crate::{CJS_IMPORT_PREFIX, CJS_LOADER_PREFIX, RASTER_RUNTIME_PLATFORM};
+
+fn extension_candidates(ctx: &Ctx<'_>, is_esm: bool) -> Result<Vec<String>> {
+    if is_esm {
+        Ok(static_extension_candidates())
+    } else {
+        resolve_extension_candidates(ctx)
+    }
+}
 
 fn rc_string_to_cow<'a>(rc: Rc<String>) -> Cow<'a, str> {
     match Rc::try_unwrap(rc) {
@@ -202,11 +211,11 @@ pub fn require_resolve_with_options<'a>(
                 };
                 for base in paths {
                     let y_plus_x = Rc::new([base.as_str(), "/", suffix].concat());
-                    if let Ok(Some(path)) = load_as_file(ctx, y_plus_x.clone()) {
+                    if let Ok(Some(path)) = load_as_file(ctx, y_plus_x.clone(), is_esm) {
                         trace!("+- Resolved by `LOAD_AS_FILE` (paths): {}", path);
                         return to_abs_path(path);
                     }
-                    if let Ok(Some(path)) = load_as_directory(ctx, y_plus_x) {
+                    if let Ok(Some(path)) = load_as_directory(ctx, y_plus_x, is_esm) {
                         trace!("+- Resolved by `LOAD_AS_DIRECTORY` (paths): {}", path);
                         return to_abs_path(path);
                     }
@@ -225,12 +234,12 @@ pub fn require_resolve_with_options<'a>(
         let y_plus_x = Rc::new(y_plus_x);
 
         // a. LOAD_AS_FILE(Y + X)
-        if let Ok(Some(path)) = load_as_file(ctx, y_plus_x.clone()) {
+        if let Ok(Some(path)) = load_as_file(ctx, y_plus_x.clone(), is_esm) {
             trace!("+- Resolved by `LOAD_AS_FILE`: {}", path);
             return to_abs_path(path);
         } else {
             // b. LOAD_AS_DIRECTORY(Y + X)
-            if let Ok(Some(path)) = load_as_directory(ctx, y_plus_x) {
+            if let Ok(Some(path)) = load_as_directory(ctx, y_plus_x, is_esm) {
                 trace!("+- Resolved by `LOAD_AS_DIRECTORY`: {}", path);
                 return to_abs_path(path);
             }
@@ -243,7 +252,7 @@ pub fn require_resolve_with_options<'a>(
     // 4. If X begins with '#'
     if x.starts_with('#') {
         // a. LOAD_PACKAGE_IMPORTS(X, dirname(Y))
-        if let Ok(Some(path)) = load_package_imports(ctx, x, &dirname_y) {
+        if let Ok(Some(path)) = load_package_imports(ctx, x, &dirname_y, is_esm) {
             trace!("+- Resolved by `LOAD_PACKAGE_IMPORTS`: {}", path);
             return Ok(path.into());
         }
@@ -277,7 +286,7 @@ pub fn require_resolve_with_options<'a>(
     }
 
     // 6.5. LOAD_AS_FILE(X)
-    if let Ok(Some(path)) = load_as_file(ctx, Rc::new(x.to_owned())) {
+    if let Ok(Some(path)) = load_as_file(ctx, Rc::new(x.to_owned()), is_esm) {
         trace!("+- Resolved by `LOAD_AS_FILE`: {}", path);
         return to_abs_path(path);
     }
@@ -302,7 +311,7 @@ fn to_abs_path(path: Cow<'_, str>) -> Result<Cow<'_, str>> {
 }
 
 // LOAD_AS_FILE(X)
-fn load_as_file<'a>(ctx: &Ctx<'_>, x: Rc<String>) -> Result<Option<Cow<'a, str>>> {
+fn load_as_file<'a>(ctx: &Ctx<'_>, x: Rc<String>, is_esm: bool) -> Result<Option<Cow<'a, str>>> {
     trace!("|  load_as_file(x): {}", x);
 
     // 1. If X is a file, load X as its file extension format. STOP
@@ -317,8 +326,10 @@ fn load_as_file<'a>(ctx: &Ctx<'_>, x: Rc<String>) -> Result<Option<Cow<'a, str>>
 
     let mut base_file = Some(base_file);
 
+    let extension_candidates = extension_candidates(ctx, is_esm)?;
+
     // 2. If X.js is a file,
-    for extension in SUPPORTED_EXTENSIONS.iter() {
+    for extension in extension_candidates.iter() {
         if let Some(mut current_file) = base_file.take() {
             current_file.truncate(base_file_length);
             current_file.push_str(extension);
@@ -371,7 +382,7 @@ fn load_as_file<'a>(ctx: &Ctx<'_>, x: Rc<String>) -> Result<Option<Cow<'a, str>>
 }
 
 // LOAD_INDEX(X)
-fn load_index<'a>(ctx: &Ctx<'_>, x: Rc<String>) -> Result<Option<Cow<'a, str>>> {
+fn load_index<'a>(ctx: &Ctx<'_>, x: Rc<String>, is_esm: bool) -> Result<Option<Cow<'a, str>>> {
     trace!("|  load_index(x): {}", x);
 
     let mut base_file = String::with_capacity(x.len() + "/index".len() + 4);
@@ -381,8 +392,10 @@ fn load_index<'a>(ctx: &Ctx<'_>, x: Rc<String>) -> Result<Option<Cow<'a, str>>> 
 
     let mut base_file = Some(base_file);
 
+    let extension_candidates = extension_candidates(ctx, is_esm)?;
+
     // 1. If X/index.js is a file
-    for extension in SUPPORTED_EXTENSIONS.iter() {
+    for extension in extension_candidates.iter() {
         if let Some(mut file) = base_file.take() {
             file.truncate(base_file_length);
             file.push_str(extension);
@@ -433,7 +446,11 @@ fn load_index<'a>(ctx: &Ctx<'_>, x: Rc<String>) -> Result<Option<Cow<'a, str>>> 
 }
 
 // LOAD_AS_DIRECTORY(X)
-fn load_as_directory<'a>(ctx: &Ctx<'_>, x: Rc<String>) -> Result<Option<Cow<'a, str>>> {
+fn load_as_directory<'a>(
+    ctx: &Ctx<'_>,
+    x: Rc<String>,
+    is_esm: bool,
+) -> Result<Option<Cow<'a, str>>> {
     trace!("|  load_as_directory(x): {}", x);
 
     // 1. If X/package.json is a file,
@@ -447,12 +464,12 @@ fn load_as_directory<'a>(ctx: &Ctx<'_>, x: Rc<String>) -> Result<Option<Cow<'a, 
             // c. let M = X + (json main field)
             let m = Rc::new([&x, "/", main].concat());
             // d. LOAD_AS_FILE(M)
-            if let Ok(Some(path)) = load_as_file(ctx, m.clone()) {
+            if let Ok(Some(path)) = load_as_file(ctx, m.clone(), is_esm) {
                 trace!("|  load_as_directory(1.d): {}", path);
                 return Ok(Some(path));
             }
             // e. LOAD_INDEX(M)
-            if let Ok(Some(path)) = load_index(ctx, m) {
+            if let Ok(Some(path)) = load_index(ctx, m, is_esm) {
                 trace!("|  load_as_directory(1.e): {}", path);
                 return Ok(Some(path));
             }
@@ -464,7 +481,7 @@ fn load_as_directory<'a>(ctx: &Ctx<'_>, x: Rc<String>) -> Result<Option<Cow<'a, 
     }
 
     // 2. LOAD_INDEX(X)
-    if let Ok(Some(path)) = load_index(ctx, x) {
+    if let Ok(Some(path)) = load_index(ctx, x, is_esm) {
         trace!("|  load_as_directory(2): {}", path);
         return Ok(Some(path));
     }
@@ -595,11 +612,11 @@ fn search_node_modules_dir<'a>(
         return Some(path);
     }
     let dir_slash_x = Rc::new([dir, "/", x].concat());
-    if let Ok(Some(path)) = load_as_file(ctx, dir_slash_x.clone()) {
+    if let Ok(Some(path)) = load_as_file(ctx, dir_slash_x.clone(), is_esm) {
         trace!("|  load_node_modules(2.b): {}", path);
         return Some(path);
     }
-    if let Ok(Some(path)) = load_as_directory(ctx, dir_slash_x) {
+    if let Ok(Some(path)) = load_as_directory(ctx, dir_slash_x, is_esm) {
         trace!("|  load_node_modules(2.c): {}", path);
         return Some(path);
     }
@@ -647,7 +664,7 @@ fn load_from_search_paths<'a>(
 }
 
 // LOAD_PACKAGE_IMPORTS(X, DIR)
-fn load_package_imports(ctx: &Ctx<'_>, x: &str, dir: &str) -> Result<Option<String>> {
+fn load_package_imports(ctx: &Ctx<'_>, x: &str, dir: &str, is_esm: bool) -> Result<Option<String>> {
     trace!("|  load_package_imports(x, dir): ({}, {})", x, dir);
 
     // 1. Find the closest package scope SCOPE to DIR.
@@ -667,7 +684,11 @@ fn load_package_imports(ctx: &Ctx<'_>, x: &str, dir: &str) -> Result<Option<Stri
         if let Some(module_path) = package_imports_resolve(&package_json, x) {
             trace!("|  load_package_imports(6): {}", module_path);
             let dir = path.as_ref().trim_end_matches("package.json");
-            let module_path = to_abs_path(correct_extensions([dir, module_path].concat()))?;
+            let module_path = to_abs_path(correct_extensions(
+                ctx,
+                [dir, module_path].concat(),
+                is_esm,
+            )?)?;
             return Ok(Some(module_path.into()));
         }
     };
@@ -784,8 +805,10 @@ fn load_package_exports<'a>(
     let (module_path, resolve_path, is_cjs) = package_exports_resolve(&package_json, name, is_esm)?;
     let module_path = resolve_path.unwrap_or_else(|| module_path.to_string());
     let module_path = to_abs_path(correct_extensions(
+        ctx,
         [dir, "/", scope, "/", &module_path].concat(),
-    ))?;
+        is_esm,
+    )?)?;
 
     if is_cjs && is_esm {
         return Ok([CJS_LOADER_PREFIX, &module_path].concat().into());
@@ -842,7 +865,7 @@ fn load_package_self(ctx: &Ctx<'_>, x: &str, dir: &str, is_esm: bool) -> Result<
         let path = resolve_path.unwrap_or_else(|| path.to_string());
         trace!("|  load_package_self(2.c): {}", path);
         let dir = package_json_path.trim_end_matches("package.json");
-        let module_path = correct_extensions([dir, &path].concat());
+        let module_path = correct_extensions(ctx, [dir, &path].concat(), is_esm)?;
         return Ok(Some(module_path.into()));
     }
 
@@ -1058,7 +1081,7 @@ fn is_exports_field_exists<'a>(package_json: &'a BorrowedValue<'a>) -> bool {
     false
 }
 
-fn correct_extensions<'a>(x: String) -> Cow<'a, str> {
+fn correct_extensions<'a>(ctx: &Ctx<'_>, x: String, is_esm: bool) -> Result<Cow<'a, str>> {
     let (x_is_file, x_is_dir) = if let Ok(md) = fs::metadata(&x) {
         (md.is_file(), md.is_dir())
     } else {
@@ -1066,7 +1089,7 @@ fn correct_extensions<'a>(x: String) -> Cow<'a, str> {
     };
 
     if x_is_file {
-        return x.into();
+        return Ok(x.into());
     };
 
     let index = if x_is_dir { "/index" } else { "" };
@@ -1077,18 +1100,19 @@ fn correct_extensions<'a>(x: String) -> Cow<'a, str> {
     let base_path_length = base_path.len();
 
     let mut path = Some(base_path);
+    let extension_candidates = extension_candidates(ctx, is_esm)?;
 
-    for extension in JS_EXTENSIONS.iter() {
+    for extension in extension_candidates.iter() {
         if let Some(mut current_path) = path.take() {
             current_path.truncate(base_path_length);
             current_path.push_str(extension);
             if Path::new(&current_path).is_file() {
-                return current_path.into();
+                return Ok(current_path.into());
             }
             path = Some(current_path);
         }
     }
-    x.into()
+    Ok(x.into())
 }
 
 #[cfg(test)]

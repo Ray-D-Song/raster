@@ -14,6 +14,7 @@ declare module "module" {
     parent: Module | null;
     children: Module[];
     require(id: string): any;
+    _compile(content: string, filename: string): void;
   }
   interface Module extends NodeJS.Module {}
   namespace Module {
@@ -96,6 +97,10 @@ declare module "module" {
      * @internal Shared with `require.cache`.
      */
     const _cache: NodeJS.RequireCache;
+    /**
+     * @internal Shared with `require.extensions`.
+     */
+    const _extensions: NodeJS.RequireExtensions;
     interface ImportAttributes extends NodeJS.Dict<string> {
       type?: string | undefined;
     }
@@ -258,8 +263,16 @@ declare module "module" {
          */
         cache: RequireCache;
         /**
+         * CommonJS extension handlers keyed by extension (for example `.js`, `.json`).
+         * Mutations are visible to all `require` functions, including `createRequire()`.
+         */
+        extensions: RequireExtensions;
+        /**
          */
         resolve: RequireResolve;
+      }
+      interface RequireExtensions {
+        [ext: string]: (module: Module, filename: string) => void;
       }
       interface RequireCache {
         [path: string]: Module;

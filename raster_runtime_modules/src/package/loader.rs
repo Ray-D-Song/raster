@@ -13,7 +13,7 @@ use tracing::trace;
 use crate::modules::path::{self, replace_backslash};
 use crate::{module::ModuleCache, CJS_IMPORT_PREFIX, CJS_LOADER_PREFIX};
 
-fn prepend_cjs_dirname_filename(filename: &str, source: &[u8]) -> Result<String> {
+pub(crate) fn prepend_cjs_dirname_filename(filename: &str, source: &[u8]) -> Result<String> {
     let filename = replace_backslash(filename);
     let dirname = replace_backslash(path::dirname(&filename));
     let source = std::str::from_utf8(source).map_err(|_| {

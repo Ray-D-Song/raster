@@ -15,7 +15,10 @@ use rquickjs::{
     Ctx, Error, Exception, Function, JsLifetime, Module, Object, Result, Value,
 };
 
+mod current_module;
+pub mod extensions;
 pub mod facade;
+pub mod import_load;
 pub mod loader;
 mod require;
 pub mod resolver;
@@ -122,6 +125,7 @@ impl ModuleDef for ModuleModule {
         declare.declare("_nodeModulePaths")?;
         declare.declare("_resolveFilename")?;
         declare.declare("_cache")?;
+        declare.declare("_extensions")?;
         declare.declare("default")?;
 
         Ok(())
@@ -159,6 +163,7 @@ impl ModuleDef for ModuleModule {
             module_ctor.get::<_, Value>("_resolveFilename")?,
         )?;
         exports.export("_cache", module_ctor.get::<_, Value>("_cache")?)?;
+        exports.export("_extensions", module_ctor.get::<_, Value>("_extensions")?)?;
 
         Ok(())
     }

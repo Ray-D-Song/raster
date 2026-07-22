@@ -13,12 +13,18 @@ use rquickjs::{
 use crate::modules::path::resolve_path;
 use crate::package::resolver::{node_module_paths, require_resolve_with_options};
 
-use super::{register_hooks, ModuleNames, RequireState};
+use super::{
+    extensions::{init_extensions_table, module_compile},
+    register_hooks, ModuleNames, RequireState,
+};
 
 #[derive(JsLifetime)]
 pub struct ModuleFacadeState<'js> {
     pub constructor: Constructor<'js>,
     pub cache: Object<'js>,
+    pub extensions: Object<'js>,
+    pub native_js_handler: Function<'js>,
+    pub native_json_handler: Function<'js>,
 }
 
 pub fn module_not_found(ctx: &Ctx<'_>, request: &str, parent: &str) -> Result<()> {
@@ -303,6 +309,11 @@ fn install_create_require_factory(ctx: &Ctx<'_>) -> Result<()> {
                 configurable: true,
                 enumerable: true,
             });
+            Object.defineProperty(req, "extensions", {
+                get() { return require.extensions; },
+                configurable: true,
+                enumerable: true,
+            });
             return req;
         };
         "#,
@@ -387,6 +398,7 @@ pub fn init_module_facade<'js>(
 ) -> Result<Constructor<'js>> {
     let prototype = Object::new(ctx.clone())?;
     prototype.set("require", Func::from(module_prototype_require))?;
+    prototype.set("_compile", Func::from(module_compile))?;
 
     let module_ctor = Constructor::new_prototype(ctx, prototype, module_constructor)?;
 
@@ -398,7 +410,9 @@ pub fn init_module_facade<'js>(
     }
 
     let cache = Object::new(ctx.clone())?;
+    let (extensions, native_js_handler, native_json_handler) = init_extensions_table(ctx)?;
     module_ctor.set("_cache", cache.clone())?;
+    module_ctor.set("_extensions", extensions.clone())?;
     module_ctor.set("_nodeModulePaths", Func::from(node_module_paths_fn))?;
     module_ctor.set("_resolveFilename", Func::from(default_resolve_filename))?;
     module_ctor.set("builtinModules", builtin_modules.clone())?;
@@ -417,6 +431,9 @@ pub fn init_module_facade<'js>(
     ctx.store_userdata(RefCell::new(ModuleFacadeState {
         constructor: module_ctor.clone(),
         cache,
+        extensions,
+        native_js_handler,
+        native_json_handler,
     }))?;
 
     Ok(module_ctor)
@@ -425,11 +442,18 @@ pub fn init_module_facade<'js>(
 pub fn init_global_require(ctx: &Ctx<'_>) -> Result<()> {
     let facade = ctx.userdata::<RefCell<ModuleFacadeState>>().or_throw(ctx)?;
     let cache = facade.borrow().cache.clone();
+    let extensions = facade.borrow().extensions.clone();
 
     let require_fn = Function::new(ctx.clone(), global_require_impl)?;
     let resolve_fn = Function::new(ctx.clone(), global_require_resolve_impl)?;
     require_fn.set("resolve", resolve_fn)?;
-    require_fn.set("cache", cache)?;
+    require_fn.set("cache", cache.clone())?;
+    require_fn.prop("extensions", extensions.clone())?;
+
+    let prototype: Object = facade.borrow().constructor.get("prototype")?;
+    let module_require: Function = prototype.get("require")?;
+    module_require.set("cache", cache)?;
+    module_require.prop("extensions", extensions)?;
 
     ctx.globals().set("require", require_fn)?;
     Ok(())

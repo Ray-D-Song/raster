@@ -318,7 +318,7 @@ CommonJS loader facade (also on the default `Module` export):
 - `Module._resolveFilename`, `Module._nodeModulePaths`, `Module._cache` — exposed for CommonJS ecosystem compatibility (e.g. Next.js require hooks); writable but not a full Node internals implementation
 
 > [!NOTE]
-> Does not implement `Module._load`, `Module._compile`, `require.extensions`, native addon loading, or complete `require.main` semantics.
+> Does not implement `Module._load`, native addon loading, or complete `require.main` semantics. `require.extensions` and `Module._compile` are supported for CommonJS loading hooks (for example Next.js config transpilation); they do not affect static ESM `import` resolution.
 
 ## net
 
