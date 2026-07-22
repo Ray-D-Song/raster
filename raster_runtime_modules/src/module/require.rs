@@ -30,17 +30,29 @@ pub fn require_from_module<'js>(
         .userdata::<ModuleNames>()
         .map_or_else(HashSet::new, |v| v.get_list());
 
-    let resolved = call_resolve_filename(&ctx, &specifier, Some(parent.clone()), None)?;
-    let record_parent = if link_parent { Some(parent) } else { None };
+    let record_parent = if link_parent {
+        Some(parent.clone())
+    } else {
+        None
+    };
 
-    let is_cjs_import = resolved.starts_with(CJS_IMPORT_PREFIX);
-    let is_bytecode = resolved.ends_with(BYTECODE_FILE_EXT);
+    // Match pre-facade require: `__cjs:` is an internal loader key, not a resolve input.
+    let is_cjs_import = specifier.starts_with(CJS_IMPORT_PREFIX);
 
     let import_name: Rc<str>;
     let import_specifier: Rc<str>;
     let is_builtin;
+    let is_bytecode;
 
-    if !is_cjs_import {
+    if is_cjs_import {
+        is_builtin = false;
+        is_bytecode = false;
+        import_name = specifier[CJS_IMPORT_PREFIX.len()..].into();
+        import_specifier = specifier.clone().into();
+    } else {
+        let resolved = call_resolve_filename(&ctx, &specifier, Some(parent.clone()), None)?;
+        is_bytecode = resolved.ends_with(BYTECODE_FILE_EXT);
+
         let normalized = if is_bytecode {
             resolved.clone()
         } else {
@@ -58,10 +70,6 @@ pub fn require_from_module<'js>(
             import_name = resolved.clone().into();
             import_specifier = import_name.clone();
         }
-    } else {
-        is_builtin = false;
-        import_name = resolved[CJS_IMPORT_PREFIX.len()..].into();
-        import_specifier = resolved.into();
     };
 
     trace!("Require resolved: {} -> {}", specifier, import_specifier);
