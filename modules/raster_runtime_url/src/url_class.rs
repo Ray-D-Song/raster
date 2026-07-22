@@ -292,6 +292,11 @@ impl<'js> URL<'js> {
 
         Ok(Self { url, search_params })
     }
+
+    /// Borrow the underlying WHATWG [`Url`].
+    pub fn inner(&self) -> std::cell::Ref<'_, Url> {
+        self.url.borrow()
+    }
 }
 
 pub fn url_to_http_options<'js>(ctx: Ctx<'js>, url: Class<'js, URL<'js>>) -> Result<Object<'js>> {

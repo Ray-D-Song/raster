@@ -28,6 +28,20 @@ declare module "fs" {
   export type PathLike = string;
   export type Mode = number;
 
+  /**
+   * Path input accepted by {@link realpathSync} / {@link realpath}.
+   * Other fs APIs currently only accept string paths.
+   */
+  export type RealpathPathLike = string | Buffer | import("url").URL;
+
+  export interface RealpathOptions {
+    encoding?: BufferEncoding | null;
+  }
+
+  export interface RealpathBufferOptions {
+    encoding: "buffer";
+  }
+
   export interface StatsBase<T> {
     isFile(): boolean;
     isDirectory(): boolean;
@@ -385,4 +399,102 @@ declare module "fs" {
    * this API: {@link promises.rename}.
    */
   export function renameSync(oldPath: PathLike, newPath: PathLike): void;
+
+  /**
+   * Synchronously computes the canonical pathname by resolving `.`, `..` and
+   * symbolic links.
+   */
+  export function realpathSync(
+    path: RealpathPathLike,
+    options: "buffer" | RealpathBufferOptions
+  ): Buffer;
+  export function realpathSync(
+    path: RealpathPathLike,
+    options?: BufferEncoding | RealpathOptions | null
+  ): string;
+  export function realpathSync(
+    path: RealpathPathLike,
+    options?:
+      | BufferEncoding
+      | "buffer"
+      | RealpathOptions
+      | RealpathBufferOptions
+      | null
+  ): string | Buffer;
+  export namespace realpathSync {
+    function native(
+      path: RealpathPathLike,
+      options: "buffer" | RealpathBufferOptions
+    ): Buffer;
+    function native(
+      path: RealpathPathLike,
+      options?: BufferEncoding | RealpathOptions | null
+    ): string;
+    function native(
+      path: RealpathPathLike,
+      options?:
+        | BufferEncoding
+        | "buffer"
+        | RealpathOptions
+        | RealpathBufferOptions
+        | null
+    ): string | Buffer;
+  }
+
+  /**
+   * Asynchronously computes the canonical pathname by resolving `.`, `..` and
+   * symbolic links.
+   */
+  export function realpath(
+    path: RealpathPathLike,
+    callback: (err: Error | null, resolvedPath: string) => void
+  ): void;
+  export function realpath(
+    path: RealpathPathLike,
+    options: "buffer" | RealpathBufferOptions,
+    callback: (err: Error | null, resolvedPath: Buffer) => void
+  ): void;
+  export function realpath(
+    path: RealpathPathLike,
+    options: BufferEncoding | RealpathOptions | null | undefined,
+    callback: (err: Error | null, resolvedPath: string) => void
+  ): void;
+  export function realpath(
+    path: RealpathPathLike,
+    options:
+      | BufferEncoding
+      | "buffer"
+      | RealpathOptions
+      | RealpathBufferOptions
+      | null
+      | undefined,
+    callback: (err: Error | null, resolvedPath: string | Buffer) => void
+  ): void;
+  export namespace realpath {
+    function native(
+      path: RealpathPathLike,
+      callback: (err: Error | null, resolvedPath: string) => void
+    ): void;
+    function native(
+      path: RealpathPathLike,
+      options: "buffer" | RealpathBufferOptions,
+      callback: (err: Error | null, resolvedPath: Buffer) => void
+    ): void;
+    function native(
+      path: RealpathPathLike,
+      options: BufferEncoding | RealpathOptions | null | undefined,
+      callback: (err: Error | null, resolvedPath: string) => void
+    ): void;
+    function native(
+      path: RealpathPathLike,
+      options:
+        | BufferEncoding
+        | "buffer"
+        | RealpathOptions
+        | RealpathBufferOptions
+        | null
+        | undefined,
+      callback: (err: Error | null, resolvedPath: string | Buffer) => void
+    ): void;
+  }
 }

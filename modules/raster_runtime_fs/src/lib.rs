@@ -7,6 +7,7 @@ mod mkdir;
 mod open;
 mod read_dir;
 mod read_file;
+mod realpath;
 mod rename;
 mod rm;
 mod stats;
@@ -19,6 +20,7 @@ use raster_runtime_utils::module::{export_default, ModuleInfo};
 use rquickjs::{
     module::{Declarations, Exports, ModuleDef},
     prelude::{Async, Func},
+    Function,
 };
 use rquickjs::{Class, Ctx, Object, Result};
 
@@ -29,6 +31,7 @@ use self::mkdir::{mkdir, mkdir_sync, mkdtemp, mkdtemp_sync};
 use self::open::open;
 use self::read_dir::{read_dir, read_dir_sync, Dirent};
 use self::read_file::{read_file, read_file_sync};
+use self::realpath::{realpath, realpath_promises, realpath_sync};
 use self::rename::{rename, rename_sync};
 use self::rm::{rmdir, rmdir_sync, rmfile, rmfile_sync};
 use self::stats::{lstat_fn, lstat_fn_sync, stat_fn, stat_fn_sync, Stats};
@@ -60,6 +63,7 @@ impl ModuleDef for FsPromisesModule {
         declare.declare("constants")?;
         declare.declare("chmod")?;
         declare.declare("symlink")?;
+        declare.declare("realpath")?;
 
         declare.declare("default")?;
 
@@ -111,6 +115,8 @@ impl ModuleDef for FsModule {
         declare.declare("chmodSync")?;
         declare.declare("renameSync")?;
         declare.declare("symlinkSync")?;
+        declare.declare("realpathSync")?;
+        declare.declare("realpath")?;
 
         declare.declare("default")?;
 
@@ -150,6 +156,16 @@ impl ModuleDef for FsModule {
             default.set("renameSync", Func::from(rename_sync))?;
             default.set("symlinkSync", Func::from(symlink_sync))?;
 
+            let realpath_sync_fn = Function::new(ctx.clone(), realpath_sync)?;
+            let realpath_sync_native = Function::new(ctx.clone(), realpath_sync)?;
+            realpath_sync_fn.set("native", realpath_sync_native)?;
+            default.set("realpathSync", realpath_sync_fn)?;
+
+            let realpath_fn = Function::new(ctx.clone(), realpath)?;
+            let realpath_native = Function::new(ctx.clone(), realpath)?;
+            realpath_fn.set("native", realpath_native)?;
+            default.set("realpath", realpath_fn)?;
+
             Ok(())
         })
     }
@@ -172,6 +188,7 @@ fn export_promises<'js>(ctx: &Ctx<'js>, exports: &Object<'js>) -> Result<()> {
     exports.set("lstat", Func::from(Async(lstat_fn)))?;
     exports.set("chmod", Func::from(Async(chmod)))?;
     exports.set("symlink", Func::from(Async(symlink)))?;
+    exports.set("realpath", Func::from(Async(realpath_promises)))?;
 
     Ok(())
 }

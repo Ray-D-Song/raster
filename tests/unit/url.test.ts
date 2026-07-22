@@ -378,6 +378,36 @@ describe("URL Utility Functions", () => {
     expect(path).toBe("/path/to/file.txt"); // Platform specific path handling might differ
   });
 
+  it("decodes percent-encoded file URL paths", () => {
+    if (IS_WINDOWS) {
+      const path = fileURLToPath(new URL("file:///C:/tmp/hello%20world.txt"));
+      expect(path).toBe("C:\\tmp\\hello world.txt");
+    } else {
+      const path = fileURLToPath(new URL("file:///tmp/hello%20world.txt"));
+      expect(path).toBe("/tmp/hello world.txt");
+    }
+  });
+
+  it("rejects non-file URL schemes in fileURLToPath", () => {
+    expect(() => fileURLToPath(new URL("https://example.com/x"))).toThrow(
+      /scheme file/i
+    );
+  });
+
+  it("rejects encoded path separators in fileURLToPath", () => {
+    expect(() => fileURLToPath(new URL("file:///tmp/a%2Fb"))).toThrow(
+      /encoded \/ characters/i
+    );
+    expect(() => fileURLToPath(new URL("file:///tmp/a%2fb"))).toThrow(
+      /encoded \/ characters/i
+    );
+    if (IS_WINDOWS) {
+      expect(() =>
+        fileURLToPath(new URL("file:///C:/tmp/a%5Cb"))
+      ).toThrow(/encoded \\ or \/ characters/i);
+    }
+  });
+
   it("converts system path to file URL with pathToFileURL", () => {
     if (IS_WINDOWS) {
       const url = pathToFileURL("C:/path/to/file.txt");

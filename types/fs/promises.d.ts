@@ -10,6 +10,9 @@ declare module "fs/promises" {
     MakeDirectoryOptions,
     Mode,
     PathLike,
+    RealpathOptions,
+    RealpathBufferOptions,
+    RealpathPathLike,
     RmDirOptions,
     RmOptions,
     Stats,
@@ -551,4 +554,28 @@ declare module "fs/promises" {
    * @return Fulfills with `undefined` upon success.
    */
   function rename(oldPath: PathLike, newPath: PathLike): Promise<void>;
+
+  /**
+   * Asynchronously computes the canonical pathname by resolving `.`, `..` and
+   * symbolic links.
+   *
+   * @return Fulfills with the resolved pathname upon success.
+   */
+  function realpath(
+    path: RealpathPathLike,
+    options: "buffer" | RealpathBufferOptions
+  ): Promise<Buffer>;
+  function realpath(
+    path: RealpathPathLike,
+    options?: BufferEncoding | RealpathOptions | null
+  ): Promise<string>;
+  function realpath(
+    path: RealpathPathLike,
+    options?:
+      | BufferEncoding
+      | "buffer"
+      | RealpathOptions
+      | RealpathBufferOptions
+      | null
+  ): Promise<string | Buffer>;
 }

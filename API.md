@@ -260,6 +260,10 @@ Lightweight and fast hash classes for raster_runtime.
 
 [symlinkSync](https://nodejs.org/api/fs.html#fssymlinksynctarget-path-type)
 
+[realpathSync](https://nodejs.org/api/fs.html#fsrealpathsyncpath-options)
+
+[realpath](https://nodejs.org/api/fs.html#fsrealpathpath-options-callback)
+
 ## fs/promises
 
 [access](https://nodejs.org/api/fs.html#fsstatpath-options-callback)
@@ -291,6 +295,8 @@ Lightweight and fast hash classes for raster_runtime.
 [rename](https://nodejs.org/api/fs.html#fspromisesrenameoldpath-newpath)
 
 [symlink](https://nodejs.org/api/fs.html#fspromisessymlinktarget-path-type)
+
+[realpath](https://nodejs.org/api/fs.html#fspromisesrealpathpath-options)
 
 ## https
 

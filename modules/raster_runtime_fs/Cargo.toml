@@ -18,6 +18,7 @@ raster_runtime_context = { version = "0.8.1-beta", path = "../../libs/raster_run
 raster_runtime_encoding = { version = "0.8.1-beta", path = "../../libs/raster_runtime_encoding" }
 raster_runtime_events = { version = "0.8.1-beta", path = "../raster_runtime_events" }
 raster_runtime_path = { version = "0.8.1-beta", path = "../raster_runtime_path" }
+raster_runtime_url = { version = "0.8.1-beta", path = "../raster_runtime_url" }
 raster_runtime_utils = { version = "0.8.1-beta", path = "../../libs/raster_runtime_utils", features = [
   "fs",
 ], default-features = false }

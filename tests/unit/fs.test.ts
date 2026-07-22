@@ -23,6 +23,8 @@ const {
   lstatSync,
   symlinkSync,
   writeFileSync,
+  realpathSync,
+  realpath,
   watch,
   FSWatcher,
   promises,
@@ -40,6 +42,7 @@ const {
   lstat,
   symlink,
   writeFile,
+  realpath: realpathPromise,
 } = promises;
 
 function waitForWatchEvent(
@@ -680,6 +683,202 @@ describe("symlinkSync", () => {
     expect(content).toBe(expectedContent);
 
     // Cleanup
+    rmdirSync(tmpDir, { recursive: true });
+  });
+});
+
+describe("realpath", () => {
+  it("should resolve absolute and relative paths synchronously", () => {
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), "realpath-"));
+    const filePath = path.join(tmpDir, "file.txt");
+    writeFileSync(filePath, "data");
+
+    const absolute = realpathSync(filePath);
+    expect(path.isAbsolute(absolute)).toBeTruthy();
+    expect(absolute).toBe(path.join(realpathSync(tmpDir), "file.txt"));
+    expect(realpathSync(absolute)).toBe(absolute);
+
+    const relativeFile = path.relative(process.cwd(), filePath);
+    expect(realpathSync(relativeFile)).toBe(absolute);
+
+    rmdirSync(tmpDir, { recursive: true });
+  });
+
+  it("should resolve directories and follow symlinks", () => {
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), "realpath-"));
+    const filePath = path.join(tmpDir, "file.txt");
+    const linkPath = path.join(tmpDir, "link.txt");
+    writeFileSync(filePath, "data");
+    symlinkSync(filePath, linkPath);
+
+    expect(path.isAbsolute(realpathSync(tmpDir))).toBeTruthy();
+    expect(realpathSync(linkPath)).toBe(realpathSync(filePath));
+
+    rmdirSync(tmpDir, { recursive: true });
+  });
+
+  it("should expose realpathSync.native and realpath.native", () => {
+    expect(typeof realpathSync.native).toBe("function");
+    expect(typeof realpath.native).toBe("function");
+
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), "realpath-"));
+    const filePath = path.join(tmpDir, "file.txt");
+    writeFileSync(filePath, "data");
+
+    expect(realpathSync.native(filePath)).toBe(realpathSync(filePath));
+
+    rmdirSync(tmpDir, { recursive: true });
+  });
+
+  it("should accept Buffer and file: URL inputs", async () => {
+    const { pathToFileURL } = await import("node:url");
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), "realpath-"));
+    const filePath = path.join(tmpDir, "file.txt");
+    writeFileSync(filePath, "data");
+    const expected = realpathSync(filePath);
+
+    expect(realpathSync(Buffer.from(filePath))).toBe(expected);
+    expect(realpathSync(pathToFileURL(filePath))).toBe(expected);
+
+    rmdirSync(tmpDir, { recursive: true });
+  });
+
+  it("should reject non-file URLs and invalid UTF-8 Buffer", async () => {
+    expect(() => realpathSync(new URL("https://example.com/x"))).toThrow(
+      /scheme file/i
+    );
+    expect(() => realpathSync(Buffer.from([0xff, 0xfe, 0xfd]))).toThrow(
+      /UTF-8/i
+    );
+  });
+
+  it("should reject encoded path separators in file: URL input", () => {
+    expect(() => realpathSync(new URL("file:///tmp/a%2Fb"))).toThrow(
+      /encoded \/ characters/i
+    );
+  });
+
+  it("should support encoding options including buffer/hex/base64", () => {
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), "realpath-"));
+    const filePath = path.join(tmpDir, "file.txt");
+    writeFileSync(filePath, "data");
+    const expected = realpathSync(filePath);
+
+    expect(realpathSync(filePath, "utf8")).toBe(expected);
+    expect(realpathSync(filePath, { encoding: "utf8" })).toBe(expected);
+    expect(realpathSync(filePath, "")).toBe(expected);
+    expect(realpathSync(filePath, { encoding: "" })).toBe(expected);
+
+    const asBuffer = realpathSync(filePath, "buffer");
+    expect(Buffer.isBuffer(asBuffer)).toBeTruthy();
+    expect(asBuffer.toString("utf8")).toBe(expected);
+
+    const asHex = realpathSync(filePath, { encoding: "hex" });
+    expect(asHex).toBe(Buffer.from(expected).toString("hex"));
+
+    const asBase64 = realpathSync(filePath, "base64");
+    expect(asBase64).toBe(Buffer.from(expected).toString("base64"));
+
+    rmdirSync(tmpDir, { recursive: true });
+  });
+
+  it("should reject illegal encodings before I/O on all entry points", async () => {
+    const missing = path.join(
+      os.tmpdir(),
+      `realpath-missing-encoding-${Date.now()}`
+    );
+
+    expect(() => realpathSync(missing, "nope")).toThrow(/encoding is not supported/i);
+    expect(() => realpathSync(".", { encoding: "nope" })).toThrow(
+      /encoding is not supported/i
+    );
+
+    await expect(realpathPromise(missing, "nope")).rejects.toThrow(
+      /encoding is not supported/i
+    );
+
+    expect(() =>
+      realpath(".", "nope", () => {
+        throw new Error("callback must not run for illegal encoding");
+      })
+    ).toThrow(/encoding is not supported/i);
+  });
+
+  it("should invoke callback asynchronously with (error, result)", async () => {
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), "realpath-"));
+    const filePath = path.join(tmpDir, "file.txt");
+    writeFileSync(filePath, "data");
+    const expected = realpathSync(filePath);
+
+    let syncFlag = false;
+    const result = await new Promise<string>((resolve, reject) => {
+      realpath(filePath, (err, resolved) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        expect(syncFlag).toBeTruthy();
+        resolve(resolved);
+      });
+      syncFlag = true;
+    });
+    expect(result).toBe(expected);
+
+    const nativeResult = await new Promise<string>((resolve, reject) => {
+      realpath.native(filePath, { encoding: "utf8" }, (err, resolved) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve(resolved);
+      });
+    });
+    expect(nativeResult).toBe(expected);
+
+    rmdirSync(tmpDir, { recursive: true });
+  });
+
+  it("should reject missing paths with code/path/syscall", async () => {
+    const missing = path.join(
+      os.tmpdir(),
+      `realpath-missing-${Date.now()}-${Math.random()}`
+    );
+
+    try {
+      realpathSync(missing);
+      expect(false).toBeTruthy();
+    } catch (err: any) {
+      expect(err.code).toBe("ENOENT");
+      expect(err.path).toBe(missing);
+      expect(err.syscall).toBe("realpath");
+    }
+
+    await expect(realpathPromise(missing)).rejects.toMatchObject({
+      code: "ENOENT",
+      path: missing,
+      syscall: "realpath",
+    });
+
+    const callbackErr = await new Promise<any>((resolve) => {
+      realpath(missing, (err) => resolve(err));
+    });
+    expect(callbackErr.code).toBe("ENOENT");
+    expect(callbackErr.path).toBe(missing);
+    expect(callbackErr.syscall).toBe("realpath");
+  });
+
+  it("should work via fs.promises and fs/promises", async () => {
+    const promisesMod = await import("fs/promises");
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), "realpath-"));
+    const filePath = path.join(tmpDir, "file.txt");
+    writeFileSync(filePath, "data");
+    const expected = realpathSync(filePath);
+
+    expect(await realpathPromise(filePath)).toBe(expected);
+    expect(await promisesMod.realpath(filePath)).toBe(expected);
+    expect(await promisesMod.default.realpath(filePath)).toBe(expected);
+    expect(promisesMod.realpath).toBe(promisesMod.default.realpath);
+
     rmdirSync(tmpDir, { recursive: true });
   });
 });
