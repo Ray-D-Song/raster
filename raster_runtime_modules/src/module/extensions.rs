@@ -6,7 +6,8 @@ use raster_runtime_json::parse::json_parse;
 use raster_runtime_path as path;
 use raster_runtime_utils::{io::SUPPORTED_EXTENSIONS, result::ResultExt};
 use rquickjs::{
-    function::Args, function::Opt, function::This, Ctx, Exception, Function, Object, Result, Value,
+    context::EvalOptions, function::Args, function::Opt, function::This, Ctx, Exception, Function,
+    Object, Result, Value,
 };
 
 use super::current_module::CurrentModuleGuard;
@@ -115,7 +116,12 @@ pub fn module_compile<'js>(
     let wrapped =
         format!("(function(exports, require, module, __filename, __dirname) {{\n{code}\n}})");
 
-    match ctx.eval::<Function, _>(wrapped.as_str()) {
+    // Pass the real filename so relative `import()` and error stacks resolve against
+    // this CommonJS file instead of the default `eval_script` script name.
+    let mut options = EvalOptions::default();
+    options.filename = Some(filename.clone());
+
+    match ctx.eval_with_options::<Function, _>(wrapped.as_str(), options) {
         Ok(compiled) => {
             compiled.call::<_, ()>((
                 exports.clone(),

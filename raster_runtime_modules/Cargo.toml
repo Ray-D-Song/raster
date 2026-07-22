@@ -124,7 +124,7 @@ raster_runtime_hooking = { path = "../libs/raster_runtime_hooking" }
 raster_runtime_json = { path = "../libs/raster_runtime_json" }
 raster_runtime_utils = { version = "0.8.1-beta", path = "../libs/raster_runtime_utils" }
 once_cell = { version = "1", features = ["std"], default-features = false }
-rquickjs = { version = "=0.12.1", features = ["loader"], default-features = false }
+rquickjs = { version = "=0.12.1", features = ["loader", "std"], default-features = false }
 simd-json = { version = "0.17", default-features = false }
 tokio = { version = "1", default-features = false }
 tracing = { version = "0.1", default-features = false }

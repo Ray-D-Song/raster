@@ -327,3 +327,14 @@ it("new Module(...)._compile runs in module context", () => {
   expect(mod.exports).toEqual({ via: "compile", paths: mod.paths.length });
   expect(mod.loaded).toBe(false);
 });
+
+it("CommonJS relative import() resolves from the compiling filename", async () => {
+  const parent = `${EXT_FIXTURES}/dynamic-import-parent.cjs`;
+  delete _require.cache[parent];
+  delete _require.cache[`${EXT_FIXTURES}/dynamic-import-child.cjs`];
+
+  // require() → Module._load → _compile; relative import() must not use eval_script.
+  const loaded = _require(parent);
+  const child = await loaded;
+  expect(child.marker).toBe("dynamic-import-child");
+});
