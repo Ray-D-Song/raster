@@ -478,24 +478,43 @@ describe("fetch", () => {
   });
 
   it("should handle ReadableStream that errors as request body", async () => {
-    const stream = new ReadableStream({
-      start(controller) {
-        controller.error(new Error("stream error"));
-      },
-    });
+    const streamError = new Error("stream error");
+    // Absorb only this intentional stream probe. Any other rejection must surface.
+    const ignoreProbe = (reason: unknown) => {
+      if (reason !== streamError) {
+        throw reason;
+      }
+    };
+    process.once("unhandledRejection", ignoreProbe);
 
     try {
-      const res = await fetch(echoUrl, {
+      let controller!: ReadableStreamDefaultController<Uint8Array>;
+      const stream = new ReadableStream({
+        start(c) {
+          controller = c;
+        },
+      });
+
+      const fetchPromise = fetch(echoUrl, {
         method: "POST",
         body: stream,
         duplex: "half",
       });
-      await res.text();
-      expect(true).toBe(false); // Should not reach here
-    } catch (err: any) {
-      expect(err).toBeDefined();
-      // Error could be the stream error or a connection error depending on timing
-      expect(err.message).toBeDefined();
+      controller.error(streamError);
+
+      try {
+        const res = await fetchPromise;
+        await res.text();
+        expect(true).toBe(false); // Should not reach here
+      } catch (err: any) {
+        expect(err).toBeDefined();
+        // Error could be the stream error or a connection error depending on timing
+        expect(err.message).toBeDefined();
+      }
+
+      await new Promise((r) => setImmediate(r));
+    } finally {
+      process.off("unhandledRejection", ignoreProbe);
     }
   });
 

@@ -9,10 +9,12 @@ use raster_runtime_encoding::Encoder;
 use raster_runtime_url::{file_path_from_url, url_class::URL};
 use raster_runtime_utils::{bytes::ObjectBytes, object::ObjectExt, result::ResultExt};
 use rquickjs::{
-    function::{Args, Opt, Rest},
-    Class, Ctx, Exception, FromJs, Function, IntoJs, Null, Result, Value,
+    function::{Opt, Rest},
+    Class, Ctx, Exception, FromJs, Function, IntoJs, Result, Value,
 };
 use tokio::fs as tokio_fs;
+
+use crate::errors::{create_fs_error, defer_fs_callback, throw_fs_error};
 
 const SYSCALL: &str = "realpath";
 
@@ -105,52 +107,6 @@ fn path_from_value<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> Result<String> {
     ))
 }
 
-fn io_error_code(err: &io::Error) -> &'static str {
-    match err.kind() {
-        io::ErrorKind::NotFound => "ENOENT",
-        io::ErrorKind::PermissionDenied => "EACCES",
-        io::ErrorKind::AlreadyExists => "EEXIST",
-        io::ErrorKind::InvalidInput => "EINVAL",
-        io::ErrorKind::TimedOut => "ETIMEDOUT",
-        io::ErrorKind::Interrupted => "EINTR",
-        io::ErrorKind::WouldBlock => "EAGAIN",
-        io::ErrorKind::IsADirectory => "EISDIR",
-        io::ErrorKind::NotADirectory => "ENOTDIR",
-        io::ErrorKind::BrokenPipe => "EPIPE",
-        io::ErrorKind::ConnectionRefused => "ECONNREFUSED",
-        io::ErrorKind::ConnectionReset => "ECONNRESET",
-        io::ErrorKind::ConnectionAborted => "ECONNABORTED",
-        io::ErrorKind::NotConnected => "ENOTCONN",
-        io::ErrorKind::AddrInUse => "EADDRINUSE",
-        io::ErrorKind::AddrNotAvailable => "EADDRNOTAVAIL",
-        io::ErrorKind::OutOfMemory => "ENOMEM",
-        io::ErrorKind::WriteZero => "EIO",
-        io::ErrorKind::UnexpectedEof => "EOF",
-        _ => "UNKNOWN",
-    }
-}
-
-fn fs_error_message(code: &str, err: &io::Error, path: &str) -> String {
-    format!("{code}: {err}, {SYSCALL} '{path}'")
-}
-
-fn create_fs_error<'js>(ctx: &Ctx<'js>, err: io::Error, path: &str) -> Result<Exception<'js>> {
-    let code = io_error_code(&err);
-    let message = fs_error_message(code, &err, path);
-    let exception = Exception::from_message(ctx.clone(), &message)?;
-    exception.as_object().set("code", code)?;
-    exception.as_object().set("path", path)?;
-    exception.as_object().set("syscall", SYSCALL)?;
-    Ok(exception)
-}
-
-fn throw_fs_error(ctx: &Ctx<'_>, err: io::Error, path: &str) -> rquickjs::Error {
-    match create_fs_error(ctx, err, path) {
-        Ok(exception) => exception.throw(),
-        Err(error) => error,
-    }
-}
-
 /// Strip Windows extended-length / UNC prefixes to match Node-style paths.
 fn normalize_canonical_path(path: PathBuf) -> String {
     #[cfg(windows)]
@@ -205,7 +161,7 @@ pub fn realpath_sync<'js>(
     let path = path_from_value(&ctx, path)?;
     match do_canonicalize_sync(&path) {
         Ok(resolved) => encode_realpath_result(&ctx, resolved, &options),
-        Err(err) => Err(throw_fs_error(&ctx, err, &path)),
+        Err(err) => Err(throw_fs_error(&ctx, err, SYSCALL, &path)),
     }
 }
 
@@ -219,27 +175,8 @@ pub async fn realpath_promises<'js>(
     let path = path_from_value(&ctx, path)?;
     match do_canonicalize_async(&path).await {
         Ok(resolved) => encode_realpath_result(&ctx, resolved, &options),
-        Err(err) => Err(throw_fs_error(&ctx, err, &path)),
+        Err(err) => Err(throw_fs_error(&ctx, err, SYSCALL, &path)),
     }
-}
-
-fn call_callback<'js>(
-    ctx: &Ctx<'js>,
-    callback: Function<'js>,
-    error: Option<Exception<'js>>,
-    result: Option<Value<'js>>,
-) -> Result<()> {
-    let mut args = Args::new(ctx.clone(), 2);
-    match error {
-        Some(err) => args.push_arg(err.into_object())?,
-        None => args.push_arg(Null)?,
-    }
-    match result {
-        Some(value) => args.push_arg(value)?,
-        None => args.push_arg(Value::new_undefined(ctx.clone()))?,
-    }
-    callback.defer_arg(args)?;
-    Ok(())
 }
 
 /// Callback-style `fs.realpath(path[, options], callback)`.
@@ -285,11 +222,11 @@ pub fn realpath<'js>(ctx: Ctx<'js>, path: Value<'js>, args: Rest<Value<'js>>) ->
         match do_canonicalize_async(&path).await {
             Ok(resolved) => {
                 let result = encode_realpath_result(&ctx, resolved, &options)?;
-                call_callback(&ctx, callback, None, Some(result))?;
+                defer_fs_callback(&ctx, callback, None, Some(result))?;
             },
             Err(err) => {
-                let exception = create_fs_error(&ctx, err, &path)?;
-                call_callback(&ctx, callback, Some(exception), None)?;
+                let exception = create_fs_error(&ctx, err, SYSCALL, &path)?;
+                defer_fs_callback(&ctx, callback, Some(exception), None)?;
             },
         }
         Ok(())

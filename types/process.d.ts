@@ -39,6 +39,8 @@ declare module "process" {
   }
   interface ProcessVersions extends Dict<string> {
     raster_runtime: string;
+    /** Node-compat identity for ecosystem semver gates. */
+    node: string;
   }
   interface Process extends EventEmitter {
     hrtime: HRTime;
@@ -136,21 +138,21 @@ declare module "process" {
      */
     readonly release: ProcessRelease;
     /**
-     * The `process.version` property contains the raster_runtime version string.
+     * The `process.version` property contains the Node-compat version string
+     * (`v22.18.0`). The real Raster runtime version remains in
+     * `process.versions.raster_runtime` and in the CLI `--version` output.
      *
      * ```js
      * import { version } from 'process';
      *
      * console.log(`Version: ${version}`);
-     * // Version: 0.1.15
+     * // Version: v22.18.0
      * ```
      */
     readonly version: string;
     /**
      * The `process.versions` property returns an object listing the version strings of
-     * raster_runtime and its dependencies. `process.versions.modules` indicates the current
-     * ABI version, which is increased whenever a C++ API changes. raster_runtime will refuse
-     * to load modules that were compiled against a different module ABI version.
+     * raster_runtime and its Node-compat identity.
      *
      * ```js
      * import { versions } from 'process';
@@ -162,7 +164,8 @@ declare module "process" {
      *
      * ```console
      * {
-     *   raster_runtime:'0.1.15'
+     *   raster_runtime: '0.8.1-beta',
+     *   node: '22.18.0'
      * }
      * ```
      */

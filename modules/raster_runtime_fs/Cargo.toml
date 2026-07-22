@@ -38,5 +38,8 @@ tokio = { version = "1", features = [
 [target.'cfg(windows)'.dependencies]
 junction = "2"
 
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2", default-features = false }
+
 [dev-dependencies]
 raster_runtime_test = { path = "../../libs/raster_runtime_test" }

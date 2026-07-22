@@ -37,7 +37,7 @@ pub fn lookup<'js>(
     invoke_async_hook(&ctx, HookType::Init, ProviderType::GetAddrInfoReqWrap, uid)?;
 
     ctx.clone().spawn_exit(async move {
-        match lookup_host(&hostname, options.family, options.order).await {
+        match lookup_records(&hostname, options).await {
             Ok(addrs) => {
                 invoke_async_hook(&ctx, HookType::Before, ProviderType::None, uid)?;
                 if options.all {
@@ -65,15 +65,36 @@ pub fn lookup<'js>(
     Ok(())
 }
 
-async fn lookup_host(
+/// Promise-based `dns.promises.lookup` / `dns/promises.lookup`.
+pub async fn lookup_promise<'js>(
+    ctx: Ctx<'js>,
+    hostname: String,
+    options: Opt<Value<'js>>,
+) -> Result<Value<'js>> {
+    let options = match options.0 {
+        Some(value) => LookupOptions::from_js(&ctx, value)?,
+        None => LookupOptions::default(),
+    };
+
+    match lookup_records(&hostname, options).await {
+        Ok(addrs) if options.all => addrs.into_js(&ctx),
+        Ok(addrs) => match addrs.into_iter().next() {
+            Some(addr) => addr.into_js(&ctx),
+            None => Err(Exception::throw_message(&ctx, "No address found")),
+        },
+        Err(err) => Err(Exception::throw_message(&ctx, &err.to_string())),
+    }
+}
+
+/// Shared DNS lookup core used by callback and Promise APIs.
+pub async fn lookup_records(
     hostname: &str,
-    family: i32,
-    order: LookupOrder,
+    options: LookupOptions,
 ) -> StdResult<Vec<LookupValue>, std::io::Error> {
     let mut addrs = tokio::net::lookup_host((hostname, 0))
         .await?
         .filter_map(|addr| {
-            if matches!(family, 4 | 0) {
+            if matches!(options.family, 4 | 0) {
                 if let SocketAddr::V4(ipv4) = addr {
                     return Some(LookupValue {
                         address: ipv4.ip().to_string(),
@@ -81,7 +102,7 @@ async fn lookup_host(
                     });
                 }
             }
-            if matches!(family, 6 | 0) {
+            if matches!(options.family, 6 | 0) {
                 if let SocketAddr::V6(ipv6) = addr {
                     return Some(LookupValue {
                         address: ipv6.ip().to_string(),
@@ -92,7 +113,7 @@ async fn lookup_host(
             None
         })
         .collect();
-    match order {
+    match options.order {
         LookupOrder::Verbatim => Ok(addrs),
         LookupOrder::Ipv4First => {
             addrs.sort_by_key(|a| a.family);
@@ -105,9 +126,9 @@ async fn lookup_host(
     }
 }
 
-struct LookupValue {
-    address: String,
-    family: i32,
+pub struct LookupValue {
+    pub address: String,
+    pub family: i32,
 }
 
 impl<'js> IntoJs<'js> for LookupValue {
@@ -126,10 +147,11 @@ pub enum LookupOrder {
     Ipv6First,
 }
 
+#[derive(Clone, Copy)]
 pub struct LookupOptions {
-    family: i32,
-    all: bool,
-    order: LookupOrder,
+    pub family: i32,
+    pub all: bool,
+    pub order: LookupOrder,
 }
 
 impl Default for LookupOptions {
@@ -201,6 +223,30 @@ impl<'js> FromJs<'js> for LookupOptions {
 
         Ok(LookupOptions { family, all, order })
     }
+}
+
+/// Shared promise `lookup` function so `dns.promises.lookup` and `dns/promises`
+/// export the same Function reference, stored in private ctx userdata.
+pub fn shared_promises_lookup<'js>(ctx: &Ctx<'js>) -> Result<Function<'js>> {
+    if let Some(cached) = ctx.userdata::<DnsPromisesLookupCache>() {
+        return Ok(cached.lookup.clone());
+    }
+
+    let lookup = Function::new(ctx.clone(), rquickjs::prelude::Async(lookup_promise))?;
+    let cache = DnsPromisesLookupCache {
+        lookup: lookup.clone(),
+    };
+    // Ignore AlreadyRegistered; prefer the stored instance for identity.
+    let _ = ctx.store_userdata(cache);
+    if let Some(cached) = ctx.userdata::<DnsPromisesLookupCache>() {
+        return Ok(cached.lookup.clone());
+    }
+    Ok(lookup)
+}
+
+#[derive(rquickjs::JsLifetime)]
+struct DnsPromisesLookupCache<'js> {
+    lookup: Function<'js>,
 }
 
 #[cfg(test)]

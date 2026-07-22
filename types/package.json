@@ -11,7 +11,7 @@
     "directory": "types"
   },
   "files": [
-    "*.d.ts"
+    "**/*.d.ts"
   ],
   "devDependencies": {
     "@definitelytyped/dtslint": "^0.2.22",
@@ -19,7 +19,9 @@
     "typescript": "^5.5.3"
   },
   "scripts": {
-    "test": "tsc"
+    "test": "tsc",
+    "smoke": "tsc -p ./smoke/tsconfig.json",
+    "pack:check": "node ./scripts/pack-check.mjs"
   },
   "keywords": [
     "raster_runtime",

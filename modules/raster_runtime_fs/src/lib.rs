@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 mod access;
 mod chmod;
+mod errors;
 mod file_handle;
 mod mkdir;
 mod open;
@@ -24,7 +25,7 @@ use rquickjs::{
 };
 use rquickjs::{Class, Ctx, Object, Result};
 
-use self::access::{access, access_sync};
+use self::access::{access, access_callback, access_sync};
 use self::chmod::{chmod, chmod_sync};
 use self::file_handle::FileHandle;
 use self::mkdir::{mkdir, mkdir_sync, mkdtemp, mkdtemp_sync};
@@ -34,7 +35,9 @@ use self::read_file::{read_file, read_file_sync};
 use self::realpath::{realpath, realpath_promises, realpath_sync};
 use self::rename::{rename, rename_sync};
 use self::rm::{rmdir, rmdir_sync, rmfile, rmfile_sync};
-use self::stats::{lstat_fn, lstat_fn_sync, stat_fn, stat_fn_sync, Stats};
+use self::stats::{
+    lstat_callback, lstat_fn, lstat_fn_sync, stat_callback, stat_fn, stat_fn_sync, Stats,
+};
 use self::symlink::{symlink, symlink_sync};
 use self::watch::{watch, FSWatcher};
 use self::write_file::{write_file, write_file_sync};
@@ -99,6 +102,7 @@ pub struct FsModule;
 impl ModuleDef for FsModule {
     fn declare(declare: &Declarations) -> Result<()> {
         declare.declare("promises")?;
+        declare.declare("access")?;
         declare.declare("accessSync")?;
         declare.declare("mkdirSync")?;
         declare.declare("mkdtempSync")?;
@@ -106,7 +110,9 @@ impl ModuleDef for FsModule {
         declare.declare("readFileSync")?;
         declare.declare("rmdirSync")?;
         declare.declare("rmSync")?;
+        declare.declare("stat")?;
         declare.declare("statSync")?;
+        declare.declare("lstat")?;
         declare.declare("lstatSync")?;
         declare.declare("writeFileSync")?;
         declare.declare("watch")?;
@@ -117,6 +123,7 @@ impl ModuleDef for FsModule {
         declare.declare("symlinkSync")?;
         declare.declare("realpathSync")?;
         declare.declare("realpath")?;
+        declare.declare("existsSync")?;
 
         declare.declare("default")?;
 
@@ -140,6 +147,9 @@ impl ModuleDef for FsModule {
             export_constants(ctx, default)?;
 
             default.set("promises", promises)?;
+
+            let access_fn = Function::new(ctx.clone(), access_callback)?;
+            default.set("access", access_fn)?;
             default.set("accessSync", Func::from(access_sync))?;
             default.set("mkdirSync", Func::from(mkdir_sync))?;
             default.set("mkdtempSync", Func::from(mkdtemp_sync))?;
@@ -147,7 +157,12 @@ impl ModuleDef for FsModule {
             default.set("readFileSync", Func::from(read_file_sync))?;
             default.set("rmdirSync", Func::from(rmdir_sync))?;
             default.set("rmSync", Func::from(rmfile_sync))?;
+
+            let stat_fn_export = Function::new(ctx.clone(), stat_callback)?;
+            let lstat_fn_export = Function::new(ctx.clone(), lstat_callback)?;
+            default.set("stat", stat_fn_export)?;
             default.set("statSync", Func::from(stat_fn_sync))?;
+            default.set("lstat", lstat_fn_export)?;
             default.set("lstatSync", Func::from(lstat_fn_sync))?;
             default.set("writeFileSync", Func::from(write_file_sync))?;
             default.set("watch", Func::from(watch))?;
@@ -155,6 +170,7 @@ impl ModuleDef for FsModule {
             default.set("chmodSync", Func::from(chmod_sync))?;
             default.set("renameSync", Func::from(rename_sync))?;
             default.set("symlinkSync", Func::from(symlink_sync))?;
+            default.set("existsSync", Func::from(exists_sync))?;
 
             let realpath_sync_fn = Function::new(ctx.clone(), realpath_sync)?;
             let realpath_sync_native = Function::new(ctx.clone(), realpath_sync)?;
@@ -169,6 +185,10 @@ impl ModuleDef for FsModule {
             Ok(())
         })
     }
+}
+
+fn exists_sync(path: String) -> bool {
+    std::fs::metadata(path).is_ok()
 }
 
 fn export_promises<'js>(ctx: &Ctx<'js>, exports: &Object<'js>) -> Result<()> {

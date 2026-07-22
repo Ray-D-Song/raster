@@ -118,6 +118,8 @@ declare module "dns" {
     hostname: string,
     callback: (err: Error | null, address: string, family: number) => void
   ): void;
+
+  export const promises: typeof import("dns/promises");
 }
 declare module "dns" {
   export * from "dns";

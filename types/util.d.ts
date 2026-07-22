@@ -115,6 +115,29 @@ declare module "util" {
     superConstructor: unknown
   ): void;
   /**
+   * Takes a function following the common error-first callback style, i.e. taking
+   * an `(err, value) => ...` callback as the last argument, and returns a version
+   * that returns promises.
+   *
+   * Limitations:
+   * - `util.promisify.custom` is not implemented
+   * - Multi-value callback results beyond the first success value are not mapped
+   *
+   * ```js
+   * import { promisify } from 'util';
+   * import { stat } from 'fs';
+   * const statAsync = promisify(stat);
+   * ```
+   */
+  export function promisify<TArgs extends unknown[], TResult>(
+    original: (
+      ...args: [...TArgs, (err: unknown, result: TResult) => void]
+    ) => void
+  ): (...args: TArgs) => Promise<TResult>;
+  export function promisify(
+    original: (...args: any[]) => any
+  ): (...args: any[]) => Promise<any>;
+  /**
    * An implementation of the [WHATWG Encoding Standard](https://encoding.spec.whatwg.org/) `TextDecoder` API.
    *
    * ```js

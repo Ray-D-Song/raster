@@ -175,7 +175,7 @@ declare module "fs" {
   export function watch(filename: PathLike, listener?: WatchListener): FSWatcher;
 
   export interface StatSyncFn extends Function {
-    (path: PathLike): Stats;
+    (path: PathLike, options?: StatOptions | null): Stats;
   }
   /**
    * Synchronous stat - Get file status.
@@ -497,4 +497,62 @@ declare module "fs" {
       callback: (err: Error | null, resolvedPath: string | Buffer) => void
     ): void;
   }
+
+  /**
+   * Asynchronously tests a user's permissions for the file or directory specified by `path`.
+   *
+   * Overload order matters: TypeScript uses the last signature when inferring
+   * through `util.promisify`, so the callback-only form is last.
+   */
+  export function access(
+    path: PathLike,
+    mode: Mode,
+    callback: (err: Error | null) => void
+  ): void;
+  export function access(
+    path: PathLike,
+    callback: (err: Error | null) => void
+  ): void;
+
+  export interface StatOptions {
+    bigint?: boolean | undefined;
+  }
+
+  /**
+   * Asynchronous [`stat(2)`](http://man7.org/linux/man-pages/man2/stat.2.html).
+   * `{ bigint: true }` is rejected (BigIntStats is not supported).
+   *
+   * Callback-only overload is last for `util.promisify` inference.
+   */
+  export function stat(
+    path: PathLike,
+    options: StatOptions | undefined | null,
+    callback: (err: Error | null, stats: Stats) => void
+  ): void;
+  export function stat(
+    path: PathLike,
+    callback: (err: Error | null, stats: Stats) => void
+  ): void;
+
+  /**
+   * Asynchronous [`lstat(2)`](http://man7.org/linux/man-pages/man2/lstat.2.html).
+   * `{ bigint: true }` is rejected (BigIntStats is not supported).
+   *
+   * Callback-only overload is last for `util.promisify` inference.
+   */
+  export function lstat(
+    path: PathLike,
+    options: StatOptions | undefined | null,
+    callback: (err: Error | null, stats: Stats) => void
+  ): void;
+  export function lstat(
+    path: PathLike,
+    callback: (err: Error | null, stats: Stats) => void
+  ): void;
+
+  /**
+   * Returns `true` if the path exists, `false` otherwise.
+   * Errors other than existence (including permission errors) also yield `false`.
+   */
+  export function existsSync(path: PathLike): boolean;
 }

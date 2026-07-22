@@ -63,8 +63,22 @@ const log = `$ ${raster} ${command} ${testCase.args.join(" ")}\n\nstdout:\n${res
 await fs.writeFile(logPath, log);
 process.stdout.write(result.stdout);
 process.stderr.write(result.stderr);
+
+const outputExists = await fs
+  .access(output)
+  .then(() => true)
+  .catch(() => false);
+
 if (result.code !== 0) {
   throw new Error(`${name} build exited with ${result.code ?? result.signal}`);
+}
+
+if (!outputExists) {
+  throw new Error(
+    `${name} exited 0 but produced no ${testCase.output}/ directory. ` +
+      `stdout empty=${result.stdout.length === 0}, stderr empty=${result.stderr.length === 0}. ` +
+      `See ${path.relative(root, logPath)} for the captured Raster child output.`
+  );
 }
 
 for (const segments of testCase.checks) {

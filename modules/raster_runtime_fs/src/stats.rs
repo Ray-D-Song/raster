@@ -12,9 +12,14 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+use raster_runtime_context::CtxExtension;
 use raster_runtime_utils::result::ResultExt;
-use rquickjs::{Ctx, Result};
+use rquickjs::{
+    function::Rest, prelude::Opt, Ctx, Exception, FromJs, Function, IntoJs, Result, Value,
+};
 use tokio::fs;
+
+use crate::errors::{create_fs_error, defer_fs_callback, throw_fs_error};
 
 // The Stats implementation is very much based on Unix. The Windows implementation
 // tries its best to mimic the implementation of libuv since it is the standard.
@@ -314,42 +319,147 @@ impl Stats {
     }
 }
 
-pub async fn stat_fn(ctx: Ctx<'_>, path: String) -> Result<Stats> {
-    let metadata = fs::metadata(&path)
-        .await
-        .or_throw_msg(&ctx, &["Can't stat \"", &path, "\""].concat())?;
-
-    let stats = Stats::new(metadata);
-
-    Ok(stats)
+fn reject_bigint_stats(ctx: &Ctx<'_>, options: Option<Value<'_>>) -> Result<()> {
+    let Some(options) = options else {
+        return Ok(());
+    };
+    if options.is_undefined() || options.is_null() {
+        return Ok(());
+    }
+    let Some(obj) = options.as_object() else {
+        return Ok(());
+    };
+    if let Ok(true) = obj.get::<_, bool>("bigint") {
+        return Err(Exception::throw_type(ctx, "BigIntStats is not supported"));
+    }
+    Ok(())
 }
 
-pub fn stat_fn_sync(ctx: Ctx<'_>, path: String) -> Result<Stats> {
-    let metadata =
-        std::fs::metadata(&path).or_throw_msg(&ctx, &["Can't stat \"", &path, "\""].concat())?;
-
-    let stats = Stats::new(metadata);
-
-    Ok(stats)
+async fn metadata_impl(path: &str, follow_symlinks: bool) -> std::io::Result<Metadata> {
+    if follow_symlinks {
+        fs::metadata(path).await
+    } else {
+        fs::symlink_metadata(path).await
+    }
 }
 
-pub async fn lstat_fn(ctx: Ctx<'_>, path: String) -> Result<Stats> {
-    let metadata = fs::symlink_metadata(&path)
-        .await
-        .or_throw_msg(&ctx, &["Can't lstat \"", &path, "\""].concat())?;
-
-    let stats = Stats::new(metadata);
-
-    Ok(stats)
+fn metadata_impl_sync(path: &str, follow_symlinks: bool) -> std::io::Result<Metadata> {
+    if follow_symlinks {
+        std::fs::metadata(path)
+    } else {
+        std::fs::symlink_metadata(path)
+    }
 }
 
-pub fn lstat_fn_sync(ctx: Ctx<'_>, path: String) -> Result<Stats> {
-    let metadata = std::fs::symlink_metadata(&path)
-        .or_throw_msg(&ctx, &["Can't lstat \"", &path, "\""].concat())?;
+pub async fn stat_fn(ctx: Ctx<'_>, path: String, options: Opt<Value<'_>>) -> Result<Stats> {
+    reject_bigint_stats(&ctx, options.0)?;
+    match metadata_impl(&path, true).await {
+        Ok(metadata) => Ok(Stats::new(metadata)),
+        Err(err) => Err(throw_fs_error(&ctx, err, "stat", &path)),
+    }
+}
 
-    let stats = Stats::new(metadata);
+pub fn stat_fn_sync(ctx: Ctx<'_>, path: String, options: Opt<Value<'_>>) -> Result<Stats> {
+    reject_bigint_stats(&ctx, options.0)?;
+    match metadata_impl_sync(&path, true) {
+        Ok(metadata) => Ok(Stats::new(metadata)),
+        Err(err) => Err(throw_fs_error(&ctx, err, "stat", &path)),
+    }
+}
 
-    Ok(stats)
+pub async fn lstat_fn(ctx: Ctx<'_>, path: String, options: Opt<Value<'_>>) -> Result<Stats> {
+    reject_bigint_stats(&ctx, options.0)?;
+    match metadata_impl(&path, false).await {
+        Ok(metadata) => Ok(Stats::new(metadata)),
+        Err(err) => Err(throw_fs_error(&ctx, err, "lstat", &path)),
+    }
+}
+
+pub fn lstat_fn_sync(ctx: Ctx<'_>, path: String, options: Opt<Value<'_>>) -> Result<Stats> {
+    reject_bigint_stats(&ctx, options.0)?;
+    match metadata_impl_sync(&path, false) {
+        Ok(metadata) => Ok(Stats::new(metadata)),
+        Err(err) => Err(throw_fs_error(&ctx, err, "lstat", &path)),
+    }
+}
+
+fn parse_stat_callback_args<'js>(
+    ctx: &Ctx<'js>,
+    args: Rest<Value<'js>>,
+) -> Result<(Option<Value<'js>>, Function<'js>)> {
+    let mut args = args.0;
+    match args.len() {
+        0 => Err(Exception::throw_type(
+            ctx,
+            "The \"cb\" argument must be of type function",
+        )),
+        1 => {
+            let only = args.remove(0);
+            if only.as_function().is_some() {
+                Ok((None, Function::from_js(ctx, only)?))
+            } else {
+                Err(Exception::throw_type(
+                    ctx,
+                    "The \"cb\" argument must be of type function",
+                ))
+            }
+        },
+        _ => {
+            let options_or_cb = args.remove(0);
+            if options_or_cb.as_function().is_some() {
+                Ok((None, Function::from_js(ctx, options_or_cb)?))
+            } else {
+                let callback = Function::from_js(ctx, args.remove(0)).map_err(|_| {
+                    Exception::throw_type(ctx, "The \"cb\" argument must be of type function")
+                })?;
+                Ok((Some(options_or_cb), callback))
+            }
+        },
+    }
+}
+
+/// Callback-style `fs.stat(path[, options], callback)`.
+pub fn stat_callback<'js>(ctx: Ctx<'js>, path: String, args: Rest<Value<'js>>) -> Result<()> {
+    let (options, callback) = parse_stat_callback_args(&ctx, args)?;
+    reject_bigint_stats(&ctx, options)?;
+
+    ctx.clone().spawn_exit_simple(async move {
+        match metadata_impl(&path, true).await {
+            Ok(metadata) => {
+                let stats = Stats::new(metadata).into_js(&ctx)?;
+                defer_fs_callback(&ctx, callback, None, Some(stats))?;
+            },
+            Err(err) => {
+                let exception = create_fs_error(&ctx, err, "stat", &path)?;
+                defer_fs_callback(&ctx, callback, Some(exception), None)?;
+            },
+        }
+        Ok(())
+    });
+
+    Ok(())
+}
+
+/// Callback-style `fs.lstat(path[, options], callback)`.
+pub fn lstat_callback<'js>(ctx: Ctx<'js>, path: String, args: Rest<Value<'js>>) -> Result<()> {
+    let (options, callback) = parse_stat_callback_args(&ctx, args)?;
+    reject_bigint_stats(&ctx, options)?;
+
+    ctx.clone().spawn_exit_simple(async move {
+        match metadata_impl(&path, false).await {
+            Ok(metadata) => {
+                let stats = Stats::new(metadata).into_js(&ctx)?;
+                defer_fs_callback(&ctx, callback, None, Some(stats))?;
+            },
+            Err(err) => {
+                let exception = create_fs_error(&ctx, err, "lstat", &path)?;
+                defer_fs_callback(&ctx, callback, Some(exception), None)?;
+            },
+        }
+        Ok(())
+    });
+
+    Ok(())
 }
 
 #[allow(dead_code)]

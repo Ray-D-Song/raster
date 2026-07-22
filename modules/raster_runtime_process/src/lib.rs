@@ -2,14 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 use std::collections::HashMap;
 use std::env;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
+use raster_runtime_events::{Emitter, EventEmitter};
 use raster_runtime_utils::signals;
 
 use raster_runtime_utils::primordials::{BasePrimordials, Primordial};
 pub use raster_runtime_utils::sysinfo;
 use raster_runtime_utils::{
-    module::{export_default, ModuleInfo},
+    module::ModuleInfo,
     object::Proxy,
     result::ResultExt,
     sysinfo::{ARCH, PLATFORM},
@@ -22,10 +23,38 @@ use rquickjs::{
     module::{Declarations, Exports, ModuleDef},
     object::{Accessor, Property},
     prelude::{Func, Rest},
-    Array, BigInt, Ctx, Error, Function, IntoJs, Object, Result, Value,
+    Array, BigInt, Class, Ctx, Error, Function, IntoJs, Object, Result, Value,
 };
 
 pub static EXIT_CODE: AtomicU8 = AtomicU8::new(0);
+static EXITING: AtomicBool = AtomicBool::new(false);
+
+/// Node-compat identity advertised to ecosystem semver gates.
+const NODE_COMPAT_VERSION: &str = "22.18.0";
+
+const EVENT_EMITTER_METHODS: &[&str] = &[
+    "on",
+    "once",
+    "off",
+    "emit",
+    "addListener",
+    "removeListener",
+    "prependListener",
+    "prependOnceListener",
+    "eventNames",
+    "listenerCount",
+    "removeAllListeners",
+];
+
+const PROCESS_NAMED_EXPORTS: &[&str] = &[
+    "env", "cwd", "argv0", "id", "argv", "platform", "arch", "hrtime", "release", "version",
+    "versions", "exitCode", "exit", "kill", "nextTick",
+];
+
+#[cfg(unix)]
+const PROCESS_UNIX_EXPORTS: &[&str] = &[
+    "getuid", "getgid", "geteuid", "getegid", "setuid", "setgid", "seteuid", "setegid",
+];
 
 fn next_tick<'js>(ctx: Ctx<'js>, cb: Function<'js>, args: Rest<Value<'js>>) -> Result<()> {
     let mut js_args = Args::new(ctx, args.len());
@@ -82,11 +111,31 @@ fn to_exit_code(ctx: &Ctx<'_>, code: &Value<'_>) -> Result<Option<u8>> {
     Ok(None)
 }
 
+/// Synchronously emit `process` `"exit"` without terminating the process.
+/// Used by `process.exit` before `std::process::exit`.
+fn emit_exit<'js>(ctx: &Ctx<'js>, process: &Object<'js>, code: u8) -> Result<()> {
+    let emit: Function = process.get("emit")?;
+    let mut args = Args::new(ctx.clone(), 2);
+    args.this(process.clone())?;
+    args.push_arg("exit")?;
+    args.push_arg(code)?;
+    emit.call_arg::<()>(args)?;
+    Ok(())
+}
+
 fn exit(ctx: Ctx<'_>, code: Value<'_>) -> Result<()> {
     let code = match to_exit_code(&ctx, &code)? {
         Some(code) => code,
         None => EXIT_CODE.load(Ordering::Relaxed),
     };
+
+    // Prevent recursive `process.exit()` from exit listeners re-emitting.
+    if EXITING.swap(true, Ordering::SeqCst) {
+        std::process::exit(code.into());
+    }
+
+    let process: Object = ctx.globals().get("process")?;
+    let _ = emit_exit(&ctx, &process, code);
     std::process::exit(code.into())
 }
 
@@ -142,11 +191,20 @@ fn setegid(id: u32) -> i32 {
 pub fn init(ctx: &Ctx<'_>) -> Result<()> {
     let globals = ctx.globals();
     BasePrimordials::init(ctx)?;
-    let process = Object::new(ctx.clone())?;
+
+    // Register EventEmitter class/prototype without exposing a global constructor.
+    let _ctor = Class::<EventEmitter>::create_constructor(ctx)?
+        .expect("Can't create EventEmitter constructor");
+    EventEmitter::add_event_emitter_prototype(ctx)?;
+
+    // process is an EventEmitter instance; methods come from the prototype
+    // (not copied as own enumerable properties).
+    let process_class = Class::instance(ctx.clone(), EventEmitter::new())?;
+    let process = Object::from_value(process_class.into_value())?;
+
     let process_versions = Object::new(ctx.clone())?;
     process_versions.set("raster_runtime", VERSION)?;
-    // Node.js version - Set for compatibility with some Node.js packages (e.g. cls-hooked).
-    process_versions.set("node", "0.0.0")?;
+    process_versions.set("node", NODE_COMPAT_VERSION)?;
 
     let hr_time = Function::new(ctx.clone(), hr_time)?;
     hr_time.set("bigint", Func::from(hr_time_big_int))?;
@@ -178,7 +236,7 @@ pub fn init(ctx: &Ctx<'_>) -> Result<()> {
     process.set("arch", ARCH)?;
     process.set("hrtime", hr_time)?;
     process.set("release", release)?;
-    process.set("version", VERSION)?;
+    process.set("version", format!("v{NODE_COMPAT_VERSION}"))?;
     process.set("versions", process_versions)?;
 
     process.prop(
@@ -231,32 +289,19 @@ pub struct ProcessModule;
 
 impl ModuleDef for ProcessModule {
     fn declare(declare: &Declarations) -> Result<()> {
-        declare.declare("env")?;
-        declare.declare("cwd")?;
-        declare.declare("argv0")?;
-        declare.declare("id")?;
-        declare.declare("argv")?;
-        declare.declare("platform")?;
-        declare.declare("arch")?;
-        declare.declare("hrtime")?;
-        declare.declare("release")?;
-        declare.declare("version")?;
-        declare.declare("versions")?;
-        declare.declare("exitCode")?;
-        declare.declare("exit")?;
-        declare.declare("kill")?;
-        declare.declare("nextTick")?;
+        for &name in PROCESS_NAMED_EXPORTS {
+            declare.declare(name)?;
+        }
+
+        for &name in EVENT_EMITTER_METHODS {
+            declare.declare(name)?;
+        }
 
         #[cfg(unix)]
         {
-            declare.declare("getuid")?;
-            declare.declare("getgid")?;
-            declare.declare("geteuid")?;
-            declare.declare("getegid")?;
-            declare.declare("setuid")?;
-            declare.declare("setgid")?;
-            declare.declare("seteuid")?;
-            declare.declare("setegid")?;
+            for &name in PROCESS_UNIX_EXPORTS {
+                declare.declare(name)?;
+            }
         }
 
         declare.declare("default")?;
@@ -267,15 +312,25 @@ impl ModuleDef for ProcessModule {
         let globals = ctx.globals();
         let process: Object = globals.get("process")?;
 
-        export_default(ctx, exports, |default| {
-            for name in process.keys::<String>() {
-                let name = name?;
-                let value: Value = process.get(&name)?;
-                default.set(name, value)?;
+        // Only export the fixed declared surface. Do not iterate runtime keys —
+        // user-added enumerable properties must not break module evaluation.
+        for &name in PROCESS_NAMED_EXPORTS {
+            let value: Value = process.get(name)?;
+            exports.export(name, value)?;
+        }
+        for &name in EVENT_EMITTER_METHODS {
+            let value: Value = process.get(name)?;
+            exports.export(name, value)?;
+        }
+        #[cfg(unix)]
+        {
+            for &name in PROCESS_UNIX_EXPORTS {
+                let value: Value = process.get(name)?;
+                exports.export(name, value)?;
             }
+        }
 
-            Ok(())
-        })?;
+        exports.export("default", process)?;
 
         Ok(())
     }

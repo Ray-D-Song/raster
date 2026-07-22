@@ -226,15 +226,23 @@ Lightweight and fast hash classes for raster_runtime.
 
 [lookup](https://nodejs.org/api/dns.html#dnslookuphostname-options-callback)
 
+[promises.lookup](https://nodejs.org/api/dns.html#dnspromiseslookuphostname-options) (also via `dns/promises` / `node:dns/promises`)
+
 ## events
 
 [EventEmitter](https://nodejs.org/api/events.html#class-eventemitter)
 
 ## fs
 
+[access](https://nodejs.org/api/fs.html#fsaccesspath-mode-callback)
+
 [accessSync](https://nodejs.org/api/fs.html#fsaccesssyncpath-mode)
 
 [constants](https://nodejs.org/api/fs.html#file-access-constants)
+
+[existsSync](https://nodejs.org/api/fs.html#fsexistssyncpath)
+
+[lstat](https://nodejs.org/api/fs.html#fslstatpath-options-callback)
 
 [lstatSync](https://nodejs.org/api/fs.html#fslstatsyncpath-options)
 
@@ -250,6 +258,8 @@ Lightweight and fast hash classes for raster_runtime.
 
 [rmSync](https://nodejs.org/api/fs.html#fsrmsyncpath-options)
 
+[stat](https://nodejs.org/api/fs.html#fsstatpath-options-callback)
+
 [statSync](https://nodejs.org/api/fs.html#fsstatsyncpath-options)
 
 [writeFileSync](https://nodejs.org/api/fs.html#fswritefilesyncfile-data-options)
@@ -264,9 +274,15 @@ Lightweight and fast hash classes for raster_runtime.
 
 [realpath](https://nodejs.org/api/fs.html#fsrealpathpath-options-callback)
 
+> [!NOTE]
+> Callback `stat`/`lstat` reject `{ bigint: true }` with a clear error (BigIntStats is not supported).
+> `existsSync` returns `false` for any `metadata` failure, including permission errors.
+> On Unix, `access` / `accessSync` / `fs.promises.access` use the OS `access(2)` syscall.
+> On Windows, checks are metadata-based approximations (existence + readonly for `W_OK`).
+
 ## fs/promises
 
-[access](https://nodejs.org/api/fs.html#fsstatpath-options-callback)
+[access](https://nodejs.org/api/fs.html#fspromisesaccesspath-mode)
 
 [constants](https://nodejs.org/api/fs.html#file-access-constants)
 
@@ -418,6 +434,10 @@ _performance is available globally_
 
 _process is available globally_
 
+Process is an EventEmitter. Explicit `process.exit(code)` emits `"exit"` synchronously before terminating. OS signal bridging and natural event-loop drain exit events are not implemented yet.
+
+`process.version` / `process.versions.node` advertise Node `22.18.0` for ecosystem gates; `process.versions.raster_runtime` and CLI `--version` remain the real Raster version.
+
 [arch](https://nodejs.org/api/process.html#processarch)
 
 [argv](https://nodejs.org/api/process.html#processargv)
@@ -445,6 +465,8 @@ _process is available globally_
 [id](https://nodejs.org/api/process.html#processpid)
 
 [kill](https://nodejs.org/api/process.html#processkillpid-signal)
+
+[on](https://nodejs.org/api/events.html#emitteroneventname-listener) / EventEmitter methods (`once`, `off`, `emit`, …)
 
 [platform](https://nodejs.org/api/process.html#processplatform)
 
@@ -540,6 +562,12 @@ _Also available globally_
 [format](https://nodejs.org/api/util.html#utilformatformat-args)
 
 [inherits](https://nodejs.org/api/util.html#utilinheritsconstructor-superconstructor)
+
+[promisify](https://nodejs.org/api/util.html#utilpromisifyoriginal)
+
+> [!NOTE]
+> `util.promisify.custom` and multi-value callback result mapping are not implemented.
+> Callbacks follow the Node error-first convention and only the first success value is resolved.
 
 [TextDecoder](https://nodejs.org/api/util.html#class-utiltextdecoder)
 

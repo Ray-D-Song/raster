@@ -21,6 +21,34 @@ fn inherits<'js>(ctor: Function<'js>, super_ctor: Function<'js>) -> Result<()> {
     Ok(())
 }
 
+/// Create a Node-compatible `util.promisify` implemented in JS so Promise
+/// resolve/reject and synchronous throws are handled by the engine.
+///
+/// Limitations (documented in API.md):
+/// - Does not implement `util.promisify.custom`
+/// - Does not map multi-value callbacks beyond the first success value
+fn create_promisify<'js>(ctx: &Ctx<'js>) -> Result<Function<'js>> {
+    ctx.eval(
+        r#"(function () {
+  function promisify(original) {
+    if (typeof original !== "function") {
+      throw new TypeError('The "original" argument must be of type function');
+    }
+
+    return function (...args) {
+      return new Promise((resolve, reject) => {
+        original.call(this, ...args, (error, value) => {
+          if (error) reject(error);
+          else resolve(value);
+        });
+      });
+    };
+  }
+  return promisify;
+})()"#,
+    )
+}
+
 pub struct UtilModule;
 
 impl ModuleDef for UtilModule {
@@ -29,6 +57,7 @@ impl ModuleDef for UtilModule {
         declare.declare(stringify!(TextEncoder))?;
         declare.declare(stringify!(format))?;
         declare.declare(stringify!(inherits))?;
+        declare.declare("promisify")?;
         declare.declare("default")?;
         Ok(())
     }
@@ -39,6 +68,7 @@ impl ModuleDef for UtilModule {
 
             let encoder: Function = globals.get(stringify!(TextEncoder))?;
             let decoder: Function = globals.get(stringify!(TextDecoder))?;
+            let promisify = create_promisify(ctx)?;
 
             default.set(stringify!(TextEncoder), encoder)?;
             default.set(stringify!(TextDecoder), decoder)?;
@@ -47,6 +77,7 @@ impl ModuleDef for UtilModule {
                 Func::from(|ctx, args| format_plain(ctx, true, args)),
             )?;
             default.set("inherits", Func::from(inherits))?;
+            default.set("promisify", promisify)?;
 
             Ok(())
         })

@@ -2538,6 +2538,7 @@ version = "0.8.1-beta"
 dependencies = [
  "either",
  "junction",
+ "libc",
  "notify",
  "rand",
  "raster_runtime_buffer",
@@ -2757,6 +2758,7 @@ name = "raster_runtime_process"
 version = "0.8.1-beta"
 dependencies = [
  "libc",
+ "raster_runtime_events",
  "raster_runtime_test",
  "raster_runtime_utils",
  "rquickjs",

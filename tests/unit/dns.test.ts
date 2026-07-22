@@ -7,7 +7,7 @@ it("node:dns should be the same as dns", () => {
   expect(defaultImport).toStrictEqual(legacyImport);
 });
 
-const { lookup } = defaultImport;
+const { lookup, promises } = defaultImport;
 
 // Promise wrapper for dns.lookup
 const dnsLookupAsync = (
@@ -57,4 +57,57 @@ describe("lookup", () => {
       );
     });
   }
+});
+
+describe("dns/promises", () => {
+  it("should load dns/promises and node:dns/promises", async () => {
+    const a = await import("dns/promises");
+    const b = await import("node:dns/promises");
+    expect(typeof a.lookup).toBe("function");
+    expect(a.lookup).toBe(a.default.lookup);
+    expect(b.lookup).toBe(a.lookup);
+  });
+
+  it("default and named lookup should be the same function", async () => {
+    const mod = await import("dns/promises");
+    expect(mod.lookup).toBe(mod.default.lookup);
+  });
+
+  it('lookup("localhost") should return a single address object', async () => {
+    const { lookup: lookupPromise } = await import("dns/promises");
+    const result = await lookupPromise("localhost");
+    expect(typeof result.address).toBe("string");
+    expect(result.family === 4 || result.family === 6).toBeTruthy();
+  });
+
+  it("should return IPv4 for family: 4", async () => {
+    const { lookup: lookupPromise } = await import("dns/promises");
+    const result = await lookupPromise("localhost", { family: 4 });
+    expect(result.address).toBe("127.0.0.1");
+    expect(result.family).toBe(4);
+  });
+
+  it("should return a non-empty array for all: true", async () => {
+    const { lookup: lookupPromise } = await import("dns/promises");
+    const result = await lookupPromise("localhost", { all: true });
+    expect(Array.isArray(result)).toBeTruthy();
+    expect(result.length > 0).toBeTruthy();
+  });
+
+  if (process.platform !== "linux") {
+    it("should reject for a non-existent host", async () => {
+      const { lookup: lookupPromise } = await import("dns/promises");
+      await expect(lookupPromise("localhost2")).rejects.toThrow("known");
+    });
+  }
+
+  it("dns.promises.lookup should be the same as dns/promises.lookup", async () => {
+    const mod = await import("dns/promises");
+    expect(promises.lookup).toBe(mod.lookup);
+  });
+
+  it("should not leak internal DNS cache keys onto globalThis", () => {
+    expect((globalThis as any).__rasterDnsPromisesLookup).toBeUndefined();
+    expect(Object.keys(globalThis).includes("__rasterDnsPromisesLookup")).toBeFalsy();
+  });
 });

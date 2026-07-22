@@ -11,6 +11,7 @@ it("node:fs should be the same as fs", () => {
 
 const {
   constants,
+  access: accessCb,
   accessSync,
   readdirSync,
   readFileSync,
@@ -19,12 +20,15 @@ const {
   renameSync,
   rmSync,
   rmdirSync,
+  stat: statCb,
   statSync,
+  lstat: lstatCb,
   lstatSync,
   symlinkSync,
   writeFileSync,
   realpathSync,
   realpath,
+  existsSync,
   watch,
   FSWatcher,
   promises,
@@ -615,9 +619,9 @@ describe("renameSync", () => {
     renameSync(oldPath, newPath);
 
     // Check if old path doesn't exist (should throw)
-    // Windows gives "Can't stat" error instead of "no such file or directory"
+    // Windows previously returned "Can't stat"; shared fs errors use ENOENT-style messages.
     expect(() => statSync(oldPath)).toThrow(
-      IS_WINDOWS ? /Can't stat/ : /[Nn]o such file or directory/
+      /[Nn]o such file or directory|os error 2|ENOENT/
     );
 
     // Check if new path exists and is a directory
@@ -880,6 +884,133 @@ describe("realpath", () => {
     expect(promisesMod.realpath).toBe(promisesMod.default.realpath);
 
     rmdirSync(tmpDir, { recursive: true });
+  });
+});
+
+describe("callback access/stat/lstat and existsSync", () => {
+  it("named and default exports should be the same function references", () => {
+    expect(defaultImport.access).toBe(accessCb);
+    expect(defaultImport.stat).toBe(statCb);
+    expect(defaultImport.lstat).toBe(lstatCb);
+    expect(defaultImport.existsSync).toBe(existsSync);
+  });
+
+  it("promisify(fs.stat) should return Stats with isFile()", async () => {
+    const { promisify } = await import("util");
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), "stat-"));
+    const filePath = path.join(tmpDir, "file.txt");
+    writeFileSync(filePath, "data");
+
+    const stats = await promisify(statCb)(filePath);
+    expect(stats.isFile()).toBeTruthy();
+
+    rmdirSync(tmpDir, { recursive: true });
+  });
+
+  it("promisify(fs.lstat) should report symbolic links", async () => {
+    const { promisify } = await import("util");
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), "lstat-"));
+    const filePath = path.join(tmpDir, "file.txt");
+    const linkPath = path.join(tmpDir, "link");
+    writeFileSync(filePath, "data");
+    symlinkSync(filePath, linkPath);
+
+    const stats = await promisify(lstatCb)(linkPath);
+    expect(stats.isSymbolicLink()).toBeTruthy();
+
+    rmdirSync(tmpDir, { recursive: true });
+  });
+
+  it("promisify(fs.access) should resolve for existing and reject for missing", async () => {
+    const { promisify } = await import("util");
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), "access-"));
+    const filePath = path.join(tmpDir, "file.txt");
+    const missing = path.join(tmpDir, "missing.txt");
+    writeFileSync(filePath, "data");
+
+    await promisify(accessCb)(filePath);
+    await expect(promisify(accessCb)(missing)).rejects.toMatchObject({
+      code: "ENOENT",
+      path: missing,
+      syscall: "access",
+    });
+
+    rmdirSync(tmpDir, { recursive: true });
+  });
+
+  it("callback APIs should not run synchronously on the current stack", async () => {
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), "cb-async-"));
+    const filePath = path.join(tmpDir, "file.txt");
+    writeFileSync(filePath, "data");
+
+    let syncFlag = true;
+    const done = new Promise<void>((resolve, reject) => {
+      statCb(filePath, (err: Error | null) => {
+        try {
+          expect(syncFlag).toBeFalsy();
+          expect(err).toBeNull();
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    syncFlag = false;
+    await done;
+
+    rmdirSync(tmpDir, { recursive: true });
+  });
+
+  it("callback errors should include code, path, and syscall", async () => {
+    const missing = path.join(
+      os.tmpdir(),
+      `stat-missing-${Date.now()}-${Math.random()}`
+    );
+
+    const err = await new Promise<any>((resolve) => {
+      statCb(missing, (e) => resolve(e));
+    });
+    expect(err.code).toBe("ENOENT");
+    expect(err.path).toBe(missing);
+    expect(err.syscall).toBe("stat");
+  });
+
+  it("existsSync should report files, directories, and missing paths", () => {
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), "exists-"));
+    const filePath = path.join(tmpDir, "file.txt");
+    writeFileSync(filePath, "data");
+
+    expect(existsSync(filePath)).toBeTruthy();
+    expect(existsSync(tmpDir)).toBeTruthy();
+
+    rmSync(filePath);
+    expect(existsSync(filePath)).toBeFalsy();
+
+    rmdirSync(tmpDir, { recursive: true });
+  });
+
+  it("should throw for bigint Stats options", () => {
+    expect(() =>
+      statCb("fixtures/hello.txt", { bigint: true }, () => {})
+    ).toThrow(/BigIntStats is not supported/);
+    expect(() =>
+      lstatCb("fixtures/hello.txt", { bigint: true }, () => {})
+    ).toThrow(/BigIntStats is not supported/);
+    expect(() => statSync("fixtures/hello.txt", { bigint: true })).toThrow(
+      /BigIntStats is not supported/
+    );
+  });
+
+  it("access callback should reject invalid mode values", () => {
+    expect(() => accessCb("fixtures/hello.txt", -1, () => {})).toThrow(
+      /out of range|mode/
+    );
+    expect(() => accessCb("fixtures/hello.txt", Number.NaN, () => {})).toThrow(
+      /out of range|mode/
+    );
+    expect(() => accessCb("fixtures/hello.txt", 1.5, () => {})).toThrow(
+      /out of range|mode/
+    );
   });
 });
 

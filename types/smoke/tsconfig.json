@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "lib": ["ESNext"],
+    "strict": true,
+    "noEmit": true,
+    "target": "esnext",
+    "module": "esnext",
+    "moduleResolution": "node",
+    "skipLibCheck": true,
+    "types": [],
+    "baseUrl": "..",
+    "paths": {
+      "fs": ["./fs.d.ts"],
+      "util": ["./util.d.ts"],
+      "dns/promises": ["./dns/promises.d.ts"],
+      "node:dns/promises": ["./dns/promises.d.ts"],
+      "dns": ["./dns.d.ts"],
+      "buffer": ["./buffer.d.ts"],
+      "events": ["./events.d.ts"],
+      "url": ["./url.d.ts"],
+      "fs/promises": ["./fs/promises.d.ts"]
+    }
+  },
+  "include": ["./**/*.ts"]
+}

@@ -7,6 +7,7 @@
 /// <reference types="./crypto.d.ts" />
 /// <reference types="./dgram.d.ts" />
 /// <reference types="./dns.d.ts" />
+/// <reference types="./dns/promises.d.ts" />
 /// <reference types="./dom-events.d.ts" />
 /// <reference types="./events.d.ts" />
 /// <reference types="./exceptions.d.ts" />

@@ -91,7 +91,9 @@ impl Default for ModuleBuilder {
         }
         #[cfg(feature = "dns")]
         {
-            builder = builder.with_module(crate::modules::dns::DnsModule);
+            builder = builder
+                .with_module(crate::modules::dns::DnsPromisesModule)
+                .with_module(crate::modules::dns::DnsModule);
         }
         #[cfg(feature = "events")]
         {
