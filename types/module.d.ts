@@ -5,6 +5,15 @@ declare module "module" {
   import { URL } from "node:url";
   class Module {
     constructor(id: string, parent?: Module);
+    id: string;
+    filename: string;
+    path: string;
+    paths: string[];
+    exports: any;
+    loaded: boolean;
+    parent: Module | null;
+    children: Module[];
+    require(id: string): any;
   }
   interface Module extends NodeJS.Module {}
   namespace Module {
@@ -70,6 +79,23 @@ declare module "module" {
      * @experimental
      */
     function registerHooks(options: RegisterHooksOptions): ModuleHooks;
+    /**
+     * @internal CommonJS loader compatibility — writable for require hooks.
+     */
+    function _resolveFilename(
+      request: string,
+      parent?: Module | null,
+      isMain?: boolean,
+      options?: { paths?: string[] }
+    ): string;
+    /**
+     * @internal CommonJS loader compatibility.
+     */
+    function _nodeModulePaths(from: string): string[];
+    /**
+     * @internal Shared with `require.cache`.
+     */
+    const _cache: NodeJS.RequireCache;
     interface ImportAttributes extends NodeJS.Dict<string> {
       type?: string | undefined;
     }
@@ -228,8 +254,15 @@ declare module "module" {
       }
       interface Require {
         /**
+         * Shared module cache view; deleting a key forces the next `require()` to reload.
+         */
+        cache: RequireCache;
+        /**
          */
         resolve: RequireResolve;
+      }
+      interface RequireCache {
+        [path: string]: Module;
       }
       interface RequireResolveOptions {
         /**

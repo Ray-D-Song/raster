@@ -35,6 +35,7 @@ const TEST_FILES = await readFilesRecursive(
   path.join(TESTS_DIR, TESTS_SUB_DIR),
   (filePath) =>
     filePath.endsWith(".test.ts") ||
+    filePath.endsWith(".test.raster.ts") ||
     filePath.endsWith(".spec.ts") ||
     filePath.endsWith(".any.js")
 );

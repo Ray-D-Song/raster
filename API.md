@@ -298,16 +298,27 @@ Lightweight and fast hash classes for raster_runtime.
 
 ## module
 
+Supported public APIs:
+
 [builtinModules](https://nodejs.org/api/module.html#modulebuiltinmodules)
 
 [createRequire](https://nodejs.org/api/module.html#modulecreaterequirefilename)
 
 > [!NOTE]
-> `require` is available from esm modules natively. This function is just for compatibility
+> `require` is available from ESM modules natively. `createRequire` returns a scoped `require` with `resolve` and a shared `cache`.
 
 [isBuiltin](https://nodejs.org/api/module.html#moduleisbuiltinmodulename)
 
 [registerHooks](https://nodejs.org/api/module.html#moduleregisterhooksoptions)
+
+CommonJS loader facade (also on the default `Module` export):
+
+- `Module` constructor with `prototype.require()`
+- `require.resolve(request, { paths? })` and `require.cache`
+- `Module._resolveFilename`, `Module._nodeModulePaths`, `Module._cache` — exposed for CommonJS ecosystem compatibility (e.g. Next.js require hooks); writable but not a full Node internals implementation
+
+> [!NOTE]
+> Does not implement `Module._load`, `Module._compile`, `require.extensions`, native addon loading, or complete `require.main` semantics.
 
 ## net
 

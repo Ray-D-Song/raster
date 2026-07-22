@@ -122,6 +122,18 @@ pub fn require_resolve<'a>(
     hooked_fn: Option<Function<'_>>,
     is_esm: bool,
 ) -> Result<Cow<'a, str>> {
+    require_resolve_with_options(ctx, x, y, hooked_fn, is_esm, None)
+}
+
+#[allow(clippy::type_complexity)]
+pub fn require_resolve_with_options<'a>(
+    ctx: &Ctx<'_>,
+    x: &'a str,
+    y: &str,
+    hooked_fn: Option<Function<'_>>,
+    is_esm: bool,
+    options_paths: Option<Vec<String>>,
+) -> Result<Cow<'a, str>> {
     // trim schema
     let x = x.trim_start_matches("file://");
 
@@ -181,6 +193,27 @@ pub fn require_resolve<'a>(
 
     // 3. If X begins with './' or '/' or '../'
     if x_starts_with_current_dir || x_is_absolute || x_starts_with_parent_dir {
+        if let Some(paths) = options_paths.as_ref() {
+            if x_starts_with_current_dir || x_starts_with_parent_dir {
+                let suffix = if x_starts_with_current_dir {
+                    &x[2..]
+                } else {
+                    x
+                };
+                for base in paths {
+                    let y_plus_x = Rc::new([base.as_str(), "/", suffix].concat());
+                    if let Ok(Some(path)) = load_as_file(ctx, y_plus_x.clone()) {
+                        trace!("+- Resolved by `LOAD_AS_FILE` (paths): {}", path);
+                        return to_abs_path(path);
+                    }
+                    if let Ok(Some(path)) = load_as_directory(ctx, y_plus_x) {
+                        trace!("+- Resolved by `LOAD_AS_DIRECTORY` (paths): {}", path);
+                        return to_abs_path(path);
+                    }
+                }
+            }
+        }
+
         let y_plus_x = if x_is_absolute {
             x.into()
         } else if x_starts_with_current_dir {
@@ -223,7 +256,22 @@ pub fn require_resolve<'a>(
     }
 
     // 6. LOAD_NODE_MODULES(X, dirname(Y))
-    if let Some(path) = load_node_modules(ctx, x, dirname_y, is_esm) {
+    if let Some(paths) = options_paths.as_ref() {
+        let mut search_paths = Vec::new();
+        if x_starts_with_current_dir || x_is_absolute || x_starts_with_parent_dir {
+            search_paths.clone_from(paths);
+        } else {
+            for path in paths {
+                if let Ok(mut nm_paths) = node_module_paths(path) {
+                    search_paths.append(&mut nm_paths);
+                }
+            }
+        }
+        if let Some(path) = load_from_search_paths(ctx, x, &search_paths, is_esm) {
+            trace!("+- Resolved by `LOAD_FROM_SEARCH_PATHS`: {}", path);
+            return Ok(path);
+        }
+    } else if let Some(path) = load_node_modules(ctx, x, dirname_y, is_esm) {
         trace!("+- Resolved by `LOAD_NODE_MODULES`: {}", path);
         return Ok(path);
     }
@@ -424,56 +472,81 @@ fn load_as_directory<'a>(ctx: &Ctx<'_>, x: Rc<String>) -> Result<Option<Cow<'a, 
     Ok(None)
 }
 
-// LOAD_NODE_MODULES(X, START)
-fn load_node_modules<'a>(
-    ctx: &Ctx<'_>,
-    x: &str,
-    start: String,
-    is_esm: bool,
-) -> Option<Cow<'a, str>> {
-    trace!("|  load_node_modules(x, start): ({}, {})", x, start);
+/// `node_modules` character codes reversed (matches Node's `nmChars`).
+const NM_CHARS: [u8; 12] = [
+    b's', b'e', b'l', b'u', b'd', b'o', b'm', b'_', b'e', b'd', b'o', b'n',
+];
+const NM_LEN: usize = NM_CHARS.len();
 
-    fn search_dir<'a>(ctx: &Ctx<'_>, dir: &str, x: &str, is_esm: bool) -> Option<Cow<'a, str>> {
-        // a. LOAD_PACKAGE_EXPORTS(X, DIR)
-        if let Ok(path) = load_package_exports(ctx, x, dir, is_esm) {
-            trace!("|  load_node_modules(2.a): {}", path);
-            return Some(path);
+/// Returns ordered `node_modules` search directories for a given absolute path,
+/// matching Node's `Module._nodeModulePaths` behavior.
+pub fn node_module_paths(from: &str) -> Result<Vec<String>> {
+    let from = if path::is_absolute(from) {
+        path::replace_backslash(from.to_string())
+    } else {
+        path::resolve_path([from].iter())?
+    };
+
+    #[cfg(windows)]
+    {
+        let bytes = from.as_bytes();
+        if from.len() >= 2 && bytes[from.len() - 1] == b'\\' && bytes[from.len() - 2] == b':' {
+            return Ok(vec![format!("{from}node_modules")]);
         }
-        let dir_slash_x = Rc::new([dir, "/", x].concat());
-        // b. LOAD_AS_FILE(DIR/X)
-        if let Ok(Some(path)) = load_as_file(ctx, dir_slash_x.clone()) {
-            trace!("|  load_node_modules(2.b): {}", path);
-            return Some(path);
-        }
-        // c. LOAD_AS_DIRECTORY(DIR/X)
-        if let Ok(Some(path)) = load_as_directory(ctx, dir_slash_x.clone()) {
-            trace!("|  load_node_modules(2.c): {}", path);
-            return Some(path);
-        }
-        None
     }
 
-    // 1. let DIRS = NODE_MODULES_PATHS(START)
-    let mut cache = NODE_MODULES_PATHS_CACHE.lock().unwrap();
+    #[cfg(not(windows))]
+    if from == "/" {
+        return Ok(vec!["/node_modules".to_string()]);
+    }
 
-    let start = start.into_boxed_str();
+    let mut paths = Vec::new();
+    let mut last = from.len();
+    let mut p = 0isize;
 
-    //fast path
-    if let Some(Some(dirs)) = cache.get(&start) {
-        for dir in dirs.0.borrow().iter() {
-            if let Some(path) = search_dir(ctx, dir, x, is_esm) {
-                return Some(path);
+    for (i, ch) in from.char_indices().rev() {
+        let code = ch as u32;
+        #[cfg(windows)]
+        let is_sep = code == b'\\' as u32 || code == b'/' as u32 || code == b':' as u32;
+        #[cfg(not(windows))]
+        let is_sep = code == b'/' as u32;
+
+        if is_sep {
+            if p != NM_LEN as isize {
+                paths.push(format!("{}/node_modules", &from[..last]));
+            }
+            last = i;
+            p = 0;
+        } else if p != -1 {
+            if NM_CHARS.get(p as usize) == Some(&(code as u8)) {
+                p += 1;
+            } else {
+                p = -1;
             }
         }
+    }
+
+    #[cfg(not(windows))]
+    paths.push("/node_modules".to_string());
+
+    Ok(paths)
+}
+
+fn collect_node_modules_paths(start: &str) -> NodePathList {
+    let mut cache = NODE_MODULES_PATHS_CACHE.lock().unwrap();
+    let start = start.to_string().into_boxed_str();
+
+    if let Some(Some(dirs)) = cache.get(&start) {
+        return dirs.clone();
     }
 
     let path = Path::new(start.as_ref());
     let results = NodePathList::new();
     let mut paths_to_cache = Vec::new();
     let mut current = Some(path);
-
     let mut i = 0;
     let mut last_found_index = 0;
+
     while let Some(dir) = current {
         let str_dir = dir.to_string_lossy();
         if let Some(dirs) = cache.get(str_dir.as_ref()) {
@@ -481,8 +554,6 @@ fn load_node_modules<'a>(
                 results.0.borrow_mut().extend(dirs.0.borrow().clone());
             }
             last_found_index = i;
-
-            //there are no modules beyond this point, just search globals
             break;
         }
         if dir.file_name().is_some_and(|name| name != "node_modules") {
@@ -510,18 +581,68 @@ fn load_node_modules<'a>(
         }
     }
 
+    results
+}
+
+fn search_node_modules_dir<'a>(
+    ctx: &Ctx<'_>,
+    dir: &str,
+    x: &str,
+    is_esm: bool,
+) -> Option<Cow<'a, str>> {
+    if let Ok(path) = load_package_exports(ctx, x, dir, is_esm) {
+        trace!("|  load_node_modules(2.a): {}", path);
+        return Some(path);
+    }
+    let dir_slash_x = Rc::new([dir, "/", x].concat());
+    if let Ok(Some(path)) = load_as_file(ctx, dir_slash_x.clone()) {
+        trace!("|  load_node_modules(2.b): {}", path);
+        return Some(path);
+    }
+    if let Ok(Some(path)) = load_as_directory(ctx, dir_slash_x) {
+        trace!("|  load_node_modules(2.c): {}", path);
+        return Some(path);
+    }
+    None
+}
+
+// LOAD_NODE_MODULES(X, START)
+fn load_node_modules<'a>(
+    ctx: &Ctx<'_>,
+    x: &str,
+    start: String,
+    is_esm: bool,
+) -> Option<Cow<'a, str>> {
+    trace!("|  load_node_modules(x, start): ({}, {})", x, start);
+
+    let results = collect_node_modules_paths(&start);
+
     for dir in results.0.borrow().iter() {
-        if let Some(path) = search_dir(ctx, dir, x, is_esm) {
+        if let Some(path) = search_node_modules_dir(ctx, dir, x, is_esm) {
             return Some(path);
         }
     }
 
     for dir in HOME_NODE_MODULES.iter() {
-        if let Some(path) = search_dir(ctx, dir, x, is_esm) {
+        if let Some(path) = search_node_modules_dir(ctx, dir, x, is_esm) {
             return Some(path);
         }
     }
 
+    None
+}
+
+fn load_from_search_paths<'a>(
+    ctx: &Ctx<'_>,
+    x: &str,
+    search_paths: &[String],
+    is_esm: bool,
+) -> Option<Cow<'a, str>> {
+    for dir in search_paths {
+        if let Some(path) = search_node_modules_dir(ctx, dir, x, is_esm) {
+            return Some(path);
+        }
+    }
     None
 }
 
@@ -968,4 +1089,42 @@ fn correct_extensions<'a>(x: String) -> Cow<'a, str> {
         }
     }
     x.into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::node_module_paths;
+
+    #[test]
+    fn node_module_paths_returns_ordered_paths() {
+        let paths = node_module_paths("/a/b/c/d").unwrap();
+        assert_eq!(paths.len(), 5);
+        assert!(paths[0].ends_with("/a/b/c/d/node_modules"));
+        assert!(paths.last().unwrap().ends_with("/node_modules"));
+    }
+
+    #[test]
+    fn node_module_paths_root_is_single_entry() {
+        assert_eq!(
+            node_module_paths("/").unwrap(),
+            vec!["/node_modules".to_string()]
+        );
+    }
+
+    #[test]
+    fn node_module_paths_empty_is_dot() {
+        let dot = node_module_paths(".").unwrap();
+        let empty = node_module_paths("").unwrap_or_else(|_| node_module_paths(".").unwrap());
+        assert!(!dot.is_empty());
+        assert_eq!(dot.last(), empty.last());
+    }
+
+    #[test]
+    fn node_module_paths_skips_nested_node_modules_segment() {
+        let paths = node_module_paths("/a/node_modules").unwrap();
+        assert!(!paths
+            .iter()
+            .any(|p| p.ends_with("/node_modules/node_modules")));
+        assert!(paths.iter().any(|p| p == "/a/node_modules"));
+    }
 }

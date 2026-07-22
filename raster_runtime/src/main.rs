@@ -366,7 +366,7 @@ async fn run_tests(vm: &Vm, args: &[std::string::String]) -> Result<(), String> 
     let test_js_extensions: Vec<String> = SUPPORTED_EXTENSIONS
         .iter()
         .filter(|&ext| *ext != BYTECODE_EXT)
-        .map(|ext| [".test", ext].concat())
+        .flat_map(|ext| [".test", ".test.raster"].map(|prefix| [prefix, ext].concat()))
         .collect();
 
     let pwd = env::current_dir().map_err(|e| e.to_string())?;

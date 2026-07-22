@@ -7,11 +7,7 @@ use std::{
     rc::Rc,
 };
 
-use raster_runtime_utils::{
-    ctx::CtxExt,
-    module::{export_default, ModuleInfo},
-    result::ResultExt,
-};
+use raster_runtime_utils::{ctx::CtxExt, module::ModuleInfo, result::ResultExt};
 use rquickjs::{
     module::{Declarations, Exports, ModuleDef},
     object::Accessor,
@@ -19,11 +15,15 @@ use rquickjs::{
     Ctx, Error, Exception, Function, JsLifetime, Module, Object, Result, Value,
 };
 
+pub mod facade;
 pub mod loader;
 mod require;
 pub mod resolver;
 
 use crate::CJS_IMPORT_PREFIX;
+
+use facade::init_global_require;
+use facade::init_module_facade;
 
 #[derive(JsLifetime)]
 pub struct ModuleNames<'js> {
@@ -49,6 +49,7 @@ pub struct RequireState<'js> {
     pub cache: HashMap<Rc<str>, Value<'js>>,
     pub exports: HashMap<Rc<str>, Value<'js>>,
     pub progress: HashMap<Rc<str>, Object<'js>>,
+    pub current_module: Option<Object<'js>>,
 }
 
 unsafe impl<'js> JsLifetime<'js> for RequireState<'js> {
@@ -89,20 +90,14 @@ unsafe impl<'js> JsLifetime<'js> for ModuleCache<'js> {
 
 pub struct ModuleModule;
 
-fn create_require(ctx: Ctx<'_>) -> Result<Value<'_>> {
-    ctx.globals()
-        .get::<_, Function>("require")
-        .map(|f| f.into())
-        .map_err(|_| Exception::throw_reference(&ctx, "create_require is not supported"))
-}
-
 fn is_builtin(ctx: Ctx<'_>, name: String) -> Result<bool> {
     let module_list = ctx
         .userdata::<ModuleNames>()
         .ok_or_else(|| Exception::throw_reference(&ctx, "is_builtin is not supported"))?
         .get_list();
 
-    Ok(module_list.contains(&name))
+    let name = name.trim_start_matches("node:").trim_end_matches('/');
+    Ok(module_list.contains(name))
 }
 
 pub fn register_hooks<'js>(ctx: Ctx<'js>, hooks_obj: Object<'js>) -> Result<()> {
@@ -124,24 +119,46 @@ impl ModuleDef for ModuleModule {
         declare.declare("createRequire")?;
         declare.declare("isBuiltin")?;
         declare.declare("registerHooks")?;
+        declare.declare("_nodeModulePaths")?;
+        declare.declare("_resolveFilename")?;
+        declare.declare("_cache")?;
         declare.declare("default")?;
 
         Ok(())
     }
 
     fn evaluate<'js>(ctx: &Ctx<'js>, exports: &Exports<'js>) -> Result<()> {
-        export_default(ctx, exports, |default| {
-            let module_list = ctx
-                .userdata::<ModuleNames>()
-                .map_or_else(HashSet::new, |v| v.get_list());
+        let module_list = ctx
+            .userdata::<ModuleNames>()
+            .map_or_else(HashSet::new, |v| v.get_list());
 
-            default.set("builtinModules", module_list)?;
-            default.set("createRequire", Func::from(create_require))?;
-            default.set("isBuiltin", Func::from(is_builtin))?;
-            default.set("registerHooks", Func::from(register_hooks))?;
+        let module_ctor = if let Some(facade) = ctx.userdata::<RefCell<facade::ModuleFacadeState>>()
+        {
+            facade.borrow().constructor.clone()
+        } else {
+            init_module_facade(ctx, module_list.clone())?
+        };
 
-            Ok(())
-        })?;
+        exports.export("default", module_ctor.clone())?;
+        exports.export(
+            "builtinModules",
+            module_ctor.get::<_, Value>("builtinModules")?,
+        )?;
+        exports.export(
+            "createRequire",
+            module_ctor.get::<_, Value>("createRequire")?,
+        )?;
+        exports.export("isBuiltin", Func::from(is_builtin))?;
+        exports.export("registerHooks", Func::from(register_hooks))?;
+        exports.export(
+            "_nodeModulePaths",
+            module_ctor.get::<_, Value>("_nodeModulePaths")?,
+        )?;
+        exports.export(
+            "_resolveFilename",
+            module_ctor.get::<_, Value>("_resolveFilename")?,
+        )?;
+        exports.export("_cache", module_ctor.get::<_, Value>("_cache")?)?;
 
         Ok(())
     }
@@ -162,6 +179,11 @@ pub fn init(ctx: &Ctx) -> Result<()> {
     ctx.store_userdata(RefCell::new(RequireState::default()))?;
     ctx.store_userdata(RefCell::new(ModuleHookState::default()))?;
     ctx.store_userdata(RefCell::new(ModuleCache::default()))?;
+
+    let module_list = ctx
+        .userdata::<ModuleNames>()
+        .map_or_else(HashSet::new, |v| v.get_list());
+    init_module_facade(ctx, module_list)?;
 
     let exports_accessor = Accessor::new(
         |ctx| {
@@ -195,12 +217,16 @@ pub fn init(ctx: &Ctx) -> Result<()> {
     .configurable()
     .enumerable();
 
-    globals.prop("exports", exports_accessor)?;
-    globals.set("require", Func::from(require::require))?;
+    init_global_require(ctx)?;
 
-    let module = Object::new(ctx.clone())?;
-    module.prop("exports", exports_accessor)?;
-    globals.prop("module", module)?;
+    let module_instance = facade::get_or_create_module_record(
+        ctx,
+        &facade::canonical_parent_filename(ctx, None)?,
+        None,
+    )?;
+    module_instance.prop("exports", exports_accessor)?;
+    globals.prop("module", module_instance)?;
+    globals.prop("exports", exports_accessor)?;
 
     Ok(())
 }

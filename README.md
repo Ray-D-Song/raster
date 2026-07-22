@@ -128,6 +128,7 @@ _⚠️ = partially supported in RASTER_RUNTIME_<br />
 _⏱ = planned partial support_<br />
 _\* = Not native_<br />
 _\*\* = The `module.registerHooks()` API allows you to emulate some functionality. See also `example/register-hooks`._<br />
+_`node:module` provides a minimal CommonJS loader facade (`Module`, `require.resolve`, `require.cache`, and writable `_resolveFilename` / `_nodeModulePaths` for require-hook compatibility). It does not implement full Node Module internals, native addon loading, or `require.extensions`._<br />
 
 ## Using node_modules (dependencies) with raster_runtime
 
