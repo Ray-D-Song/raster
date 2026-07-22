@@ -70,6 +70,15 @@ pub fn init<'js>(ctx: &Ctx<'js>) -> Result<()> {
     let globals = ctx.globals();
     BasePrimordials::init(ctx)?;
 
+    // `class Buffer extends Uint8Array {}` introduces a *global lexical*
+    // binding, so evaluating it a second time throws
+    // "redeclaration of 'Buffer'". init() can run more than once (e.g. the
+    // http module also calls it from its module evaluation, in addition to the
+    // startup global attachment), so make the setup idempotent.
+    if ctx.eval::<bool, &str>(concat!("typeof ", stringify!(Buffer), " !== \"undefined\""))? {
+        return Ok(());
+    }
+
     // Buffer
     let buffer = ctx.eval::<Object<'js>, &str>(concat!(
         "class ",
