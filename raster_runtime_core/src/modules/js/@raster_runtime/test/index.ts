@@ -87,6 +87,9 @@ class TestServer {
   private static UPDATE_INTERVAL_MS = 1000 / TestServer.UPDATE_FPS;
   private static DEFAULT_TIMEOUT_MS =
     parseInt((process.env as any).TEST_TIMEOUT) || 5000;
+  // Extra time for the worker to report a normal async timeout before the
+  // parent hard-kills the process (still needed for sync infinite loops).
+  private static WATCHDOG_GRACE_MS = 1000;
   private static DEFAULT_PROGRESS_BAR_WIDTH = 24;
   private static SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
   private static TESTING_TEXT = " Testing ";
@@ -532,13 +535,15 @@ class TestServer {
       this.lastUpdate = now;
     }
 
-    //check for hanged tests
+    //check for hanged tests (watchdog fires after timeout + grace so normal
+    // async timeouts are reported by the worker first)
     for (let id in this.workerData) {
       const workerData = this.workerData[id];
       if (
         !workerData.completed &&
         workerData.lastUpdate > 0 &&
-        now - workerData.lastUpdate >= workerData.currentTimeout
+        now - workerData.lastUpdate >=
+          workerData.currentTimeout + TestServer.WATCHDOG_GRACE_MS
       ) {
         this.handleTestError(
           id as any,

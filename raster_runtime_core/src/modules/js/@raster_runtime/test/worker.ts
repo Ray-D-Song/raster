@@ -224,30 +224,30 @@ class TestAgent {
     TestAgent.EMPTY_FN_REGEX.lastIndex = -1;
 
     const timeoutMessage = `Timeout after ${timeout}ms`;
+    let timeoutId: Timeout | undefined;
+    const timeoutPromise = new Promise<void>((_, reject) => {
+      timeoutId = setTimeout(() => reject(timeoutMessage), timeout);
+    });
 
-    if (usesArgument) {
-      await new Promise<void>((resolve, reject) => {
-        const timeoutId = setTimeout(() => reject(timeoutMessage), timeout);
-        const resolveWrapper = (error: any) => {
-          clearTimeout(timeoutId);
-          if (error) {
-            return reject(error);
-          }
-          resolve();
-        };
-        Promise.resolve(fn(resolveWrapper)).catch(reject);
-      });
-    } else {
-      let timeoutId: Timeout;
-      const timeoutPromise = new Promise<void>((_, reject) => {
-        timeoutId = setTimeout(() => reject(timeoutMessage), timeout);
-      });
-      try {
+    try {
+      if (usesArgument) {
+        await Promise.race([
+          new Promise<void>((resolve, reject) => {
+            const done = (error?: any) => {
+              if (error) {
+                reject(error);
+              } else {
+                resolve();
+              }
+            };
+            Promise.resolve(fn(done)).catch(reject);
+          }),
+          timeoutPromise,
+        ]);
+      } else {
         await Promise.race([Promise.resolve(fn()), timeoutPromise]);
-      } catch (e) {
-        clearTimeout(timeoutId!);
-        throw e;
       }
+    } finally {
       clearTimeout(timeoutId!);
     }
   }
