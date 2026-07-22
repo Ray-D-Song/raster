@@ -21,7 +21,7 @@ raster_runtime_async_hooks = { version = "0.8.1-beta", path = "../raster_runtime
 raster_runtime_exceptions = { version = "0.8.1-beta", path = "../raster_runtime_exceptions" }
 raster_runtime_events = { version = "0.8.1-beta", path = "../raster_runtime_events" }
 raster_runtime_utils = { version = "0.8.1-beta", path = "../../libs/raster_runtime_utils", default-features = false }
-rquickjs = { version = "0.11", git = "https://github.com/DelSkayn/rquickjs", default-features = false }
+rquickjs = { version = "=0.12.1", default-features = false }
 
 # Optional
 raster_runtime_timers = { version = "0.8.1-beta", path = "../raster_runtime_timers", optional = true }

@@ -318,8 +318,7 @@ it("custom require extensions do not affect ESM import resolution", async () => 
   }
 });
 
-// Known issue: process teardown can trip QuickJS gc_obj_list assertions after _compile.
-it.skip("new Module(...)._compile runs in module context", () => {
+it("new Module(...)._compile runs in module context", () => {
   const filename = `${EXT_FIXTURES}/d.js`;
   const mod = new Module(filename);
   expect(mod.paths.length).toBeGreaterThan(0);

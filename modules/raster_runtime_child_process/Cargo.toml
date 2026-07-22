@@ -17,7 +17,7 @@ raster_runtime_context = { version = "0.8.1-beta", path = "../../libs/raster_run
 raster_runtime_events = { version = "0.8.1-beta", path = "../raster_runtime_events" }
 raster_runtime_stream = { version = "0.8.1-beta", path = "../raster_runtime_stream" }
 raster_runtime_utils = { version = "0.8.1-beta", path = "../../libs/raster_runtime_utils", default-features = false }
-rquickjs = { version = "0.11", git = "https://github.com/DelSkayn/rquickjs", default-features = false }
+rquickjs = { version = "=0.12.1", default-features = false }
 tokio = { version = "1", features = ["process"], default-features = false }
 
 [target.'cfg(unix)'.dependencies]

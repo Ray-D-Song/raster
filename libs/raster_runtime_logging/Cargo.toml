@@ -17,5 +17,5 @@ raster_runtime_encoding = { version = "0.8.1-beta", path = "../raster_runtime_en
 raster_runtime_json = { version = "0.8.1-beta", path = "../raster_runtime_json" }
 raster_runtime_numbers = { version = "0.8.1-beta", path = "../raster_runtime_numbers" }
 raster_runtime_utils = { version = "0.8.1-beta", path = "../raster_runtime_utils", default-features = false }
-rquickjs = { version = "0.11", git = "https://github.com/DelSkayn/rquickjs", default-features = false }
+rquickjs = { version = "=0.12.1", default-features = false }
 ryu = { version = "1", default-features = false }
