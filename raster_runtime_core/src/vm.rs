@@ -21,7 +21,7 @@ use crate::libs::{
 };
 use crate::modules::{
     async_hooks::promise_hook_tracker,
-    embedded::{loader::EmbeddedLoader, resolver::EmbeddedResolver},
+    embedded::{loader::EmbeddedLoader, resolver::EmbeddedResolver, BYTECODE_CACHE},
     module_builder::ModuleBuilder,
     package::{loader::PackageLoader, resolver::PackageResolver},
 };
@@ -88,7 +88,18 @@ impl Vm {
             file_resolver.add_path(*path);
         }
 
-        let (module_resolver, module_loader, global_attachment) = vm_options.module_builder.build();
+        let (module_resolver, module_loader, mut global_attachment) =
+            vm_options.module_builder.build();
+
+        // Public embedded bytecode modules (e.g. stream) must be ModuleNames
+        // builtins so require() uses load_via_import instead of disk paths.
+        // Keep raster_runtime:* private and out of Module.builtinModules.
+        for &name in BYTECODE_CACHE.keys() {
+            if !name.starts_with("raster_runtime:") {
+                global_attachment = global_attachment.add_name(name);
+            }
+        }
+
         let resolver = (
             module_resolver,
             EmbeddedResolver,

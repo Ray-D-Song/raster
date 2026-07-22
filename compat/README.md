@@ -4,7 +4,7 @@ Each fixture installs its own locked dependencies, then asks Raster to run the u
 
 | Case | Versions | Raster command | Status |
 | --- | --- | --- | --- |
-| Next App Router build | Next 16.2.10, React 19.2.5 | `next build` | Observing: past require-hook / `util.promisify` / `dns/promises` / Node semver / `process.on` / `fs.existsSync` / CommonJS relative `import()` (no longer resolves from `eval_script`). Regenerated `compat/next/compat.log` shows Raster exiting `1` with `unhandledRejection Error: IO Error: No such file or directory (os error 2)` from `next/dist/lib/worker.js` while loading `next-build` → `build/index`. SWC/native bindings remain out of scope. |
+| Next App Router build | Next 16.2.10, React 19.2.5 | `next build` | Observing: past require-hook / `util.promisify` / `dns/promises` / Node semver / `process.on` / `fs.existsSync` / CommonJS relative `import()` / CommonJS `require("stream")` for embedded builtins. Regenerated `compat/next/compat.log` shows Raster exiting `1` with `Cannot find module 'vm'` from `next/dist/server/load-manifest.external.js` (via `require-hook` ← `build/index` ← `next-build`). SWC/native bindings remain out of scope. |
 | Vite+ React library build | Vite+ 0.2.5, React 19.2.5 | `vp build` | Observing: local baseline stops while resolving Vite+'s native binding |
 
 Run `make compat-next` or `make compat-vite-plus` after building Raster. Upgrade a fixture only in a dedicated change that updates its exact dependency versions and lockfile.
