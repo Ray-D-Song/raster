@@ -370,7 +370,6 @@ async fn run_tests(vm: &Vm, args: &[std::string::String]) -> Result<(), String> 
         .collect();
 
     let pwd = env::current_dir().map_err(|e| e.to_string())?;
-    let pwd = pwd.to_string_lossy();
     while let Some((entry, _)) = directory_walker.walk().await.map_err(|e| e.to_string())? {
         if let Some(name) = entry.file_name() {
             let name = name.to_string_lossy();
@@ -379,7 +378,12 @@ async fn run_tests(vm: &Vm, args: &[std::string::String]) -> Result<(), String> 
                 if name.ends_with(ext_name)
                     && (!has_filters || filters.iter().any(|&f| name.contains(f)))
                 {
-                    entries.push([pwd.as_ref(), "/", entry.to_string_lossy().as_ref()].concat());
+                    let path = if entry.is_absolute() {
+                        entry.clone()
+                    } else {
+                        pwd.join(&entry)
+                    };
+                    entries.push(path.to_string_lossy().into_owned());
                 }
             }
         };
