@@ -11,6 +11,7 @@ use rquickjs::{
 use tracing::trace;
 
 use crate::modules::path::{self, replace_backslash};
+use crate::package::resolver::detect_file_format;
 use crate::{module::ModuleCache, CJS_IMPORT_PREFIX, CJS_LOADER_PREFIX};
 
 pub(crate) fn prepend_cjs_dirname_filename(filename: &str, source: &[u8]) -> Result<String> {
@@ -35,9 +36,29 @@ pub struct PackageLoader;
 
 impl PackageLoader {
     fn load_cjs_module<'js>(name: &str, ctx: Ctx<'js>) -> Result<Module<'js>> {
-        let cjs_specifier = [CJS_IMPORT_PREFIX, name].concat();
         let require: Function = ctx.globals().get("require")?;
-        let export_object: Value = require.call((&cjs_specifier,))?;
+        // Use the same resolution require() will use so cache keys align.
+        let resolve: Function = require.get("resolve")?;
+        let resolved: String = resolve.call((name,))?;
+        let name = resolved.as_str();
+
+        if let Some(binding) = ctx.userdata::<RefCell<ModuleCache>>() {
+            if let Some(module) = binding.borrow().esm.get(name).cloned() {
+                return Ok(module);
+            }
+        }
+
+        // Preload through the normal CJS `_compile` path (CJS-first, ESM-syntax fallback)
+        // rather than declaring the source as ESM via `__cjs:`.
+        let export_object: Value = require.call((name,))?;
+
+        // If require already instantiated this path as ESM (syntax fallback), reuse it.
+        if let Some(binding) = ctx.userdata::<RefCell<ModuleCache>>() {
+            if let Some(module) = binding.borrow().esm.get(name).cloned() {
+                return Ok(module);
+            }
+        }
+
         let mut module = String::with_capacity(name.len() + 512);
         module.push_str("const value = require(\"");
 
@@ -71,7 +92,11 @@ impl PackageLoader {
                 module.push_str("};");
             }
         }
-        Module::declare(ctx, name, module)
+        let module = Module::declare(ctx.clone(), name, module)?;
+        if let Some(binding) = ctx.userdata::<RefCell<ModuleCache>>() {
+            binding.borrow_mut().esm.insert(name.into(), module.clone());
+        }
+        Ok(module)
     }
 
     fn normalize_name(name: &str) -> (bool, bool, &str, &str) {
@@ -126,7 +151,16 @@ impl PackageLoader {
                 trace!("+- Loading module as json: {}\n", normalized_name);
                 return Ok((Module::declare(ctx, path, json)?, None));
             }
-            if is_cjs || normalized_name.ends_with(".cjs") {
+            // .mjs → ESM; .cjs → CJS; .js / extensionless follow package "type"
+            // (and `__cjsm:` always forces the CJS facade).
+            let format = if is_cjs {
+                crate::package::resolver::DetectedFormat::Cjs {
+                    allow_esm_detect: false,
+                }
+            } else {
+                detect_file_format(path).map_err(|err| err.throw(&ctx))?
+            };
+            if format.is_cjs() {
                 let url = ["file://", path].concat();
                 trace!("+- Loading cjs module: {}\n", normalized_name);
                 return Ok((Self::load_cjs_module(path, ctx)?, Some(url)));

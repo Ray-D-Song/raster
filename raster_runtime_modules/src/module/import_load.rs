@@ -13,7 +13,7 @@ use crate::package::loader::prepend_cjs_dirname_filename;
 
 use super::current_module::CurrentModuleGuard;
 use super::facade::ModuleFacadeState;
-use super::RequireState;
+use super::{ModuleCache, RequireState};
 
 fn collect_imported_exports<'js>(
     ctx: &Ctx<'js>,
@@ -109,6 +109,12 @@ pub fn load_source_via_import<'js>(
 
     let declared_source = prepend_cjs_dirname_filename(filename, source.as_bytes())?;
     let module = Module::declare(ctx.clone(), filename, declared_source)?;
+    if let Some(binding) = ctx.userdata::<RefCell<ModuleCache>>() {
+        binding
+            .borrow_mut()
+            .esm
+            .insert(filename.into(), module.clone());
+    }
     let (evaluated_module, import_promise) = module.eval()?;
     wait_for_import_promise(&ctx, import_promise)?;
 

@@ -1,0 +1,2 @@
+export const label = "type-module-ext";
+export default label;

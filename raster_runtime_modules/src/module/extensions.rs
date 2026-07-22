@@ -13,6 +13,7 @@ use super::current_module::CurrentModuleGuard;
 use super::facade::ModuleFacadeState;
 use super::import_load::load_source_via_import;
 use super::RequireState;
+use crate::package::resolver::detect_file_format;
 
 pub fn extensions_object<'js>(ctx: &Ctx<'js>) -> Result<Object<'js>> {
     let facade = ctx.userdata::<RefCell<ModuleFacadeState>>().or_throw(ctx)?;
@@ -78,6 +79,14 @@ pub fn find_longest_registered_extension<'js>(ctx: &Ctx<'js>, filename: &str) ->
     Ok(".js".to_string())
 }
 
+fn strip_shebang(code: &str) -> &str {
+    if code.starts_with("#!") {
+        code.split_once('\n').map(|(_, rest)| rest).unwrap_or("")
+    } else {
+        code
+    }
+}
+
 pub fn module_compile<'js>(
     ctx: Ctx<'js>,
     this: This<Object<'js>>,
@@ -90,6 +99,18 @@ pub fn module_compile<'js>(
     let require: Function = ctx.globals().get("require")?;
 
     let _guard = CurrentModuleGuard::push(ctx.clone(), module.clone())?;
+
+    // Match Node: shebang is not part of the CJS wrapper body.
+    let code = strip_shebang(&code);
+
+    // After a CJS wrapper parse failure:
+    // - explicit ESM (`.mjs` / `type: "module"`) → hand off to the ESM loader
+    // - ambiguous typeless/no-scope → allow detect-module ESM fallback
+    // - explicit CommonJS (`.cjs` / `type: "commonjs"`) → keep the CJS error
+    let allow_esm_loader_fallback = match detect_file_format(&filename) {
+        Ok(format) => format.allow_esm_loader_fallback(),
+        Err(err) => return Err(err.throw(&ctx)),
+    };
 
     let wrapped =
         format!("(function(exports, require, module, __filename, __dirname) {{\n{code}\n}})");
@@ -105,9 +126,14 @@ pub fn module_compile<'js>(
             ))?;
             Ok(())
         },
-        Err(cjs_err) => match load_esm_source_via_import(&ctx, module, &filename, code) {
-            Ok(()) => Ok(()),
-            Err(_) => Err(cjs_err),
+        Err(cjs_err) => {
+            if !allow_esm_loader_fallback {
+                return Err(cjs_err);
+            }
+            match load_esm_source_via_import(&ctx, module, &filename, code.to_string()) {
+                Ok(()) => Ok(()),
+                Err(_) => Err(cjs_err),
+            }
         },
     }
 }
