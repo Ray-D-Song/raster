@@ -19,6 +19,7 @@ members = [
   "modules/raster_runtime_crypto",
   "modules/raster_runtime_dgram",
   "modules/raster_runtime_querystring",
+  "modules/raster_runtime_diagnostics_channel",
   "modules/raster_runtime_events",
   "modules/raster_runtime_exceptions",
   "modules/raster_runtime_fetch",

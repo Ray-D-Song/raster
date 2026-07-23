@@ -175,6 +175,12 @@ impl Default for ModuleBuilder {
                 .with_global(crate::modules::timers::init)
                 .with_module(crate::modules::timers::TimersModule);
         }
+        #[cfg(feature = "diagnostics-channel")]
+        {
+            builder = builder
+                .with_global(crate::modules::diagnostics_channel::init)
+                .with_module(crate::modules::diagnostics_channel::DiagnosticsChannelModule);
+        }
         #[cfg(feature = "querystring")]
         {
             builder = builder.with_module(crate::modules::querystring::QuerystringModule);

@@ -2448,6 +2448,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "raster_runtime_diagnostics_channel"
+version = "0.8.1-beta"
+dependencies = [
+ "raster_runtime_utils",
+ "rquickjs",
+]
+
+[[package]]
 name = "raster_runtime_dns"
 version = "0.8.1-beta"
 dependencies = [
@@ -2642,6 +2650,7 @@ dependencies = [
  "raster_runtime_console",
  "raster_runtime_crypto",
  "raster_runtime_dgram",
+ "raster_runtime_diagnostics_channel",
  "raster_runtime_dns",
  "raster_runtime_events",
  "raster_runtime_exceptions",

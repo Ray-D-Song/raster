@@ -27,6 +27,8 @@ mod modules {
     pub use raster_runtime_crypto as crypto;
     #[cfg(feature = "dgram")]
     pub use raster_runtime_dgram as dgram;
+    #[cfg(feature = "diagnostics-channel")]
+    pub use raster_runtime_diagnostics_channel as diagnostics_channel;
     #[cfg(feature = "dns")]
     pub use raster_runtime_dns as dns;
     #[cfg(feature = "events")]
