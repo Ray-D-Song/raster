@@ -36,3 +36,23 @@ it("Module.builtinModules lists public embedded stream modules only", () => {
   expect(Module.builtinModules).toContain("stream/promises");
   expect(Module.builtinModules).not.toContain("raster_runtime:test/index");
 });
+
+import {
+  TextEncoderStream,
+  TextDecoderStream,
+  ReadableStream,
+  WritableStream,
+} from "node:stream/web";
+
+it("exposes encoding streams on globals and stream/web", () => {
+  expect(globalThis.TextEncoderStream).toBe(TextEncoderStream);
+  expect(globalThis.TextDecoderStream).toBe(TextDecoderStream);
+  expect(new TextEncoderStream().encoding).toBe("utf-8");
+});
+
+it("uses Raster stream instances for encoding stream sides", () => {
+  const encoder = new TextEncoderStream();
+  expect(encoder.readable).toBeInstanceOf(ReadableStream);
+  expect(encoder.writable).toBeInstanceOf(WritableStream);
+  expect(new TextDecoderStream().encoding).toBe("utf-8");
+});

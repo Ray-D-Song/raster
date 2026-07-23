@@ -371,6 +371,25 @@ declare module "stream/web" {
     new (init: QueuingStrategyInit): CountQueuingStrategy;
   };
 
+  class TextEncoderStream {
+    readonly encoding: string;
+    readonly readable: ReadableStream<Uint8Array>;
+    readonly writable: WritableStream<string>;
+    constructor();
+  }
+
+  class TextDecoderStream {
+    readonly encoding: string;
+    readonly fatal: boolean;
+    readonly ignoreBOM: boolean;
+    readonly readable: ReadableStream<string>;
+    readonly writable: WritableStream<ArrayBufferView | ArrayBuffer>;
+    constructor(
+      label?: string,
+      options?: { fatal?: boolean; ignoreBOM?: boolean }
+    );
+  }
+
   global {
     interface ByteLengthQueuingStrategy extends _ByteLengthQueuingStrategy {}
     /**
@@ -519,6 +538,9 @@ declare module "stream/web" {
     }
       ? T
       : typeof import("stream/web").WritableStreamDefaultWriter;
+
+    var TextEncoderStream: typeof import("stream/web").TextEncoderStream;
+    var TextDecoderStream: typeof import("stream/web").TextDecoderStream;
   }
 }
 declare module "node:stream/web" {
