@@ -4,7 +4,7 @@ Each fixture installs its own locked dependencies, then asks Raster to run the u
 
 | Case | Versions | Raster command | Status |
 | --- | --- | --- | --- |
-| Next App Router build | Next 16.2.10, React 19.2.5 | `next build` | Observing: past require-hook / `util.promisify` / `dns/promises` / Node semver / `process.on` / `fs.existsSync` / CommonJS relative `import()` / CommonJS `require("stream")` / `Cannot find module 'vm'` for embedded builtins. Regenerated `compat/next/compat.log` shows Raster exiting `1` with `ReferenceError: TextEncoderStream is not defined` from `@edge-runtime/primitives` (via telemetry/storage ← `build/index` ← `next-build`). SWC/native bindings remain out of scope. |
+| Next App Router build | Next 16.2.10, React 19.2.5 | `next build` | Observing: past require-hook / `util.promisify` / `dns/promises` / Node semver / `process.on` / `fs.existsSync` / CommonJS relative `import()` / CommonJS `require("stream")` / embedded `vm`. Regenerated `compat/next/compat.log` now advances past `TextEncoderStream`, console `.bind()` gaps, `querystring`, `diagnostics_channel`, and Undici-required `util` helpers; current first error is `ReferenceError: WebAssembly is not defined`. SWC/native bindings and `.next` build success remain out of scope. |
 | Vite+ React library build | Vite+ 0.2.5, React 19.2.5 | `vp build` | Observing: local baseline stops while resolving Vite+'s native binding |
 
 Run `make compat-next` or `make compat-vite-plus` after building Raster. Upgrade a fixture only in a dedicated change that updates its exact dependency versions and lockfile.

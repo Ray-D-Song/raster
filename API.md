@@ -152,6 +152,39 @@ Everything else inherited from [Uint8Array](https://developer.mozilla.org/en-US/
 
 [Console](https://nodejs.org/api/console.html#class-console)
 
+Global `console` is a `Console` instance with methods bound to itself (matching Node.js).
+
+[assert](https://nodejs.org/api/console.html#consoleassertvalue-message)
+
+[clear](https://nodejs.org/api/console.html#consoleclear)
+
+[count](https://nodejs.org/api/console.html#consolecountlabel)
+
+[countReset](https://nodejs.org/api/console.html#consolecountresetlabel)
+
+[debug](https://nodejs.org/api/console.html#consoledebugdata-args)
+
+[dir](https://nodejs.org/api/console.html#consoledirobj-options)
+
+[error](https://nodejs.org/api/console.html#consoleerrordata-args)
+
+[info](https://nodejs.org/api/console.html#consoleinfodata-args)
+
+[log](https://nodejs.org/api/console.html#consolelogdata-args)
+
+[time](https://nodejs.org/api/console.html#consoletimelabel)
+
+[timeEnd](https://nodejs.org/api/console.html#consoletimeendlabel)
+
+[timeLog](https://nodejs.org/api/console.html#consoletimeloglabel-args)
+
+[trace](https://nodejs.org/api/console.html#consoletracedata-args)
+
+[warn](https://nodejs.org/api/console.html#consolewarndata-args)
+
+> [!NOTE]
+> `count`, `countReset`, `time`, `timeLog`, and `timeEnd` coerce labels with JavaScript `ToString` (numbers and objects are accepted). `dir` supports a `colors` option; other Node `dir` options are not implemented.
+
 ## crypto
 
 [createHash](https://nodejs.org/api/crypto.html#cryptocreatehashalgorithm-options)
@@ -227,6 +260,29 @@ Lightweight and fast hash classes for raster_runtime.
 [lookup](https://nodejs.org/api/dns.html#dnslookuphostname-options-callback)
 
 [promises.lookup](https://nodejs.org/api/dns.html#dnspromiseslookuphostname-options) (also via `dns/promises` / `node:dns/promises`)
+
+## diagnostics_channel
+
+[channel](https://nodejs.org/api/diagnostics_channel.html#diagnostics_channelchannelname)
+
+[hasSubscribers](https://nodejs.org/api/diagnostics_channel.html#diagnostics_channelhassubscribersname)
+
+[subscribe](https://nodejs.org/api/diagnostics_channel.html#diagnostics_channelsubscribename-onmessage)
+
+[unsubscribe](https://nodejs.org/api/diagnostics_channel.html#diagnostics_channelunsubscribename-onmessage)
+
+### Class: Channel
+
+[subscribe](https://nodejs.org/api/diagnostics_channel.html#channelsubscribeonmessage)
+
+[unsubscribe](https://nodejs.org/api/diagnostics_channel.html#channelunsubscribeonmessage)
+
+[publish](https://nodejs.org/api/diagnostics_channel.html#channelpublishmessage)
+
+[hasSubscribers](https://nodejs.org/api/diagnostics_channel.html#channelhassubscribers)
+
+> [!NOTE]
+> `TracingChannel` is not implemented. Subscriber errors during `publish` are reported asynchronously via `queueMicrotask`. `publish` snapshots the subscriber list so callbacks that unsubscribe themselves do not skip later subscribers.
 
 ## events
 
@@ -484,6 +540,23 @@ Process is an EventEmitter. Explicit `process.exit(code)` emits `"exit"` synchro
 
 [versions](https://nodejs.org/api/process.html#processversions)
 
+## querystring
+
+[decode](https://nodejs.org/api/querystring.html#querystringdecodestr-sep-eq-options) (alias of `parse`)
+
+[encode](https://nodejs.org/api/querystring.html#querystringencodestr-sep-eq-options) (alias of `stringify`)
+
+[escape](https://nodejs.org/api/querystring.html#querystringescapestr)
+
+[parse](https://nodejs.org/api/querystring.html#querystringparsestr-sep-eq-options)
+
+[stringify](https://nodejs.org/api/querystring.html#querystringstringifyobj-sep-eq-options)
+
+[unescape](https://nodejs.org/api/querystring.html#querystringunescapestr)
+
+> [!NOTE]
+> `encode` / `decode` follow Node.js and alias `stringify` / `parse`, not `escape` / `unescape`. Empty `sep` or `eq` arguments fall back to `&` and `=` respectively. `escape` throws `URIError` for lone surrogate code units.
+
 ## stream
 
 [Duplex](https://nodejs.org/api/stream.html#class-streamduplex)
@@ -501,6 +574,38 @@ Process is an EventEmitter. Explicit `process.exit(code)` emits `"exit"` synchro
 [finished](https://nodejs.org/api/stream.html#streamfinishedstream-options-callback)
 
 [pipeline](https://nodejs.org/api/stream.html#streampipelinestreams-callback)
+
+## stream/web
+
+Also available as `node:stream/web`. `TextEncoderStream` and `TextDecoderStream` are installed globally when the stream/web module is loaded.
+
+[ByteLengthQueuingStrategy](https://nodejs.org/api/webstreams.html#class-bytelengthqueuingstrategy)
+
+[CountQueuingStrategy](https://nodejs.org/api/webstreams.html#class-countqueuingstrategy)
+
+[ReadableByteStreamController](https://nodejs.org/api/webstreams.html#class-readablebytestreamcontroller)
+
+[ReadableStream](https://nodejs.org/api/webstreams.html#class-readablestream)
+
+[ReadableStreamBYOBReader](https://nodejs.org/api/webstreams.html#class-readablestreambyobreader)
+
+[ReadableStreamBYOBRequest](https://nodejs.org/api/webstreams.html#class-readablestreambyobrequest)
+
+[ReadableStreamDefaultController](https://nodejs.org/api/webstreams.html#class-readablestreamdefaultcontroller)
+
+[ReadableStreamDefaultReader](https://nodejs.org/api/webstreams.html#class-readablestreamdefaultreader)
+
+[TextDecoderStream](https://nodejs.org/api/webstreams.html#class-textdecoderstream)
+
+[TextEncoderStream](https://nodejs.org/api/webstreams.html#class-textencoderstream)
+
+[TransformStream](https://nodejs.org/api/webstreams.html#class-transformstream)
+
+[WritableStream](https://nodejs.org/api/webstreams.html#class-writablestream)
+
+[WritableStreamDefaultController](https://nodejs.org/api/webstreams.html#class-writablestreamdefaultcontroller)
+
+[WritableStreamDefaultWriter](https://nodejs.org/api/webstreams.html#class-writablestreamdefaultwriter)
 
 ## stream/promises
 
@@ -559,19 +664,53 @@ _Also available globally_
 > [!IMPORTANT]
 > Supported encodings: hex, base64, utf-8, utf-16le, windows-1252 and their aliases.
 
+[debug](https://nodejs.org/api/util.html#utildebuglogsection) (alias of `debuglog`)
+
+[debuglog](https://nodejs.org/api/util.html#utildebuglogsection)
+
 [format](https://nodejs.org/api/util.html#utilformatformat-args)
+
+[formatWithOptions](https://nodejs.org/api/util.html#utilformatwithoptionsinspectoptions-format-args)
+
+[inspect](https://nodejs.org/api/util.html#utilinspectobject-options)
 
 [inherits](https://nodejs.org/api/util.html#utilinheritsconstructor-superconstructor)
 
 [promisify](https://nodejs.org/api/util.html#utilpromisifyoriginal)
 
-> [!NOTE]
-> `util.promisify.custom` and multi-value callback result mapping are not implemented.
-> Callbacks follow the Node error-first convention and only the first success value is resolved.
+[toUSVString](https://nodejs.org/api/util.html#utiltousvstringstring)
+
+[types.isAnyArrayBuffer](https://nodejs.org/api/util.html#utiltypesisanyarraybuffervalue)
+
+[types.isArrayBuffer](https://nodejs.org/api/util.html#utiltypesisarraybuffervalue)
+
+[types.isDataView](https://nodejs.org/api/util.html#utiltypesisdataviewvalue)
+
+[types.isPromise](https://nodejs.org/api/util.html#utiltypesispromisevalue)
+
+[types.isProxy](https://nodejs.org/api/util.html#utiltypesisproxyvalue)
+
+[types.isSharedArrayBuffer](https://nodejs.org/api/util.html#utiltypesissharedarraybuffervalue)
+
+[types.isTypedArray](https://nodejs.org/api/util.html#utiltypesistypedarrayvalue)
+
+[types.isUint8Array](https://nodejs.org/api/util.html#utiltypesisuint8arrayvalue)
 
 [TextDecoder](https://nodejs.org/api/util.html#class-utiltextdecoder)
 
-[TextEncoder](https://nodejs.org/api/util.html#class-utiltextdecoder)
+[TextEncoder](https://nodejs.org/api/util.html#class-utiltextencoder)
+
+> [!NOTE]
+> `util.promisify.custom` and multi-value callback result mapping are not implemented.
+> Callbacks follow the Node error-first convention and only the first success value is resolved.
+>
+> `format` does not append a trailing newline. `inspect.custom` uses the `nodejs.util.inspect.custom` symbol.
+>
+> `formatWithOptions` currently honors only the `colors` inspect option; other Node inspect options are ignored.
+>
+> `debuglog` reads `process.env.NODE_DEBUG` (comma/whitespace separated, `*` wildcard suffix supported). `types.isSharedArrayBuffer` always returns `false`.
+>
+> `TextDecoder.decode` supports the `stream` option for incremental decoding across calls. BOM stripping works across streaming chunks when `ignoreBOM` is `false`.
 
 ## vm
 
@@ -854,6 +993,13 @@ export function print(value: any): void;
 [TextDecoder](https://developer.mozilla.org/en-US/docs/Web/API/TextDecoder)
 
 [TextEncoder](https://developer.mozilla.org/en-US/docs/Web/API/TextEncoder)
+
+[TextDecoderStream](https://developer.mozilla.org/en-US/docs/Web/API/TextDecoderStream)
+
+[TextEncoderStream](https://developer.mozilla.org/en-US/docs/Web/API/TextEncoderStream)
+
+> [!NOTE]
+> `TextEncoderStream` and `TextDecoderStream` are provided by the `stream/web` builtin and are also available on `globalThis` when that module is loaded.
 
 ## FETCH
 
