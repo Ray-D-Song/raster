@@ -1,6 +1,10 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 #![cfg_attr(rust_nightly, feature(iter_array_chunks))]
+mod incremental;
+
+pub use incremental::IncrementalDecoder;
+
 use std::borrow::Cow;
 
 use hex_simd::AsciiCase;

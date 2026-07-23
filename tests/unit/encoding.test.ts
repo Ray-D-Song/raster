@@ -62,6 +62,42 @@ describe("TextDecoder", () => {
       );
     }
   });
+
+  it("streams utf-16 lead surrogate and odd byte across chunks", () => {
+    const decoder = new TextDecoder("utf-16le");
+    expect(
+      decoder.decode(Uint8Array.of(0x00, 0xd8, 0x41), { stream: true })
+    ).toBe("");
+    expect(decoder.decode(Uint8Array.of(0x00), { stream: true })).toBe("\uFFFD" + "A");
+
+    const decoderBe = new TextDecoder("utf-16be");
+    expect(
+      decoderBe.decode(Uint8Array.of(0xd8, 0x00, 0x00), { stream: true })
+    ).toBe("");
+    expect(decoderBe.decode(Uint8Array.of(0x41), { stream: true })).toBe(
+      "\uFFFD" + "A"
+    );
+  });
+
+  it("replaces incomplete bom prefixes on flush", () => {
+    const lossy = new TextDecoder("utf-8");
+    lossy.decode(Uint8Array.of(0xef), { stream: true });
+    expect(lossy.decode()).toBe("\uFFFD");
+
+    const fatal = new TextDecoder("utf-8", { fatal: true });
+    fatal.decode(Uint8Array.of(0xef), { stream: true });
+    expect(() => fatal.decode()).toThrow(TypeError);
+  });
+
+  it("replaces combined utf-16 lead surrogate and odd byte on flush", () => {
+    const decoder = new TextDecoder("utf-16le");
+    decoder.decode(Uint8Array.of(0x00, 0xd8, 0x41), { stream: true });
+    expect(decoder.decode()).toBe("\uFFFD");
+
+    const decoderBe = new TextDecoder("utf-16be");
+    decoderBe.decode(Uint8Array.of(0xd8, 0x00, 0x00), { stream: true });
+    expect(decoderBe.decode()).toBe("\uFFFD");
+  });
 });
 
 describe("TextEncoder", () => {

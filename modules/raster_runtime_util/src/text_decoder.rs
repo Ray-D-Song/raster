@@ -1,8 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
-use raster_runtime_encoding::Encoder;
+use raster_runtime_encoding::{Encoder, IncrementalDecoder};
 use raster_runtime_utils::{bytes::ObjectBytes, object::ObjectExt, result::ResultExt};
-use rquickjs::{atom::PredefinedAtom, function::Opt, Ctx, Object, Result};
+use rquickjs::{atom::PredefinedAtom, function::Opt, Ctx, Object, Result, Value};
 
 #[rquickjs::class]
 #[derive(rquickjs::class::Trace, rquickjs::JsLifetime)]
@@ -11,6 +11,9 @@ pub struct TextDecoder {
     encoder: Encoder,
     fatal: bool,
     ignore_bom: bool,
+    #[qjs(skip_trace)]
+    decoder: IncrementalDecoder,
+    do_not_flush: bool,
 }
 
 #[rquickjs::methods]
@@ -35,6 +38,8 @@ impl<'js> TextDecoder {
             encoder,
             fatal,
             ignore_bom,
+            decoder: IncrementalDecoder::new(),
+            do_not_flush: false,
         })
     }
 
@@ -58,21 +63,53 @@ impl<'js> TextDecoder {
         stringify!(TextDecoder)
     }
 
-    pub fn decode(&self, ctx: Ctx<'js>, bytes: ObjectBytes<'js>) -> Result<String> {
-        let bytes = bytes.as_bytes(&ctx)?;
-        let start_pos = if !self.ignore_bom {
-            match (&self.encoder, bytes.get(..3)) {
-                (Encoder::Utf16le, Some([0xFF, 0xFE, ..])) => 2,
-                (Encoder::Utf16be, Some([0xFE, 0xFF, ..])) => 2,
-                (Encoder::Utf8, Some([0xEF, 0xBB, 0xBF])) => 3,
-                _ => 0,
+    pub fn decode(
+        &mut self,
+        ctx: Ctx<'js>,
+        input: Opt<Value<'js>>,
+        options: Opt<Object<'js>>,
+    ) -> Result<String> {
+        let mut stream = false;
+        if let Some(options) = options.0 {
+            if let Some(value) = options.get_optional("stream")? {
+                stream = value;
             }
-        } else {
-            0
+        }
+
+        let bytes = match input.0 {
+            None => Vec::new(),
+            Some(value) if value.is_undefined() => Vec::new(),
+            Some(value) => ObjectBytes::from(&ctx, &value)?.as_bytes(&ctx)?.to_vec(),
         };
 
-        self.encoder
-            .encode_to_string(&bytes[start_pos..], !self.fatal)
+        let lossy = !self.fatal;
+
+        if stream {
+            self.do_not_flush = true;
+            return self
+                .decoder
+                .decode_chunk(&self.encoder, &bytes, lossy, true, self.ignore_bom)
+                .or_throw_type(&ctx, "");
+        }
+
+        if self.do_not_flush {
+            self.do_not_flush = false;
+            let mut output = self
+                .decoder
+                .decode_chunk(&self.encoder, &bytes, lossy, true, self.ignore_bom)
+                .or_throw_type(&ctx, "")?;
+            output.push_str(
+                &self
+                    .decoder
+                    .flush(&self.encoder, lossy, self.ignore_bom)
+                    .or_throw_type(&ctx, "")?,
+            );
+            return Ok(output);
+        }
+
+        self.decoder.reset();
+        self.decoder
+            .decode_chunk(&self.encoder, &bytes, lossy, false, self.ignore_bom)
             .or_throw_type(&ctx, "")
     }
 }
