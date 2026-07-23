@@ -1,6 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashSet, rc::Rc};
 
 use raster_runtime_hooking::{invoke_async_hook, register_finalization_registry, HookType};
 use raster_runtime_utils::{provider::ProviderType, result::ResultExt};
@@ -13,7 +13,17 @@ use crate::package::loader::prepend_cjs_dirname_filename;
 
 use super::current_module::CurrentModuleGuard;
 use super::facade::ModuleFacadeState;
-use super::{ModuleCache, RequireState};
+use super::{ModuleCache, ModuleNames, RequireState};
+
+fn is_builtin_import_name(ctx: &Ctx<'_>, import_name: &str) -> bool {
+    let module_list = ctx
+        .userdata::<ModuleNames>()
+        .map_or_else(HashSet::new, |v| v.get_list());
+    let normalized = import_name
+        .trim_start_matches("node:")
+        .trim_end_matches('/');
+    module_list.contains(normalized)
+}
 
 fn collect_imported_exports<'js>(
     ctx: &Ctx<'js>,
@@ -41,25 +51,50 @@ fn collect_imported_exports<'js>(
     }
 
     let props = imported_object.props::<String, Value>();
-    let default_export: Option<Value> = imported_object.get(PredefinedAtom::Default)?;
+    let has_default = imported_object.contains_key(PredefinedAtom::Default)?;
+    let default_export: Option<Value> = if has_default {
+        Some(imported_object.get(PredefinedAtom::Default)?)
+    } else {
+        None
+    };
+    let builtin = is_builtin_import_name(ctx, import_name);
 
-    if let Some(default_export) = default_export {
-        if let Some(default_object) = default_export.as_object() {
-            for prop in props {
-                let (key, value) = prop?;
-                if !default_object.contains_key(&key)? {
-                    default_object.set(key, value)?;
+    // Built-in modules (e.g. legacy `constants`) expose a designed flat default
+    // object as module.exports. Merge missing named exports onto that object,
+    // but never attach a synthetic self-referential `default` property — that
+    // would fail on frozen defaults and is not how Node surfaces those builtins.
+    //
+    // User ESM files instead use namespace-style interop: keep `default` and
+    // named exports on a fresh exports object so `require("./x.mjs").default`
+    // remains available (Babel/TS interop) without mutating a frozen default export.
+    if builtin {
+        if let Some(default_export) = default_export {
+            if let Some(default_object) = default_export.as_object() {
+                for prop in props {
+                    let (key, value) = prop?;
+                    if key == "default" {
+                        continue;
+                    }
+                    if !default_object.contains_key(&key)? {
+                        default_object.set(key, value)?;
+                    }
                 }
+                let default_object = default_object.clone().into_value();
+                record.set("exports", default_object.clone())?;
+                return Ok(default_object);
             }
-            let default_object = default_object.clone().into_value();
-            record.set("exports", default_object.clone())?;
-            return Ok(default_object);
         }
     }
 
+    // Namespace-style CJS interop for user ESM (and non-object builtin defaults).
+    // Match Node: only synthesize `__esModule: true` when the module has a default
+    // export and did not export `__esModule` itself. Named-only ESM must not gain it.
     for prop in props {
         let (key, value) = prop?;
         progress.set(key, value)?;
+    }
+    if has_default && !progress.contains_key("__esModule")? {
+        progress.set("__esModule", true)?;
     }
 
     let value = progress.clone().into_value();

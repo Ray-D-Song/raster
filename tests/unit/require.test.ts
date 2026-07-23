@@ -202,6 +202,74 @@ it("regression testing for issue #1245", () => {
   _require(`${CWD}/fixtures/test1245/main/foo.js`);
 });
 
+describe("require() CJS/ESM default interop", () => {
+  const dir = `${CWD}/fixtures/require-default-interop`;
+
+  it("does not depend on user-overridable Object.isExtensible", () => {
+    const original = Object.isExtensible;
+    try {
+      // @ts-expect-error intentional polyfill/user override
+      Object.isExtensible = undefined;
+      expect(() => _require("v8")).not.toThrow();
+      expect(typeof _require("v8").getHeapStatistics).toBe("function");
+    } finally {
+      Object.isExtensible = original;
+    }
+  });
+
+  it("keeps .default and named exports for ordinary user ESM (namespace interop)", () => {
+    const mod = _require(`${dir}/extensible.mjs`);
+    expect(mod.__esModule).toBe(true);
+    expect(mod.default.base).toBe(true);
+    expect(mod.named).toBe(42);
+    // Default export object is not itself mutated with a self-ref.
+    expect(Object.prototype.hasOwnProperty.call(mod.default, "default")).toBe(
+      false
+    );
+  });
+
+  it("preserves frozen default export objects on user ESM without merge failure", () => {
+    const complete = _require(`${dir}/frozen-complete.mjs`);
+    expect(complete.__esModule).toBe(true);
+    expect(Object.isFrozen(complete.default)).toBe(true);
+    expect(complete.default.named).toBe(1);
+    expect(complete.named).toBe(1);
+    expect(complete.extra).toBe(2);
+
+    // Named export is not on the frozen empty default; namespace still exposes both.
+    const incomplete = _require(`${dir}/frozen-incomplete.mjs`);
+    expect(Object.isFrozen(incomplete.default)).toBe(true);
+    expect(incomplete.named).toBe(42);
+    expect(incomplete.default.named).toBeUndefined();
+  });
+
+  it("preserves sealed/preventExtensions defaults via namespace interop", () => {
+    const sealed = _require(`${dir}/sealed-complete.mjs`);
+    expect(Object.isSealed(sealed.default)).toBe(true);
+    expect(sealed.default.named).toBe(7);
+    expect(sealed.named).toBe(7);
+
+    const pe = _require(`${dir}/prevent-extensions-complete.mjs`);
+    expect(Object.isExtensible(pe.default)).toBe(false);
+    expect(pe.default.named).toBe(9);
+    expect(pe.named).toBe(9);
+  });
+
+  it("does not add __esModule for named-only ESM (Node-compatible)", () => {
+    const mod = _require(`${dir}/named-only.mjs`);
+    expect(typeof mod.handler).toBe("function");
+    expect("__esModule" in mod).toBe(false);
+    expect(Object.keys(mod)).not.toContain("__esModule");
+    expect(mod.default).toBeUndefined();
+
+    // Existing named-only fixture used by other suites.
+    const primitive = _require(`${CWD}/fixtures/primitive-handler.mjs`);
+    expect(typeof primitive.handler).toBe("function");
+    expect("__esModule" in primitive).toBe(false);
+    expect(Object.keys(primitive)).not.toContain("__esModule");
+  });
+});
+
 //create a test that spawns a subprocess and executes require.mjs from fixtures and captures stdout
 it("should handle blocking requires", async () => {
   const { code, stdout } = await spawnCapture(process.argv0, [
