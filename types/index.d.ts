@@ -24,6 +24,7 @@
 /// <reference types="./perf_hooks.d.ts" />
 /// <reference types="./process.d.ts" />
 /// <reference types="./stream.d.ts" />
+/// <reference types="./querystring.d.ts" />
 /// <reference types="./stream/web.d.ts" />
 /// <reference types="./timers.d.ts" />
 /// <reference types="./timezone.d.ts" />

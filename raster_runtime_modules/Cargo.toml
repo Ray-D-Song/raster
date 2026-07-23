@@ -43,6 +43,7 @@ base = [
   "child-process",
   "crypto",
   "dgram",
+  "querystring",
   "dns",
   "events",
   "exceptions",
@@ -79,6 +80,7 @@ child-process = ["raster_runtime_child_process"]
 console = ["raster_runtime_console"]
 crypto = ["raster_runtime_crypto"]
 dgram = ["raster_runtime_dgram"]
+querystring = ["raster_runtime_querystring"]
 dns = ["raster_runtime_dns"]
 events = ["raster_runtime_events"]
 exceptions = ["raster_runtime_exceptions"]
@@ -140,6 +142,7 @@ raster_runtime_child_process = { version = "0.8.1-beta", path = "../modules/rast
 raster_runtime_console = { version = "0.8.1-beta", path = "../modules/raster_runtime_console", optional = true }
 raster_runtime_crypto = { version = "0.8.1-beta", path = "../modules/raster_runtime_crypto", default-features = false, optional = true }
 raster_runtime_dgram = { version = "0.8.1-beta", path = "../modules/raster_runtime_dgram", optional = true }
+raster_runtime_querystring = { version = "0.8.1-beta", path = "../modules/raster_runtime_querystring", optional = true }
 raster_runtime_dns = { version = "0.8.1-beta", path = "../modules/raster_runtime_dns", optional = true }
 raster_runtime_events = { version = "0.8.1-beta", path = "../modules/raster_runtime_events", optional = true }
 raster_runtime_exceptions = { version = "0.8.1-beta", path = "../modules/raster_runtime_exceptions", optional = true }

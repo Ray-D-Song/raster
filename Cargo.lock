@@ -2657,6 +2657,7 @@ dependencies = [
  "raster_runtime_path",
  "raster_runtime_perf_hooks",
  "raster_runtime_process",
+ "raster_runtime_querystring",
  "raster_runtime_stream_web",
  "raster_runtime_string_decoder",
  "raster_runtime_temporal",
@@ -2767,6 +2768,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "raster_runtime_querystring"
+version = "0.8.1-beta"
+dependencies = [
+ "raster_runtime_utils",
+ "rquickjs",
+]
+
+[[package]]
 name = "raster_runtime_stream"
 version = "0.8.1-beta"
 dependencies = [
@@ -2784,6 +2793,7 @@ version = "0.8.1-beta"
 dependencies = [
  "raster_runtime_abort",
  "raster_runtime_test",
+ "raster_runtime_util",
  "raster_runtime_utils",
  "rquickjs",
  "tokio",

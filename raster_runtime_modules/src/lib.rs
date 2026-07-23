@@ -55,6 +55,8 @@ mod modules {
     pub use raster_runtime_perf_hooks as perf_hooks;
     #[cfg(feature = "process")]
     pub use raster_runtime_process as process;
+    #[cfg(feature = "querystring")]
+    pub use raster_runtime_querystring as querystring;
     #[cfg(feature = "stream-web")]
     pub use raster_runtime_stream_web as stream_web;
     #[cfg(feature = "string-decoder")]
