@@ -9,7 +9,7 @@ use raster_runtime_utils::{
     primordials::{BasePrimordials, Primordial},
     result::ResultExt,
 };
-use rquickjs::{Class, Ctx, Result};
+use rquickjs::{Class, Ctx, Result, Value, prelude::Func};
 
 pub(crate) mod body_helpers;
 pub mod fetch;
@@ -26,6 +26,15 @@ const MIME_TYPE_JSON: &str = "application/json;charset=UTF-8";
 const MIME_TYPE_FORM_DATA: &str = "multipart/form-data; boundary=";
 const MIME_TYPE_OCTET_STREAM: &str = "application/octet-stream";
 
+/// An internal, immutable capability used by consumers that need to verify a
+/// native `Response` brand without trusting the mutable JS `Response`
+/// constructor or prototype chain.
+pub const RESPONSE_BRAND_CHECK_KEY: &str = "\0raster_runtime:has_native_response_brand";
+
+fn has_native_response_brand<'js>(value: Value<'js>) -> bool {
+    Class::<Response>::from_value(&value).is_ok()
+}
+
 pub fn init(ctx: &Ctx) -> Result<()> {
     let globals = ctx.globals();
 
@@ -39,6 +48,7 @@ pub fn init(ctx: &Ctx) -> Result<()> {
     Class::<Request>::define(&globals)?;
     Class::<Response>::define(&globals)?;
     Class::<Headers>::define_with_custom_inspect(&globals)?;
+    globals.prop(RESPONSE_BRAND_CHECK_KEY, Func::from(has_native_response_brand))?;
 
     Ok(())
 }

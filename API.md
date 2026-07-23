@@ -1083,6 +1083,35 @@ export function print(value: any): void;
 
 [URLSearchParams](https://developer.mozilla.org/en-US/docs/Web/API/URLSearchParams)
 
+## WEBASSEMBLY
+
+[WebAssembly](https://developer.mozilla.org/en-US/docs/WebAssembly/Reference/JavaScript_interface)
+
+Raster installs a fresh, realm-scoped `WebAssembly` global on every QuickJS context, backed by [`wasmi`](https://github.com/wasmi-labs/wasmi) `1.1.0`.
+
+Implemented:
+
+- `WebAssembly.compile`, `instantiate` (both overloads), `validate`, `compileStreaming`, `instantiateStreaming`.
+- `WebAssembly.Module` (including `Module.imports`/`Module.exports`/`Module.customSections`), `Instance`, `Memory`, `Table`, `Global`.
+- `WebAssembly.CompileError`, `LinkError`, `RuntimeError`.
+- JS function imports and Wasm function exports, including reentrant calls from a JS import callback back into the same instance.
+- The multi-value, bulk-memory, reference-types (`externref`/`funcref`), mutable-globals, and SIMD proposals (SIMD executes inside Wasm only; a `v128` value crossing the JS/Wasm boundary throws `TypeError`).
+- A synchronously-mirrored, non-shared `wasm32` linear `Memory`, bidirectionally visible from JS and Wasm.
+
+> [!NOTE]
+> Numeric/BigInt mapping: `i32` round-trips through JS `Number` using `ToInt32` semantics (matching Node/browsers' wraparound behavior for out-of-range values); `f32`/`f64` round-trip through `Number`; `i64` only accepts/returns `BigInt` (never `Number`); a multi-result export returns a plain JS `Array`, and a multi-result import callback must return an array with at least that many elements.
+>
+> Memory model: each `Memory` lazily materializes a QuickJS `ArrayBuffer` "mirror" the first time `.buffer` is read. Wasm's actual linear memory is copied into the mirror immediately before returning from an exported call or before invoking a JS import callback, and copied back out immediately after -- so JS and Wasm always observe each other's writes at every boundary crossing, at the cost of a full-buffer copy per crossing rather than a zero-copy view. A `grow()` (including `grow(0)`, and including a Wasm-internal `memory.grow`) detaches the previous mirror `ArrayBuffer` and creates a new one.
+>
+> Every `Instance`/`Memory`/`Table`/`Global`/exported-function object is scoped to the QuickJS context (realm) that created it; passing one into a different realm's `WebAssembly` APIs (e.g. across a `vm.runInNewContext` boundary, if that child context also had `WebAssembly` installed) throws `LinkError` rather than silently mixing `wasmi` stores.
+>
+> `externref` lifetime: to preserve JS identity for every Wasm reference safely, Raster retains the `Persistent<Value>` associated with an `externref` until its WebAssembly realm is torn down. `wasmi` 1.1.0 does not expose the complete set of roots required to reclaim individual entries safely (including Wasm-private tables, globals, and active frames). Consequently, a long-lived realm that continuously stores distinct JS values as `externref` can grow its retained memory until realm teardown; applications with that pattern should use bounded/reused references or periodically recreate the realm.
+
+Not implemented (out of scope for this batch): `WebAssembly.Function`, `Tag`, `Exception`, JSPI (`Suspending`/`promising`), the garbage-collection, exception-handling, and function-references proposals, shared memory/threads, `Memory64`, WASI, and the `.wasm` ESM loader. `WebAssembly.validate`/`compile` reject modules using any of these as a `CompileError` (or `false`, for `validate`) rather than passing them through to `wasmi` or risking a panic. Raster does not provide a WebAssembly-level security sandbox or execution-time/memory quota beyond what `wasmi`'s interpreter itself enforces.
+
+> [!IMPORTANT]
+> This implementation requires `wasmi 1.1.0` and Rust `1.86` or newer (the `raster_runtime_webassembly` crate's own `rust-version`; it does not raise the minimum for any other workspace crate).
+
 ## WEBCRYPTO
 
 [Crypto](https://developer.mozilla.org/en-US/docs/Web/API/Crypto)
