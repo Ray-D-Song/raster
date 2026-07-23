@@ -101,6 +101,8 @@ const ES_BUILD_OPTIONS = {
     "node:url",
     "util",
     "node:util",
+    "v8",
+    "node:v8",
     "vm",
     "node:vm",
     "zlib",

@@ -2683,6 +2683,7 @@ dependencies = [
  "raster_runtime_url",
  "raster_runtime_util",
  "raster_runtime_utils",
+ "raster_runtime_v8",
  "raster_runtime_vm",
  "raster_runtime_webassembly",
  "raster_runtime_zlib",
@@ -2931,6 +2932,16 @@ dependencies = [
  "tokio",
  "tracing",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "raster_runtime_v8"
+version = "0.8.1-beta"
+dependencies = [
+ "raster_runtime_test",
+ "raster_runtime_utils",
+ "rquickjs",
+ "tokio",
 ]
 
 [[package]]

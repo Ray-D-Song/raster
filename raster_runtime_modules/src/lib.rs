@@ -75,6 +75,8 @@ mod modules {
     pub use raster_runtime_url as url;
     #[cfg(feature = "util")]
     pub use raster_runtime_util as util;
+    #[cfg(feature = "v8")]
+    pub use raster_runtime_v8 as v8;
     #[cfg(feature = "vm")]
     pub use raster_runtime_vm as vm;
     #[cfg(feature = "webassembly")]

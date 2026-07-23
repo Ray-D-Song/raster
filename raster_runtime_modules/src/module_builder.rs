@@ -201,6 +201,10 @@ impl Default for ModuleBuilder {
                 .with_global(crate::modules::util::init)
                 .with_module(crate::modules::util::UtilModule);
         }
+        #[cfg(feature = "v8")]
+        {
+            builder = builder.with_module(crate::modules::v8::V8Module);
+        }
         #[cfg(feature = "vm")]
         {
             builder = builder.with_module(crate::modules::vm::VmModule);

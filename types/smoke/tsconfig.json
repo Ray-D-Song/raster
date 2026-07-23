@@ -20,7 +20,11 @@
       "url": ["./url.d.ts"],
       "fs/promises": ["./fs/promises.d.ts"],
       "async_hooks": ["./async_hooks.d.ts"],
-      "node:async_hooks": ["./async_hooks.d.ts"]
+      "node:async_hooks": ["./async_hooks.d.ts"],
+      "process": ["./process.d.ts"],
+      "node:process": ["./process.d.ts"],
+      "v8": ["./v8.d.ts"],
+      "node:v8": ["./v8.d.ts"]
     }
   },
   "include": ["./**/*.ts"]
