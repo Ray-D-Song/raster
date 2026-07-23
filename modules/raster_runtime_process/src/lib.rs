@@ -22,7 +22,7 @@ use rquickjs::{
     function::Args,
     module::{Declarations, Exports, ModuleDef},
     object::{Accessor, Property},
-    prelude::{Func, Rest},
+    prelude::{Func, Opt, Rest},
     Array, BigInt, Class, Ctx, Error, Function, IntoJs, Object, Result, Value,
 };
 
@@ -47,8 +47,8 @@ const EVENT_EMITTER_METHODS: &[&str] = &[
 ];
 
 const PROCESS_NAMED_EXPORTS: &[&str] = &[
-    "env", "cwd", "argv0", "id", "argv", "platform", "arch", "hrtime", "release", "version",
-    "versions", "exitCode", "exit", "kill", "nextTick",
+    "env", "cwd", "chdir", "argv0", "id", "pid", "argv", "platform", "arch", "hrtime", "release",
+    "version", "versions", "exitCode", "exit", "kill", "nextTick",
 ];
 
 #[cfg(unix)]
@@ -68,6 +68,59 @@ fn cwd(ctx: Ctx<'_>) -> Result<String> {
     env::current_dir()
         .or_throw(&ctx)
         .map(|path| path.to_string_lossy().to_string())
+}
+
+/// Map `std::io::ErrorKind` to a Node-style system error code for `chdir`.
+fn io_error_code(error: &std::io::Error) -> &'static str {
+    match error.kind() {
+        std::io::ErrorKind::NotFound => "ENOENT",
+        std::io::ErrorKind::PermissionDenied => "EACCES",
+        std::io::ErrorKind::NotADirectory => "ENOTDIR",
+        std::io::ErrorKind::InvalidInput => "EINVAL",
+        _ => "UNKNOWN",
+    }
+}
+
+fn create_chdir_error<'js>(
+    ctx: &Ctx<'js>,
+    error: std::io::Error,
+    path: &str,
+) -> Result<Exception<'js>> {
+    let code = io_error_code(&error);
+    // Stable Node-like format: "ENOENT: <os message>, chdir '<path>'"
+    let message = format!("{code}: {error}, chdir '{path}'");
+    let exception = Exception::from_message(ctx.clone(), &message)?;
+    exception.as_object().set("code", code)?;
+    exception.as_object().set("path", path)?;
+    exception.as_object().set("syscall", "chdir")?;
+    Ok(exception)
+}
+
+/// Change the process working directory.
+///
+/// Accepts a JS `Value` so missing / non-string arguments raise TypeError
+/// without implicit `String(value)` coercion (Node `ERR_INVALID_ARG_TYPE`).
+fn chdir(ctx: Ctx<'_>, path: Opt<Value<'_>>) -> Result<()> {
+    let Some(value) = path.0 else {
+        return Err(Exception::throw_type(
+            &ctx,
+            "The \"directory\" argument must be of type string",
+        ));
+    };
+
+    let Some(js_string) = value.as_string() else {
+        return Err(Exception::throw_type(
+            &ctx,
+            "The \"directory\" argument must be of type string",
+        ));
+    };
+
+    let path = js_string.to_string()?;
+
+    match env::set_current_dir(&path) {
+        Ok(()) => Ok(()),
+        Err(error) => Err(create_chdir_error(&ctx, error, &path)?.throw()),
+    }
 }
 
 fn hr_time_big_int(ctx: Ctx<'_>) -> Result<BigInt<'_>> {
@@ -229,8 +282,18 @@ pub fn init(ctx: &Ctx<'_>) -> Result<()> {
 
     process.set("env", env_proxy)?;
     process.set("cwd", Func::from(cwd))?;
+    process.set("chdir", Func::from(chdir))?;
     process.set("argv0", args.clone().first().cloned().unwrap_or_default())?;
+    // Raster-legacy name kept for compatibility (ordinary writable data property).
+    // Prefer process.pid for Node compatibility.
     process.set("id", std::process::id())?;
+    // Node-standard pid: enumerable, non-writable, configurable.
+    process.prop(
+        "pid",
+        Property::from(std::process::id())
+            .enumerable()
+            .configurable(),
+    )?;
     process.set("argv", args)?;
     process.set("platform", PLATFORM)?;
     process.set("arch", ARCH)?;

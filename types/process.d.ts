@@ -56,6 +56,24 @@ declare module "process" {
      */
     cwd(): string;
     /**
+     * The `process.chdir()` method changes the current working directory of the
+     * raster_runtime process or throws an exception if doing so fails (for instance, if
+     * the specified `directory` does not exist).
+     *
+     * ```js
+     * import { chdir, cwd } from 'process';
+     *
+     * console.log(`Starting directory: ${cwd()}`);
+     * try {
+     *   chdir('/tmp');
+     *   console.log(`New directory: ${cwd()}`);
+     * } catch (err) {
+     *   console.error(`chdir: ${err}`);
+     * }
+     * ```
+     */
+    chdir(directory: string): void;
+    /**
      * The `process.argv0` property stores a read-only copy of the original value of`argv[0]` passed when raster_runtime starts.
      *
      * ```console
@@ -67,7 +85,15 @@ declare module "process" {
      */
     argv0: string;
     /**
-     * Returns the OS-assigned process identifier associated with this process.
+     * The `process.pid` property returns the PID of the process.
+     */
+    readonly pid: number;
+    /**
+     * Raster-legacy PID property, initialized to the same value as {@link Process.pid}.
+     * It remains a normal writable data property for backward compatibility and is
+     * **not** a live alias of `pid` (later writes to `id` do not change `pid`).
+     * Prefer `pid`.
+     * @deprecated Use {@link Process.pid} instead.
      */
     id: number;
     /**
@@ -502,4 +528,32 @@ declare module "process" {
      */
     env: ProcessEnv;
   }
+
+  export function cwd(): string;
+  export function chdir(directory: string): void;
+  export const pid: number;
+  /**
+   * @deprecated Use {@link pid} instead. Legacy writable PID value (not a live alias).
+   */
+  export const id: number;
+  export const argv0: string;
+  export const argv: string[];
+  export const platform: Platform;
+  export const arch: Architecture;
+  export const version: string;
+  export const versions: ProcessVersions;
+  export const release: ProcessRelease;
+  export const env: ProcessEnv;
+  export function exit(code?: number | string | null | undefined): never;
+  export function kill(pid: number, signal?: QuickJS.Signals | number): void;
+  export let exitCode: number | null;
+  export const hrtime: HRTime;
+  const process: Process;
+  export default process;
+}
+
+declare module "node:process" {
+  export * from "process";
+  import process from "process";
+  export default process;
 }
