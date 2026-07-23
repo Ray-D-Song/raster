@@ -518,6 +518,8 @@ Process is an EventEmitter. Explicit `process.exit(code)` emits `"exit"` synchro
 
 [cwd](https://nodejs.org/api/process.html#processcwd)
 
+[chdir](https://nodejs.org/api/process.html#processchdirdirectory)
+
 [env](https://nodejs.org/api/process.html#processenv)
 
 [exit](https://nodejs.org/api/process.html#processexitcode)
@@ -534,7 +536,9 @@ Process is an EventEmitter. Explicit `process.exit(code)` emits `"exit"` synchro
 
 [hrtime](https://nodejs.org/api/process.html#processhrtime)
 
-[id](https://nodejs.org/api/process.html#processpid)
+[pid](https://nodejs.org/api/process.html#processpid)
+
+[id](https://nodejs.org/api/process.html#processpid) (deprecated Raster-legacy PID property; initialized to the same value as `process.pid`, remains writable for backward compatibility and is not a live alias of `pid`)
 
 [kill](https://nodejs.org/api/process.html#processkillpid-signal)
 
@@ -555,6 +559,34 @@ Process is an EventEmitter. Explicit `process.exit(code)` emits `"exit"` synchro
 [version](https://nodejs.org/api/process.html#processversion)
 
 [versions](https://nodejs.org/api/process.html#processversions)
+
+## constants
+
+Legacy Node.js `constants` module. Flat object with fs access-mode bits only:
+
+- `F_OK` (0)
+- `R_OK` (4)
+- `W_OK` (2)
+- `X_OK` (1)
+
+Values match `fs.constants`. The export object is frozen. Open flags (`O_*`),
+errno, crypto, and signal constants are not exposed.
+
+## v8
+
+Node-compatible subset of the `v8` module. Statistics are derived from **QuickJS**
+`JS_ComputeMemoryUsage`, not Google V8. Heap space name is always `"quickjs"`.
+When QuickJS has no malloc limit (`malloc_limit === 0`), `heap_size_limit` is
+`Number.MAX_SAFE_INTEGER`. `setFlagsFromString` is a compatibility no-op (does not
+configure QuickJS). Serialization, snapshots, and profilers are not implemented.
+
+[getHeapStatistics](https://nodejs.org/api/v8.html#v8getheapstatistics)
+
+[getHeapSpaceStatistics](https://nodejs.org/api/v8.html#v8getheapspacestatistics)
+
+[getHeapCodeStatistics](https://nodejs.org/api/v8.html#v8getheapcodestatistics)
+
+[setFlagsFromString](https://nodejs.org/api/v8.html#v8setflagsfromstringflags) (no-op)
 
 ## querystring
 
