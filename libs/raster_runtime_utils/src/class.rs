@@ -7,7 +7,7 @@ use rquickjs::{
 
 use super::{object::ObjectExt, result::OptionExt};
 
-pub static CUSTOM_INSPECT_SYMBOL_DESCRIPTION: &str = "raster_runtime.inspect.custom";
+pub static CUSTOM_INSPECT_SYMBOL_DESCRIPTION: &str = "nodejs.util.inspect.custom";
 
 pub trait IteratorDef<'js>
 where

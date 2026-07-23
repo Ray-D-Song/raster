@@ -7,7 +7,35 @@ it("node:util should be the same as util", () => {
   expect(defaultImport).toStrictEqual(legacyImport);
 });
 
-const { inherits, promisify } = defaultImport;
+const { inherits, promisify, inspect, formatWithOptions, debuglog, toUSVString, types } =
+  defaultImport;
+
+it("format does not append trailing newlines", () => {
+  expect(defaultImport.format("a", "b")).toBe("a b");
+  expect(defaultImport.format("a", "b")).not.toContain("\n");
+});
+
+it("exposes inspect.custom and toUSVString", () => {
+  expect(inspect.custom).toBe(Symbol.for("nodejs.util.inspect.custom"));
+  expect(toUSVString("a\uD800b")).toBe("a\uFFFDb");
+  expect(toUSVString("a\uD800\uDC00b")).toBe("a\uD800\uDC00b");
+});
+
+it("supports debuglog and util.types predicates", () => {
+  const logger = debuglog("TEST");
+  expect(typeof logger).toBe("function");
+  expect(typeof logger.enabled).toBe("boolean");
+  expect(typeof defaultImport.debug).toBe("function");
+
+  expect(types.isSharedArrayBuffer()).toBe(false);
+  expect(types.isUint8Array(new Uint8Array())).toBe(true);
+  expect(types.isDataView(new DataView(new ArrayBuffer(1)))).toBe(true);
+});
+
+it("formatWithOptions formats multiple values", () => {
+  expect(formatWithOptions({}, "a", "b")).toBe("a b");
+  expect(formatWithOptions({ colors: true }, "%s:%s", "foo")).toBe("foo:%s");
+});
 
 describe("inherits", () => {
   it("should be inheritable parent classes", () => {

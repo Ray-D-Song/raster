@@ -54,6 +54,31 @@ declare module "util" {
    * @param format A `printf`-like format string.
    */
   export function format(format?: any, ...param: any[]): string;
+  export interface InspectOptions {
+    colors?: boolean | undefined;
+  }
+  export function inspect(object: any): string;
+  export namespace inspect {
+    const custom: unique symbol;
+  }
+  export function formatWithOptions(
+    inspectOptions: InspectOptions,
+    format?: any,
+    ...param: any[]
+  ): string;
+  export function debuglog(section: string): (...args: any[]) => void;
+  export const debug: typeof debuglog;
+  export function toUSVString(value: unknown): string;
+  export namespace types {
+    function isProxy(value: unknown): boolean;
+    function isPromise(value: unknown): boolean;
+    function isArrayBuffer(value: unknown): boolean;
+    function isAnyArrayBuffer(value: unknown): boolean;
+    function isSharedArrayBuffer(value: unknown): boolean;
+    function isTypedArray(value: unknown): boolean;
+    function isDataView(value: unknown): boolean;
+    function isUint8Array(value: unknown): boolean;
+  }
   /**
    * Usage of `util.inherits()` is discouraged. Please use the ES6 `class` and `extends` keywords to get language level inheritance support. Also note
    * that the two styles are [semantically incompatible](https://github.com/nodejs/node/issues/4179).
