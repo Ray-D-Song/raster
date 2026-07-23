@@ -1,5 +1,6 @@
 export default {
+  output: "standalone",
   turbopack: {
-    root: process.cwd()
-  }
+    root: process.cwd(),
+  },
 };

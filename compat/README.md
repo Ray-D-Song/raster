@@ -1,14 +1,33 @@
 # Compatibility fixtures
 
-Each fixture installs its own locked dependencies, then asks Raster to run the upstream tool's JavaScript CLI. The build output is inspected but never executed.
+Each fixture installs its own locked dependencies. **Vite+** still runs the upstream CLI under Raster and inspects build output without executing it. **Next** uses system Node to produce a standalone deployment, then runs that server under Raster and asserts real HTTP responses.
 
-| Case | Versions | Raster command | Status |
-| --- | --- | --- | --- |
-| Next App Router build | Next 16.2.10, React 19.2.5 | `next build` | Observing: past require-hook / `util.promisify` / `dns/promises` / Node semver / `process.on` / `fs.existsSync` / CommonJS relative `import()` / CommonJS `require("stream")` / embedded `vm` / `WebAssembly is not defined` (Raster now installs a core `WebAssembly` per QuickJS realm, backed by `wasmi` 1.1.0; Undici's `llhttp` SIMD/base Wasm module compiles, links, and instantiates) / Undici `AsyncResource` inheritance and `runInAsyncScope` (Raster now exports a JS `AsyncResource` from `async_hooks` / `node:async_hooks`). Regenerated `compat/next/compat.log`'s current first error is `Cannot find module 'util/types'`. SWC/native bindings and `.next` build success remain out of scope. |
-| Vite+ React library build | Vite+ 0.2.5, React 19.2.5 | `vp build` | Observing: local baseline stops while resolving Vite+'s native binding |
+| Case                               | Versions                   | Flow                                                                                                                                   | Status                                                                                                                                                                                                                                               |
+| ---------------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Next App Router standalone runtime | Next 16.2.10, React 19.2.5 | Node `next build` (`output: "standalone"`) → Raster runs `.next/standalone/server.js` → HTTP checks on `/`, `/api/health`, `/posts/42` | Observing: measures Raster's ability to run a production Next standalone server (not the Next build toolchain). CI uses Node 22.18.0; local runs use the currently active system Node (`process.execPath`). Only the server process is under Raster. |
+| Vite+ React library build          | Vite+ 0.2.5, React 19.2.5  | Raster runs `vp build`                                                                                                                 | Observing: local baseline stops while resolving Vite+'s native binding                                                                                                                                                                               |
 
 Run `make compat-next` or `make compat-vite-plus` after building Raster. Upgrade a fixture only in a dedicated change that updates its exact dependency versions and lockfile.
 
-Failures are compatibility results. In particular, the Vite+ CLI wrapper and all of its Node API and native-addon requirements run unchanged under Raster. The workflow is non-blocking until a CI baseline is recorded, then should become a required check.
+## Next (standalone runtime)
 
-When a Raster child exits `0` but produces no build output directory, `compat/run.mjs` fails with an explicit diagnosis (see `compat/*/compat.log`).
+1. Delete any previous `compat/next/.next`.
+2. Build with **system Node** (`process.execPath`), not Raster: `node node_modules/next/dist/bin/next build` (120s wall-clock timeout).
+3. Require `.next/standalone/server.js`.
+4. Start that entry with **Raster** (`HOSTNAME=127.0.0.1`, dynamic `PORT`, `NODE_ENV=production`, `NEXT_TELEMETRY_DISABLED=1`, cwd = `.next/standalone`).
+5. Poll `GET /api/health` for up to 30s (do not rely on console "Ready" text).
+6. Assert (each request aborts after 5s):
+   - `GET /` → 200, body contains `Raster Next compatibility fixture`
+   - `GET /api/health` → 200, JSON `{ "status": "ok" }`
+   - `GET /posts/42` → 200, body contains `Post 42`
+7. Always stop the server (SIGTERM, then SIGKILL after 5s).
+
+Diagnostics land in `compat/next/compat.log` (Node build command/output, Raster start command/output, readiness last error, each HTTP check). Static assets (`.next/static`, CSS, images) are **not** copied or verified in this fixture; coverage is HTML SSR, API, and dynamic route only.
+
+A green Next result means **Node-built standalone + Raster runtime HTTP**, not “Raster can execute `next build`”.
+
+## Failures and CI
+
+Failures are compatibility results. The workflow is non-blocking (`continue-on-error: true`) until a CI baseline is recorded, then should become a required check.
+
+When a child exits `0` but produces no expected artifact (or HTTP checks fail), `compat/run.mjs` fails with an explicit diagnosis (see `compat/*/compat.log`). On CI failure, `compat.log` and `.next` / `dist` are uploaded as artifacts.
