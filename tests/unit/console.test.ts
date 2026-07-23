@@ -75,6 +75,36 @@ it("should log using console object", () => {
   consoleObj.trace("trace");
 });
 
+it("supports bound console timer and count methods", () => {
+  expect(typeof console.count).toBe("function");
+  expect(typeof console.time).toBe("function");
+  expect(typeof console.timeLog).toBe("function");
+  expect(typeof console.timeEnd).toBe("function");
+  expect(typeof console.dir).toBe("function");
+
+  const count = console.count.bind(console);
+  const time = console.time.bind(console);
+  const timeLog = console.timeLog.bind(console);
+  const timeEnd = console.timeEnd.bind(console);
+  const dir = console.dir.bind(console);
+
+  expect(() => count("test-label")).not.toThrow();
+  expect(() => time("timer-label")).not.toThrow();
+  expect(() => timeLog("timer-label")).not.toThrow();
+  expect(() => timeEnd("timer-label")).not.toThrow();
+  const circular: { self?: unknown } = {};
+  circular.self = circular;
+  expect(() => dir(circular)).not.toThrow();
+});
+
+it("coerces non-string labels for count and time methods", () => {
+  expect(() => console.count(1)).not.toThrow();
+  expect(() => console.time(1)).not.toThrow();
+  expect(() => console.timeLog(1)).not.toThrow();
+  expect(() => console.timeEnd(1)).not.toThrow();
+  expect(() => console.countReset(1)).not.toThrow();
+});
+
 it("should log complex object", () => {
   let date = new Date();
 
