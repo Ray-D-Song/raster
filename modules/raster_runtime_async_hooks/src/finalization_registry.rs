@@ -1,12 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
-use std::cell::RefCell;
-
-use raster_runtime_utils::result::ResultExt;
 use rquickjs::{prelude::Func, Ctx, Result, Value};
 use tracing::trace;
 
-use super::{remove_id_map, update_current_id, AsyncHookState};
+use super::{dispatch_destroy_hooks, remove_id_map};
 
 pub(crate) fn init_finalization_registry(ctx: &Ctx<'_>) -> Result<()> {
     let global = ctx.globals();
@@ -35,30 +32,16 @@ pub(crate) fn init_finalization_registry(ctx: &Ctx<'_>) -> Result<()> {
 }
 
 fn invoke_finalization_hook<'js>(ctx: Ctx<'js>, uid: Value<'js>) -> Result<()> {
-    let bind_state = ctx.userdata::<RefCell<AsyncHookState>>().or_throw(&ctx)?;
-    let state = bind_state.borrow();
-    if state.hooks.is_empty() {
-        return Ok(());
-    }
-
     let uid = uid.as_number().unwrap() as usize;
 
-    let current_id = remove_id_map(&ctx, uid)?;
-    if current_id.0 == 0 {
+    let resource_id = remove_id_map(&ctx, uid)?;
+    if resource_id.0 == 0 {
         return Ok(());
     }
 
-    update_current_id(&ctx, current_id)?;
-    trace!("Destroy[{}](async_id, trigger_id): {:?}", uid, current_id);
+    // Destroy must not change current_id.
+    trace!("Destroy[{}](async_id, trigger_id): {:?}", uid, resource_id);
 
-    for hook in &state.hooks {
-        if *hook.enabled.as_ref().borrow() {
-            if let Some(func) = &hook.destroy {
-                let _ = func
-                    .call::<_, ()>((current_id.0,))
-                    .or_else(|_| func.call::<_, ()>(()));
-            }
-        }
-    }
+    dispatch_destroy_hooks(&ctx, resource_id.0)?;
     Ok(())
 }

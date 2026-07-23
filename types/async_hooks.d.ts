@@ -125,8 +125,14 @@ declare module "async_hooks" {
      * @param asyncId A unique ID for the async resource
      * @param type The type of the async resource
      * @param triggerAsyncId The unique ID of the async resource in whose execution context this async resource was created
+     * @param resource Reference to the resource representing the async operation, needs to be released during destroy
      */
-    init?(asyncId: number, type: string, triggerAsyncId: number): void;
+    init?(
+      asyncId: number,
+      type: string,
+      triggerAsyncId: number,
+      resource: object
+    ): void;
     /**
      * When an asynchronous operation is initiated or completes a callback is called to notify the user.
      * The before callback is called just before said callback is executed.
@@ -204,7 +210,104 @@ declare module "async_hooks" {
    * @return Instance used for disabling and enabling hooks
    */
   function createHook(callbacks: HookCallbacks): AsyncHook;
+
+  interface AsyncResourceOptions {
+    /**
+     * The ID of the execution context that created this async event.
+     * @default executionAsyncId()
+     */
+    triggerAsyncId?: number;
+    /**
+     * Disables automatic `emitDestroy` when the object is garbage collected.
+     * This usually does not need to be set (even if `emitDestroy` is called
+     * manually), unless the resource's `asyncId` is retrieved and the
+     * sensitive API's `emitDestroy` is called with it.
+     * @default false
+     */
+    requireManualDestroy?: boolean;
+  }
+
+  /**
+   * The class `AsyncResource` is designed to be extended by the embedder's async
+   * resources. Using this, users can easily trigger the lifetime events of their
+   * own resources.
+   */
+  class AsyncResource {
+    /**
+     * AsyncResource() is meant to be extended. Instantiating a
+     * new AsyncResource() also triggers init. If triggerAsyncId is omitted then
+     * async_hook.executionAsyncId() is used.
+     * @param type The type of async event.
+     * @param triggerAsyncId | AsyncResourceOptions The ID of the execution context
+     *   that created this async event (default: `executionAsyncId()`), or an
+     *   AsyncResourceOptions object.
+     */
+    constructor(type: string, options?: AsyncResourceOptions);
+
+    /**
+     * Call the provided function with the provided arguments in the execution context
+     * of the async resource. This will establish the context, trigger the AsyncHooks
+     * before callbacks, call the function, trigger the AsyncHooks after callbacks, and
+     * then restore the original execution context.
+     * @param fn The function to call in the execution context of this async resource.
+     * @param thisArg The receiver to be used for the function call.
+     * @param args Optional arguments to pass to the function.
+     */
+    runInAsyncScope<This, Args extends unknown[], Result>(
+      fn: (this: This, ...args: Args) => Result,
+      thisArg?: This,
+      ...args: Args
+    ): Result;
+
+    /**
+     * Call all `destroy` hooks for this resource and return `this`.
+     *
+     * Explicit `emitDestroy()` may be called more than once; each call dispatches
+     * destroy hooks again (compatible with Node 24).
+     *
+     * When constructed with `requireManualDestroy: false` (the default) and
+     * destroy hooks are enabled, a `FinalizationRegistry` entry may also dispatch
+     * destroy when the instance is garbage-collected. After an explicit
+     * `emitDestroy()`, that automatic GC path is suppressed so destroy is not
+     * double-fired from finalization.
+     *
+     * @return A reference to `asyncResource`.
+     */
+    emitDestroy(): this;
+
+    /**
+     * @return The unique `asyncId` assigned to the resource.
+     */
+    asyncId(): number;
+
+    /**
+     * @return The same `triggerAsyncId` that is passed to the `AsyncResource` constructor.
+     */
+    triggerAsyncId(): number;
+
+    /**
+     * Binds the given function to execute to this `AsyncResource`'s scope.
+     * @param fn The function to bind to the current `AsyncResource`.
+     * @param thisArg Optional receiver to be used for the function call.
+     */
+    bind<Func extends (...args: any[]) => any>(
+      fn: Func,
+      thisArg?: ThisParameterType<Func>
+    ): OmitThisParameter<Func>;
+
+    /**
+     * Binds the given function to execute to a new `AsyncResource`'s scope.
+     * @param fn The function to bind to a new `AsyncResource`.
+     * @param type An optional name to associate with the underlying `AsyncResource`.
+     * @param thisArg Optional receiver to be used for the function call.
+     */
+    static bind<Func extends (...args: any[]) => any>(
+      fn: Func,
+      type?: string,
+      thisArg?: ThisParameterType<Func>
+    ): OmitThisParameter<Func>;
+  }
 }
-declare module "async_hooks" {
+declare module "node:async_hooks" {
   export * from "async_hooks";
 }

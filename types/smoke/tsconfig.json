@@ -18,7 +18,9 @@
       "buffer": ["./buffer.d.ts"],
       "events": ["./events.d.ts"],
       "url": ["./url.d.ts"],
-      "fs/promises": ["./fs/promises.d.ts"]
+      "fs/promises": ["./fs/promises.d.ts"],
+      "async_hooks": ["./async_hooks.d.ts"],
+      "node:async_hooks": ["./async_hooks.d.ts"]
     }
   },
   "include": ["./**/*.ts"]

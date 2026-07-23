@@ -21,6 +21,8 @@
 
 [triggerAsyncId](https://nodejs.org/api/async_hooks.html#async_hookstriggerasyncid)
 
+[AsyncResource.bind](https://nodejs.org/api/async_context.html#static-method-asyncresourcebindfn-type-thisarg)
+
 ### Class: AsyncHook
 
 [enable](https://nodejs.org/api/async_hooks.html#asynchookenable)
@@ -38,6 +40,20 @@
 [destroy](https://nodejs.org/api/async_hooks.html#destroyasyncid)
 
 [promiseResolve](https://nodejs.org/api/async_hooks.html#promiseresolveasyncid)
+
+### Class: AsyncResource
+
+[constructor](https://nodejs.org/api/async_context.html#new-asyncresourcetype-options)
+
+[runInAsyncScope](https://nodejs.org/api/async_context.html#asyncresourceruninasyncscopefn-thisarg-args)
+
+[emitDestroy](https://nodejs.org/api/async_context.html#asyncresourceemitdestroy)
+
+[asyncId](https://nodejs.org/api/async_context.html#asyncresourceasyncid)
+
+[triggerAsyncId](https://nodejs.org/api/async_context.html#asyncresourcetriggerasyncid)
+
+[bind](https://nodejs.org/api/async_context.html#asyncresourcebindfn-thisarg)
 
 ## buffer
 
