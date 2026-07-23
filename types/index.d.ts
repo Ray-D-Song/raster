@@ -30,4 +30,5 @@
 /// <reference types="./tty.d.ts" />
 /// <reference types="./url.d.ts" />
 /// <reference types="./util.d.ts" />
+/// <reference types="./vm.d.ts" />
 /// <reference types="./zlib.d.ts" />

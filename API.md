@@ -573,6 +573,18 @@ _Also available globally_
 
 [TextEncoder](https://nodejs.org/api/util.html#class-utiltextdecoder)
 
+## vm
+
+> [!IMPORTANT]
+> Raster provides a minimal `vm.runInNewContext` implementation backed by an isolated QuickJS context in the same runtime. This is **not** a security boundary.
+
+[runInNewContext](https://nodejs.org/api/vm.html#vmruninnewcontextcode-contextobject-options)
+
+> [!NOTE]
+> Only `filename` is supported in the options object. Other Node options such as `timeout`, `breakOnSigint`, `contextCodeGeneration`, `microtaskMode`, `offset`, and `cachedData` throw `Error("vm.runInNewContext option '<name>' is not supported")`.
+>
+> Sandbox synchronization copies own enumerable string-keyed properties only. Non-enumerable properties, symbol properties, and full property descriptor forwarding are not supported.
+
 ## zlib
 
 ### Convenience methods

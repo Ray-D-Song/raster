@@ -65,6 +65,7 @@ base = [
   "tty",
   "url",
   "util",
+  "vm",
   "zlib",
 ]
 
@@ -116,6 +117,7 @@ tls = ["raster_runtime_tls"]
 tty = ["raster_runtime_tty"]
 url = ["raster_runtime_url"]
 util = ["raster_runtime_util"]
+vm = ["raster_runtime_vm"]
 zlib = ["raster_runtime_zlib"]
 
 [dependencies]
@@ -160,6 +162,7 @@ raster_runtime_tty = { version = "0.8.1-beta", path = "../modules/raster_runtime
 raster_runtime_url = { version = "0.8.1-beta", path = "../modules/raster_runtime_url", optional = true }
 openssl = { version = "0.10", optional = true }
 raster_runtime_util = { version = "0.8.1-beta", path = "../modules/raster_runtime_util", optional = true }
+raster_runtime_vm = { version = "0.8.1-beta", path = "../modules/raster_runtime_vm", optional = true }
 raster_runtime_zlib = { version = "0.8.1-beta", path = "../modules/raster_runtime_zlib", optional = true }
 
 [dev-dependencies]

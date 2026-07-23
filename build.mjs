@@ -95,6 +95,8 @@ const ES_BUILD_OPTIONS = {
     "node:url",
     "util",
     "node:util",
+    "vm",
+    "node:vm",
     "zlib",
     "node:zlib",
     "raster_runtime:hex",

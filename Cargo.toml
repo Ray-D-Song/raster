@@ -39,6 +39,7 @@ members = [
   "modules/raster_runtime_tty",
   "modules/raster_runtime_url",
   "modules/raster_runtime_util",
+  "modules/raster_runtime_vm",
   "modules/raster_runtime_zlib",
   "raster_runtime_modules",
   "raster_runtime_core",
