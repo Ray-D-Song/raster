@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 pub use raster_runtime_modules::console;
 pub use raster_runtime_modules::{
-    abort, assert, async_hooks, buffer, child_process, crypto, dns, events, exceptions,
+    abort, assert, async_hooks, buffer, child_process, constants, crypto, dns, events, exceptions,
     fetch, fs, https, intl, module, navigator, net, os, path, perf_hooks, process, stream_web,
     string_decoder, temporal, timers, tls, tty, url, util, v8, zlib,
 };

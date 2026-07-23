@@ -4,6 +4,7 @@
 /// <reference types="./buffer.d.ts" />
 /// <reference types="./child_process.d.ts" />
 /// <reference types="./console.d.ts" />
+/// <reference types="./constants.d.ts" />
 /// <reference types="./crypto.d.ts" />
 /// <reference types="./dgram.d.ts" />
 /// <reference types="./dns.d.ts" />

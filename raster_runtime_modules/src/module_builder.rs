@@ -79,6 +79,10 @@ impl Default for ModuleBuilder {
                 .with_global(crate::modules::console::init)
                 .with_module(crate::modules::console::ConsoleModule);
         }
+        #[cfg(feature = "constants")]
+        {
+            builder = builder.with_module(crate::modules::constants::ConstantsModule);
+        }
         #[cfg(feature = "crypto")]
         {
             builder = builder

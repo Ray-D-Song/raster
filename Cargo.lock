@@ -2342,6 +2342,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "raster_runtime_constants"
+version = "0.8.1-beta"
+dependencies = [
+ "raster_runtime_fs",
+ "raster_runtime_test",
+ "raster_runtime_utils",
+ "rquickjs",
+ "tokio",
+]
+
+[[package]]
 name = "raster_runtime_context"
 version = "0.8.1-beta"
 dependencies = [
@@ -2654,6 +2665,7 @@ dependencies = [
  "raster_runtime_buffer",
  "raster_runtime_child_process",
  "raster_runtime_console",
+ "raster_runtime_constants",
  "raster_runtime_crypto",
  "raster_runtime_dgram",
  "raster_runtime_diagnostics_channel",

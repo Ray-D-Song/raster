@@ -213,15 +213,20 @@ fn export_promises<'js>(ctx: &Ctx<'js>, exports: &Object<'js>) -> Result<()> {
     Ok(())
 }
 
-fn export_constants<'js>(ctx: &Ctx<'js>, exports: &Object<'js>) -> Result<()> {
+/// Create the shared fs access-mode constants object (`F_OK`/`R_OK`/`W_OK`/`X_OK`).
+///
+/// Single source of truth for both `fs.constants` and the legacy `constants` module.
+pub fn create_constants<'js>(ctx: &Ctx<'js>) -> Result<Object<'js>> {
     let constants = Object::new(ctx.clone())?;
     constants.set("F_OK", CONSTANT_F_OK)?;
     constants.set("R_OK", CONSTANT_R_OK)?;
     constants.set("W_OK", CONSTANT_W_OK)?;
     constants.set("X_OK", CONSTANT_X_OK)?;
+    Ok(constants)
+}
 
-    exports.set("constants", constants)?;
-
+fn export_constants<'js>(ctx: &Ctx<'js>, exports: &Object<'js>) -> Result<()> {
+    exports.set("constants", create_constants(ctx)?)?;
     Ok(())
 }
 

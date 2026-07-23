@@ -23,6 +23,8 @@ mod modules {
     pub use raster_runtime_child_process as child_process;
     #[cfg(feature = "console")]
     pub use raster_runtime_console as console;
+    #[cfg(feature = "constants")]
+    pub use raster_runtime_constants as constants;
     #[cfg(feature = "crypto")]
     pub use raster_runtime_crypto as crypto;
     #[cfg(feature = "dgram")]

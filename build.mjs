@@ -103,6 +103,8 @@ const ES_BUILD_OPTIONS = {
     "node:util",
     "v8",
     "node:v8",
+    "constants",
+    "node:constants",
     "vm",
     "node:vm",
     "zlib",

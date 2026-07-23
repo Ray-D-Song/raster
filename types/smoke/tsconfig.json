@@ -24,7 +24,9 @@
       "process": ["./process.d.ts"],
       "node:process": ["./process.d.ts"],
       "v8": ["./v8.d.ts"],
-      "node:v8": ["./v8.d.ts"]
+      "node:v8": ["./v8.d.ts"],
+      "constants": ["./constants.d.ts"],
+      "node:constants": ["./constants.d.ts"]
     }
   },
   "include": ["./**/*.ts"]

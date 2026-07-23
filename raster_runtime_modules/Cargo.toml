@@ -41,6 +41,7 @@ base = [
   "async-hooks",
   "buffer",
   "child-process",
+  "constants",
   "crypto",
   "dgram",
   "diagnostics-channel",
@@ -81,6 +82,7 @@ async-hooks = ["raster_runtime_async_hooks"]
 buffer = ["raster_runtime_buffer"]
 child-process = ["raster_runtime_child_process"]
 console = ["raster_runtime_console"]
+constants = ["dep:raster_runtime_constants", "fs"]
 crypto = ["raster_runtime_crypto"]
 dgram = ["raster_runtime_dgram"]
 diagnostics-channel = ["raster_runtime_diagnostics_channel"]
@@ -146,6 +148,7 @@ raster_runtime_async_hooks = { version = "0.8.1-beta", path = "../modules/raster
 raster_runtime_buffer = { version = "0.8.1-beta", path = "../modules/raster_runtime_buffer", optional = true }
 raster_runtime_child_process = { version = "0.8.1-beta", path = "../modules/raster_runtime_child_process", optional = true }
 raster_runtime_console = { version = "0.8.1-beta", path = "../modules/raster_runtime_console", optional = true }
+raster_runtime_constants = { version = "0.8.1-beta", path = "../modules/raster_runtime_constants", optional = true }
 raster_runtime_crypto = { version = "0.8.1-beta", path = "../modules/raster_runtime_crypto", default-features = false, optional = true }
 raster_runtime_dgram = { version = "0.8.1-beta", path = "../modules/raster_runtime_dgram", optional = true }
 raster_runtime_diagnostics_channel = { version = "0.8.1-beta", path = "../modules/raster_runtime_diagnostics_channel", optional = true }
