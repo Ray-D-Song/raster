@@ -1,13 +1,46 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
+use std::cell::Cell;
 use std::env;
 
 use once_cell::sync::Lazy;
 use raster_runtime_utils::{object::ObjectExt, provider::ProviderType};
-use rquickjs::{Ctx, Exception, Function, Result, Value};
+use rquickjs::{Ctx, Exception, Function, JsLifetime, Object, Result, Value};
 
+/// When `RASTER_RUNTIME_ASYNC_HOOKS=1`, public `createHook()` user callbacks run.
+/// Internal async context propagation (AsyncLocalStorage) does not require this.
 pub static HOOKING_MODE: Lazy<bool> =
     Lazy::new(|| env::var("RASTER_RUNTIME_ASYNC_HOOKS").as_deref() == Ok("1"));
+
+/// Per-context flag: true when internal consumers (ALS) exist or user hooks may run.
+/// Stored as userdata so promise/timer fast paths avoid string allocations.
+pub struct AsyncTrackingState {
+    pub active: Cell<bool>,
+}
+
+impl Default for AsyncTrackingState {
+    fn default() -> Self {
+        Self {
+            active: Cell::new(false),
+        }
+    }
+}
+
+unsafe impl<'js> JsLifetime<'js> for AsyncTrackingState {
+    type Changed<'to> = AsyncTrackingState;
+}
+
+pub fn is_async_tracking_active(ctx: &Ctx<'_>) -> bool {
+    ctx.userdata::<AsyncTrackingState>()
+        .map(|s| s.active.get())
+        .unwrap_or(false)
+}
+
+pub fn set_async_tracking_active(ctx: &Ctx<'_>, active: bool) {
+    if let Some(state) = ctx.userdata::<AsyncTrackingState>() {
+        state.active.set(active);
+    }
+}
 
 #[derive(PartialEq)]
 pub enum HookType {
@@ -16,13 +49,18 @@ pub enum HookType {
     After,
 }
 
+/// Dispatch async lifecycle events into the runtime dispatcher (when present).
+///
+/// Does **not** gate on `RASTER_RUNTIME_ASYNC_HOOKS`. Init is skipped when no
+/// consumers need tracking (cheap early exit). Before/After always reach the
+/// dispatcher so the execution stack can be balanced for already-mapped resources.
 pub fn invoke_async_hook(
     ctx: &Ctx<'_>,
     hook_type: HookType,
     provider_type: ProviderType,
     uid: usize,
 ) -> Result<()> {
-    if !HOOKING_MODE.to_owned() {
+    if hook_type == HookType::Init && !is_async_tracking_active(ctx) {
         return Ok(());
     }
 
@@ -69,19 +107,38 @@ pub fn invoke_async_hook(
     Ok(())
 }
 
+/// Register a GC finalizer that removes `uid` from the async id map once
+/// `target` is collected.
+///
+/// `expected_async_id`, when set, is carried through to the finalization
+/// callback so it can verify the id map entry for `uid` still belongs to the
+/// same async resource before deleting it. Without this check, a resource
+/// that is freed and whose finalizer is delayed (FinalizationRegistry
+/// callbacks are not synchronous with collection) can have its identity
+/// (a raw pointer) reused by a brand-new, unrelated resource; the stale
+/// finalizer would then delete the new resource's live mapping. High-churn
+/// callers (promises) must pass the assigned async id; low-churn callers
+/// (DNS/module loading) may pass `None` to keep the previous unconditional
+/// removal behavior.
 pub fn register_finalization_registry<'js>(
     ctx: &Ctx<'js>,
     target: Value<'js>,
     uid: usize,
+    expected_async_id: Option<u64>,
 ) -> Result<()> {
-    if !HOOKING_MODE.to_owned() {
+    if !is_async_tracking_active(ctx) {
         return Ok(());
     }
 
     if let Ok(register) =
         ctx.eval::<Function<'js>, &str>("globalThis.asyncFinalizationRegistry.register")
     {
-        let _ = register.call::<_, ()>((target, uid));
+        let held = Object::new(ctx.clone())?;
+        held.set("uid", uid)?;
+        if let Some(async_id) = expected_async_id {
+            held.set("asyncId", async_id)?;
+        }
+        let _ = register.call::<_, ()>((target, held));
     }
     Ok(())
 }

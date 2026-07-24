@@ -4,7 +4,7 @@ Each fixture installs its own locked dependencies. **Vite+** still runs the upst
 
 | Case                               | Versions                   | Flow                                                                                                                                   | Status                                                                                                                                                                                                                                               |
 | ---------------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Next App Router standalone runtime | Next 16.2.10, React 19.2.5 | Node `next build` (`output: "standalone"`) → Raster runs `.next/standalone/server.js` → HTTP checks on `/`, `/api/health`, `/posts/42` | Observing: Node standalone build succeeds; Raster loads past `process.chdir`, `process.pid`, `require("v8")`, and `require("constants")`. Current first error: `Cannot find module 'node:inspector'` (Next `console-dim.external.js` via `node-environment`). Isolated repro prints a clear stack; full `server.js` may exit 1 with empty stderr after Next patches `console`. CI uses Node 22.18.0; local runs use the currently active system Node (`process.execPath`). Only the server process is under Raster. |
+| Next App Router standalone runtime | Next 16.2.10, React 19.2.5 | Node `next build` (`output: "standalone"`) → Raster runs `.next/standalone/server.js` → HTTP checks on `/`, `/api/health`, `/posts/42`, concurrent `/api/als/:id` | Batch 2 target: inspector probe, timers/promises, AsyncLocalStorage propagation (no `RASTER_RUNTIME_ASYNC_HOOKS`), concurrent ALS isolation. Deferred: worker_threads, Inspector Session/protocol, timer ref/unref, timers/promises setInterval/scheduler. CI uses Node 22.18.0; local runs use system Node. Only the server process is under Raster. |
 | Vite+ React library build          | Vite+ 0.2.5, React 19.2.5  | Raster runs `vp build`                                                                                                                 | Observing: local baseline stops while resolving Vite+'s native binding                                                                                                                                                                               |
 
 Run `make compat-next` or `make compat-vite-plus` after building Raster. Upgrade a fixture only in a dedicated change that updates its exact dependency versions and lockfile.
@@ -20,9 +20,10 @@ Run `make compat-next` or `make compat-vite-plus` after building Raster. Upgrade
    - `GET /` → 200, body contains `Raster Next compatibility fixture`
    - `GET /api/health` → 200, JSON `{ "status": "ok" }`
    - `GET /posts/42` → 200, body contains `Post 42`
-7. Always stop the server (SIGTERM, then SIGKILL after 5s).
+   - Concurrent `GET /api/als/{id}` for multiple ids → each JSON `{ "id": "<same id>" }` (AsyncLocalStorage isolation across await + timers)
+7. Always stop the server (SIGTERM, then SIGKILL after 5s). Raster is started without `RASTER_RUNTIME_ASYNC_HOOKS`.
 
-Diagnostics land in `compat/next/compat.log` (Node build command/output, Raster start command/output, readiness last error, each HTTP check). Static assets (`.next/static`, CSS, images) are **not** copied or verified in this fixture; coverage is HTML SSR, API, and dynamic route only.
+Diagnostics land in `compat/next/compat.log` (Node build command/output, Raster start command/output, readiness last error, each HTTP check). Static assets (`.next/static`, CSS, images) are **not** copied or verified in this fixture; coverage is HTML SSR, API, dynamic route, and concurrent ALS isolation only.
 
 A green Next result means **Node-built standalone + Raster runtime HTTP**, not “Raster can execute `next build`”.
 

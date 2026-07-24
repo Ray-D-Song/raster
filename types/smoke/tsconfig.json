@@ -26,7 +26,13 @@
       "v8": ["./v8.d.ts"],
       "node:v8": ["./v8.d.ts"],
       "constants": ["./constants.d.ts"],
-      "node:constants": ["./constants.d.ts"]
+      "node:constants": ["./constants.d.ts"],
+      "inspector": ["./inspector.d.ts"],
+      "node:inspector": ["./inspector.d.ts"],
+      "timers": ["./timers.d.ts"],
+      "node:timers": ["./timers.d.ts"],
+      "timers/promises": ["./timers/promises.d.ts"],
+      "node:timers/promises": ["./timers/promises.d.ts"]
     }
   },
   "include": ["./**/*.ts"]

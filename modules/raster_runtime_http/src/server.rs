@@ -66,6 +66,40 @@ fn validate_header_value(ctx: Ctx<'_>, _name: String, value: String) -> Result<(
     Ok(())
 }
 
+/// Coerce Node-style header values into a list of strings (arrays expand).
+fn header_value_to_list<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> Result<Vec<String>> {
+    if value.is_undefined() || value.is_null() {
+        return Ok(vec![String::new()]);
+    }
+    if let Some(s) = value.as_string() {
+        return Ok(vec![s.to_string()?]);
+    }
+    if let Some(n) = value.as_number() {
+        // Match Node: numbers are stringified without scientific notation for integers.
+        if n.fract() == 0.0 && n.abs() < 1e15 {
+            return Ok(vec![format!("{}", n as i64)]);
+        }
+        return Ok(vec![n.to_string()]);
+    }
+    if let Some(b) = value.as_bool() {
+        return Ok(vec![if b { "true" } else { "false" }.into()]);
+    }
+    if let Some(arr) = value.as_array() {
+        let mut parts = Vec::new();
+        for item in arr.iter::<Value>() {
+            let item = item?;
+            if item.is_undefined() || item.is_null() {
+                continue;
+            }
+            parts.extend(header_value_to_list(ctx, item)?);
+        }
+        return Ok(parts);
+    }
+    // Fallback: JS ToString
+    let s: String = ctx.eval::<Function, _>("String")?.call((value,))?;
+    Ok(vec![s])
+}
+
 fn create_server<'js>(ctx: Ctx<'js>, args: Rest<Value<'js>>) -> Result<Class<'js, Server<'js>>> {
     let mut server_options: Option<Object<'js>> = None;
     for value in &args.0 {
@@ -182,9 +216,18 @@ impl<'js> IncomingMessage<'js> {
     fn method(&self) -> String {
         self.method.clone()
     }
+    #[qjs(set, rename = "method")]
+    fn set_method(&mut self, value: String) {
+        self.method = value;
+    }
     #[qjs(get, enumerable)]
     fn url(&self) -> String {
         self.url.clone()
+    }
+    /// Node allows rewriting `req.url` during routing/middleware.
+    #[qjs(set, rename = "url")]
+    fn set_url(&mut self, value: String) {
+        self.url = value;
     }
     #[qjs(get, enumerable)]
     fn headers(&self) -> Object<'js> {
@@ -236,8 +279,17 @@ pub struct ServerResponse<'js> {
     emitter: EventEmitter<'js>,
     status_code: u16,
     status_message: Option<String>,
-    headers: HashMap<String, String>,
+    /// Header values as lists so `appendHeader` can emit multiple fields
+    /// (Node joins most headers with `, ` and repeats `set-cookie`).
+    headers: HashMap<String, Vec<String>>,
     headers_sent: bool,
+    /// Mirrors Node `res.writableFinished` — true after `end()` completes.
+    writable_finished: bool,
+    /// Mirrors Node `res.destroyed`.
+    destroyed: bool,
+    /// Node OutgoingMessage internal: truthy once headers have been written.
+    /// Compression middleware checks `if (!this._header) this._implicitHeader()`.
+    header_sent_flag: bool,
     tx: Option<oneshot::Sender<HyperResponse<BoxBody<Bytes, Infallible>>>>,
     body_tx: Option<mpsc::UnboundedSender<ResponseFrame>>,
     trailers: Option<HeaderMap>,
@@ -266,8 +318,10 @@ impl<'js> ServerResponse<'js> {
                     builder = builder.extension(message);
                 }
             }
-            for (name, value) in &self.headers {
-                builder = builder.header(name, value);
+            for (name, values) in &self.headers {
+                for value in values {
+                    builder = builder.header(name.as_str(), value.as_str());
+                }
             }
             let body = StreamBody::new(UnboundedReceiverStream::new(body_rx).map(|frame| {
                 Ok::<_, Infallible>(match frame {
@@ -282,6 +336,7 @@ impl<'js> ServerResponse<'js> {
             let _ = tx.send(response);
             self.body_tx = Some(body_tx);
             self.headers_sent = true;
+            self.header_sent_flag = true;
         }
     }
     fn finish(&mut self) {
@@ -290,6 +345,7 @@ impl<'js> ServerResponse<'js> {
             let _ = tx.send(ResponseFrame::Trailers(trailers));
         }
         self.body_tx.take();
+        self.writable_finished = true;
     }
 }
 #[rquickjs::methods(rename_all = "camelCase")]
@@ -306,6 +362,23 @@ impl<'js> ServerResponse<'js> {
     fn headers_sent(&self) -> bool {
         self.headers_sent
     }
+    /// Node OutgoingMessage internal flag (used by `compression` and similar).
+    #[qjs(get, rename = "_header")]
+    fn header_flag(&self) -> Option<bool> {
+        if self.header_sent_flag {
+            Some(true)
+        } else {
+            None
+        }
+    }
+    /// Node OutgoingMessage internal — send headers if not already sent.
+    #[qjs(rename = "_implicitHeader")]
+    pub fn implicit_header(this: This<Class<'js, Self>>) {
+        let mut res = this.borrow_mut();
+        if !res.headers_sent {
+            res.start();
+        }
+    }
     #[qjs(get, enumerable)]
     fn status_message(&self) -> String {
         self.status_message.clone().unwrap_or_else(|| {
@@ -321,24 +394,63 @@ impl<'js> ServerResponse<'js> {
             self.status_message = Some(value);
         }
     }
-    pub fn set_header(&mut self, ctx: Ctx<'js>, name: String, value: String) -> Result<()> {
+    /// Node `res.setHeader(name, value)` accepts string, number, or string[].
+    pub fn set_header(&mut self, ctx: Ctx<'js>, name: String, value: Value<'js>) -> Result<()> {
         validate_header_name(ctx.clone(), name.clone())?;
-        validate_header_value(ctx, name.clone(), value.clone())?;
+        let values = header_value_to_list(&ctx, value)?;
+        for v in &values {
+            validate_header_value(ctx.clone(), name.clone(), v.clone())?;
+        }
         if !self.headers_sent {
-            self.headers.insert(name.to_ascii_lowercase(), value);
+            self.headers
+                .insert(name.to_ascii_lowercase(), values);
+        }
+        Ok(())
+    }
+    /// Node `res.appendHeader(name, value)` — adds without replacing prior values.
+    pub fn append_header(&mut self, ctx: Ctx<'js>, name: String, value: Value<'js>) -> Result<()> {
+        validate_header_name(ctx.clone(), name.clone())?;
+        let mut values = header_value_to_list(&ctx, value)?;
+        for v in &values {
+            validate_header_value(ctx.clone(), name.clone(), v.clone())?;
+        }
+        if !self.headers_sent {
+            let key = name.to_ascii_lowercase();
+            self.headers.entry(key).or_default().append(&mut values);
         }
         Ok(())
     }
     pub fn get_header(&self, name: String) -> Option<String> {
-        self.headers.get(&name.to_ascii_lowercase()).cloned()
+        self.headers
+            .get(&name.to_ascii_lowercase())
+            .map(|values| {
+                if name.eq_ignore_ascii_case("set-cookie") {
+                    // Node returns the first set-cookie string from getHeader for
+                    // historical reasons when a single value exists; multi returns
+                    // joined — keep simple join for non-array consumers.
+                    values.join(", ")
+                } else {
+                    values.join(", ")
+                }
+            })
     }
     pub fn has_header(&self, name: String) -> bool {
         self.headers.contains_key(&name.to_ascii_lowercase())
     }
     pub fn get_headers(&self, ctx: Ctx<'js>) -> Result<Object<'js>> {
-        let result = Object::new(ctx)?;
-        for (name, value) in &self.headers {
-            result.set(name, value.clone())?;
+        let result = Object::new(ctx.clone())?;
+        for (name, values) in &self.headers {
+            if name == "set-cookie" {
+                let arr = rquickjs::Array::new(ctx.clone())?;
+                for (i, v) in values.iter().enumerate() {
+                    arr.set(i, v.clone())?;
+                }
+                result.set(name, arr)?;
+            } else if values.len() == 1 {
+                result.set(name, values[0].clone())?;
+            } else {
+                result.set(name, values.join(", "))?;
+            }
         }
         Ok(result)
     }
@@ -355,16 +467,60 @@ impl<'js> ServerResponse<'js> {
             .is_some_and(|tx| tx.send(ResponseFrame::Data(bytes)).is_ok()))
     }
     pub fn end(this: This<Class<'js, Self>>, ctx: Ctx<'js>, value: Opt<Value<'js>>) -> Result<()> {
-        let mut res = this.borrow_mut();
-        res.start();
-        if let Some(value) = value.0 {
-            let bytes = Bytes::from(ObjectBytes::from(&ctx, &value)?.into_bytes(&ctx)?);
-            if let Some(tx) = &res.body_tx {
-                let _ = tx.send(ResponseFrame::Data(bytes));
+        {
+            let mut res = this.borrow_mut();
+            if res.writable_finished || res.destroyed {
+                return Ok(());
             }
+            res.start();
+            if let Some(value) = value.0 {
+                let bytes = Bytes::from(ObjectBytes::from(&ctx, &value)?.into_bytes(&ctx)?);
+                if let Some(tx) = &res.body_tx {
+                    let _ = tx.send(ResponseFrame::Data(bytes));
+                }
+            }
+            res.finish();
         }
-        res.finish();
+        // Node emits `finish` after the response has been fully handed off.
+        // Next's pipe-readable waits on this event before completing pipeTo.
+        let _ = ServerResponse::emit_str(this.0.clone(), &ctx, "finish", vec![], false);
+        let _ = ServerResponse::emit_str(this.0, &ctx, "close", vec![], false);
         Ok(())
+    }
+    #[qjs(get, enumerable)]
+    fn writable_finished(&self) -> bool {
+        self.writable_finished
+    }
+    #[qjs(get, enumerable)]
+    fn destroyed(&self) -> bool {
+        self.destroyed
+    }
+    #[qjs(get, enumerable)]
+    fn writable_ended(&self) -> bool {
+        self.writable_finished
+    }
+    /// Minimal Node Writable destroy — closes the response without a body frame.
+    pub fn destroy(
+        this: This<Class<'js, Self>>,
+        ctx: Ctx<'js>,
+        _err: Opt<Value<'js>>,
+    ) -> Result<Class<'js, Self>> {
+        let already = {
+            let mut res = this.borrow_mut();
+            if res.destroyed {
+                true
+            } else {
+                res.destroyed = true;
+                res.writable_finished = true;
+                res.body_tx.take();
+                res.tx.take();
+                false
+            }
+        };
+        if !already {
+            let _ = ServerResponse::emit_str(this.0.clone(), &ctx, "close", vec![], false);
+        }
+        Ok(this.0)
     }
     pub fn add_trailers(&mut self, trailers: Object<'js>) -> Result<()> {
         let mut result = HeaderMap::new();
@@ -421,10 +577,15 @@ impl<'js> ServerResponse<'js> {
         if let Some(headers) = headers {
             for name in headers.keys::<String>() {
                 let name = name?;
-                let value = headers.get::<_, String>(&name)?;
-                validate_header_name(ctx.clone(), name.clone())?;
-                validate_header_value(ctx.clone(), name.clone(), value.clone())?;
-                response.headers.insert(name.to_ascii_lowercase(), value);
+                let value: Value = headers.get(&name)?;
+                let values = header_value_to_list(&ctx, value)?;
+                for v in &values {
+                    validate_header_name(ctx.clone(), name.clone())?;
+                    validate_header_value(ctx.clone(), name.clone(), v.clone())?;
+                }
+                response
+                    .headers
+                    .insert(name.to_ascii_lowercase(), values);
             }
         }
         response.start();
@@ -1017,6 +1178,9 @@ async fn dispatch<'js>(
             status_message: None,
             headers: HashMap::new(),
             headers_sent: false,
+            writable_finished: false,
+            destroyed: false,
+            header_sent_flag: false,
             tx: Some(tx),
             body_tx: None,
             trailers: None,
@@ -1127,6 +1291,26 @@ async fn dispatch<'js>(
     Ok(rx.await.unwrap_or_else(|_| empty()))
 }
 
+/// Minimal `http.Agent` so Next can run `new http.Agent(httpAgentOptions)`.
+/// Not a full connection-pool agent; options are accepted for compatibility.
+fn create_http_agent_constructor<'js>(ctx: &Ctx<'js>) -> Result<Function<'js>> {
+    ctx.eval(
+        r#"(function () {
+  function Agent(options) {
+    if (!(this instanceof Agent)) {
+      return new Agent(options);
+    }
+    this.options = options && typeof options === "object" ? options : {};
+    this.keepAlive = Boolean(this.options.keepAlive);
+    this.maxSockets = this.options.maxSockets;
+    this.maxFreeSockets = this.options.maxFreeSockets;
+  }
+  Agent.prototype.destroy = function () {};
+  return Agent;
+})()"#,
+    )
+}
+
 pub struct HttpModule;
 impl ModuleDef for HttpModule {
     fn declare(declare: &Declarations) -> Result<()> {
@@ -1135,6 +1319,8 @@ impl ModuleDef for HttpModule {
             "Server",
             "IncomingMessage",
             "ServerResponse",
+            "Agent",
+            "globalAgent",
             "METHODS",
             "STATUS_CODES",
             "validateHeaderName",
@@ -1159,6 +1345,10 @@ impl ModuleDef for HttpModule {
             ServerResponse::add_event_emitter_prototype(ctx)?;
             Socket::add_event_emitter_prototype(ctx)?;
             default.set("createServer", Func::from(create_server))?;
+            let agent_ctor = create_http_agent_constructor(ctx)?;
+            let global_agent: Value = agent_ctor.call((Object::new(ctx.clone())?,))?;
+            default.set("Agent", agent_ctor)?;
+            default.set("globalAgent", global_agent)?;
             default.set(
                 "METHODS",
                 vec![

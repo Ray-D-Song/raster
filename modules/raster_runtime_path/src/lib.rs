@@ -609,6 +609,60 @@ pub fn is_absolute(path: &str) -> bool {
     path.starts_with(MAIN_SEPARATOR)
 }
 
+fn join_posix(parts: Rest<String>) -> String {
+    join_path_with_separator(parts.0.iter(), true)
+}
+
+fn resolve_posix(path: Rest<String>) -> Result<String> {
+    resolve_path_with_separator(path.0, true)
+}
+
+fn normalize_posix(path: String) -> String {
+    join_path_with_separator([path].iter(), true)
+}
+
+fn is_absolute_posix(path: String) -> bool {
+    path.starts_with('/')
+}
+
+fn join_win32(parts: Rest<String>) -> String {
+    // Force backslash separator semantics on all platforms for win32 path API.
+    #[cfg(windows)]
+    {
+        join_path_with_separator(parts.0.iter(), false)
+    }
+    #[cfg(not(windows))]
+    {
+        // Approximate Node's path.win32.join on POSIX hosts: join then use `\`.
+        let joined = join_path_with_separator(parts.0.iter(), true);
+        joined.replace('/', "\\")
+    }
+}
+
+fn resolve_win32(path: Rest<String>) -> Result<String> {
+    #[cfg(windows)]
+    {
+        resolve_path_with_separator(path.0, false)
+    }
+    #[cfg(not(windows))]
+    {
+        let resolved = resolve_path_with_separator(path.0, true)?;
+        Ok(resolved.replace('/', "\\"))
+    }
+}
+
+fn is_absolute_win32(path: String) -> bool {
+    let bytes = path.as_bytes();
+    if bytes.first() == Some(&b'\\') || bytes.first() == Some(&b'/') {
+        return true;
+    }
+    // Drive letter paths: C:\ or C:/
+    bytes.len() >= 2
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes.get(2) == Some(&b'\\') || bytes.get(2) == Some(&b'/') || bytes.len() == 2)
+}
+
 impl ModuleDef for PathModule {
     fn declare(declare: &Declarations) -> Result<()> {
         declare.declare("basename")?;
@@ -623,6 +677,8 @@ impl ModuleDef for PathModule {
         declare.declare("isAbsolute")?;
         declare.declare("delimiter")?;
         declare.declare("sep")?;
+        declare.declare("posix")?;
+        declare.declare("win32")?;
 
         declare.declare("default")?;
         Ok(())
@@ -642,6 +698,56 @@ impl ModuleDef for PathModule {
             default.set("isAbsolute", Func::from(|s: String| is_absolute(&s)))?;
             default.prop("delimiter", DELIMITER.to_string())?;
             default.prop("sep", MAIN_SEPARATOR.to_string())?;
+
+            // Node exposes path.posix / path.win32 as path-API objects.
+            let posix = Object::new(ctx.clone())?;
+            posix.set("dirname", Func::from(dirname::<String>))?;
+            posix.set("basename", Func::from(basename))?;
+            posix.set("extname", Func::from(extname))?;
+            posix.set("format", Func::from(format))?;
+            posix.set("parse", Func::from(parse))?;
+            posix.set("join", Func::from(join_posix))?;
+            posix.set("relative", Func::from(relative::<String, String>))?;
+            posix.set("resolve", Func::from(resolve_posix))?;
+            posix.set("normalize", Func::from(normalize_posix))?;
+            posix.set("isAbsolute", Func::from(is_absolute_posix))?;
+            posix.prop("delimiter", ":")?;
+            posix.prop("sep", "/")?;
+
+            let win32 = Object::new(ctx.clone())?;
+            win32.set("dirname", Func::from(dirname::<String>))?;
+            win32.set("basename", Func::from(basename))?;
+            win32.set("extname", Func::from(extname))?;
+            win32.set("format", Func::from(format))?;
+            win32.set("parse", Func::from(parse))?;
+            win32.set("join", Func::from(join_win32))?;
+            win32.set("relative", Func::from(relative::<String, String>))?;
+            win32.set("resolve", Func::from(resolve_win32))?;
+            win32.set(
+                "normalize",
+                Func::from(|path: String| {
+                    #[cfg(windows)]
+                    {
+                        normalize::<String>(path)
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        normalize_posix(path).replace('/', "\\")
+                    }
+                }),
+            )?;
+            win32.set("isAbsolute", Func::from(is_absolute_win32))?;
+            win32.prop("delimiter", ";")?;
+            win32.prop("sep", "\\")?;
+
+            // Cross-link like Node: path.posix.win32 === path.win32, etc.
+            posix.set("posix", posix.clone())?;
+            posix.set("win32", win32.clone())?;
+            win32.set("posix", posix.clone())?;
+            win32.set("win32", win32.clone())?;
+
+            default.set("posix", posix)?;
+            default.set("win32", win32)?;
             Ok(())
         })
     }

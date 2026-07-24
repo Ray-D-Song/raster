@@ -139,7 +139,7 @@ pub fn load_source_via_import<'js>(
 
     let progress = Object::new(ctx.clone())?;
     let uid = unsafe { qjs::JS_VALUE_GET_PTR(progress.as_object().unwrap().as_raw()) } as usize;
-    register_finalization_registry(&ctx, progress.clone().into_value(), uid)?;
+    register_finalization_registry(&ctx, progress.clone().into_value(), uid, None)?;
     invoke_async_hook(&ctx, HookType::Init, ProviderType::TimerWrap, uid)?;
 
     let declared_source = prepend_cjs_dirname_filename(filename, source.as_bytes())?;
@@ -169,7 +169,7 @@ pub fn load_file_via_import<'js>(
 
     let progress = Object::new(ctx.clone())?;
     let uid = unsafe { qjs::JS_VALUE_GET_PTR(progress.as_object().unwrap().as_raw()) } as usize;
-    register_finalization_registry(&ctx, progress.clone().into_value(), uid)?;
+    register_finalization_registry(&ctx, progress.clone().into_value(), uid, None)?;
     invoke_async_hook(&ctx, HookType::Init, ProviderType::TimerWrap, uid)?;
 
     let import_promise = Module::import(&ctx, import_specifier.as_bytes())?;

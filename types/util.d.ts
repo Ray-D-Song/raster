@@ -145,7 +145,7 @@ declare module "util" {
    * that returns promises.
    *
    * Limitations:
-   * - `util.promisify.custom` is not implemented
+   * - `util.promisify.custom` / `Symbol.for("nodejs.util.promisify.custom")` is supported
    * - Multi-value callback results beyond the first success value are not mapped
    *
    * ```js

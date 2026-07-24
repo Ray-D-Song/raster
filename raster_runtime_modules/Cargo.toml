@@ -53,6 +53,7 @@ base = [
   "fs",
   "http",
   "https",
+  "inspector",
   "intl",
   "navigator",
   "net",
@@ -110,6 +111,7 @@ https = [
   "raster_runtime_http?/http1",
   "raster_runtime_http?/http2",
 ]
+inspector = ["dep:raster_runtime_inspector"]
 intl = ["raster_runtime_intl"]
 navigator = ["raster_runtime_navigator"]
 net = ["raster_runtime_net"]
@@ -159,6 +161,7 @@ raster_runtime_exceptions = { version = "0.8.1-beta", path = "../modules/raster_
 raster_runtime_fetch = { version = "0.8.1-beta", path = "../modules/raster_runtime_fetch", default-features = false, optional = true }
 raster_runtime_fs = { version = "0.8.1-beta", path = "../modules/raster_runtime_fs", optional = true }
 raster_runtime_http = { version = "0.8.1-beta", path = "../modules/raster_runtime_http", default-features = false, optional = true }
+raster_runtime_inspector = { version = "0.8.1-beta", path = "../modules/raster_runtime_inspector", optional = true }
 raster_runtime_intl = { version = "0.8.1-beta", path = "../modules/raster_runtime_intl", optional = true }
 raster_runtime_navigator = { version = "0.8.1-beta", path = "../modules/raster_runtime_navigator", optional = true }
 raster_runtime_net = { version = "0.8.1-beta", path = "../modules/raster_runtime_net", optional = true }

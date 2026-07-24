@@ -55,6 +55,28 @@
 
 [bind](https://nodejs.org/api/async_context.html#asyncresourcebindfn-thisarg)
 
+### Class: AsyncLocalStorage
+
+[constructor](https://nodejs.org/api/async_context.html#new-asynclocalstoraget)
+
+[run](https://nodejs.org/api/async_context.html#asynclocalstoragerunstore-callback-args)
+
+[exit](https://nodejs.org/api/async_context.html#asynclocalstorageexitcallback-args)
+
+[enterWith](https://nodejs.org/api/async_context.html#asynclocalstorageenterwithstore)
+
+[getStore](https://nodejs.org/api/async_context.html#asynclocalstoragegetstore)
+
+[disable](https://nodejs.org/api/async_context.html#asynclocalstoragedisable)
+
+[bind](https://nodejs.org/api/async_context.html#asynclocalstoragebindfn)
+
+[AsyncLocalStorage.bind](https://nodejs.org/api/async_context.html#static-method-asynclocalstoragebindfn)
+
+[AsyncLocalStorage.snapshot](https://nodejs.org/api/async_context.html#static-method-asynclocalstoragesnapshot)
+
+> AsyncLocalStorage propagates across Promises, `await`, microtasks, and timers by default (no `RASTER_RUNTIME_ASYNC_HOOKS` required). Public `createHook()` user callbacks still require `RASTER_RUNTIME_ASYNC_HOOKS=1`.
+
 ## buffer
 
 ### Static methods
@@ -680,6 +702,24 @@ _Also available globally_
 [setInterval](https://nodejs.org/api/timers.html#setintervalcallback-delay-args)
 
 [setTimeout](https://nodejs.org/api/timers.html#settimeoutcallback-delay-args)
+
+> Timer handles are numeric ids. `ref()` / `unref()` / event-loop lifetime control are not implemented.
+
+## timers/promises
+
+[setTimeout](https://nodejs.org/api/timers.html#timerspromisessettimeoutdelay-value-options)
+
+[setImmediate](https://nodejs.org/api/timers.html#timerspromisessetimmediatevalue-options)
+
+> `setInterval` (async iterator) and `scheduler` are not implemented. `{ ref: false }` is accepted for API compatibility but does not change event-loop lifetime.
+
+## inspector
+
+Startup probe only — Raster does **not** implement the Node Inspector debugging protocol.
+
+[url](https://nodejs.org/api/inspector.html#inspectorurl) — always returns `undefined`
+
+> `Session`, `open()`, `close()`, and `waitForDebugger()` are intentionally not exported.
 
 ## tty
 

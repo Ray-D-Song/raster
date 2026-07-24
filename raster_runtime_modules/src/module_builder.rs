@@ -117,6 +117,10 @@ impl Default for ModuleBuilder {
         {
             builder = builder.with_module(crate::modules::https::HttpsModule);
         }
+        #[cfg(feature = "inspector")]
+        {
+            builder = builder.with_module(crate::modules::inspector::InspectorModule);
+        }
         #[cfg(feature = "fetch")]
         {
             builder = builder.with_global(crate::modules::fetch::init);
@@ -177,6 +181,7 @@ impl Default for ModuleBuilder {
         {
             builder = builder
                 .with_global(crate::modules::timers::init)
+                .with_module(crate::modules::timers::TimersPromisesModule)
                 .with_module(crate::modules::timers::TimersModule);
         }
         #[cfg(feature = "diagnostics-channel")]

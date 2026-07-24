@@ -4,69 +4,85 @@ declare module "timers" {
   export import setInterval = globalThis.setInterval;
   export import clearInterval = globalThis.clearInterval;
   export import setImmediate = globalThis.setImmediate;
+  export import clearImmediate = globalThis.clearImmediate;
 
   global {
     /**
      * This object is created internally and is returned from `setTimeout()` and `setInterval()`. It can be passed to either `clearTimeout()` or `clearInterval()` in order to cancel the
      * scheduled actions.
+     *
+     * Raster currently returns a numeric timer id (not a full Node Timeout handle).
+     * `ref()` / `unref()` / event-loop lifetime semantics are not implemented.
      */
     class Timeout {}
 
     /**
      * Schedules execution of a one-time `callback` after `delay` milliseconds.
      *
-     * The `callback` will likely not be invoked in precisely `delay` milliseconds.
-     * raster_runtime makes no guarantees about the exact timing of when callbacks will fire,
-     * nor of their ordering. The callback will be called as close as possible to the
-     * time specified. The precision is limited to 4ms.
+     * Additional arguments are passed to the callback when it is invoked.
      *
      * @param callback The function to call when the timer elapses.
-     * @param [delay=4] The number of milliseconds to wait before calling the `callback`.
+     * @param [delay=0] The number of milliseconds to wait before calling the `callback`.
+     * @param args Optional arguments to pass when the `callback` is called.
      * @return for use with {@link clearTimeout}
      */
     function setTimeout<TArgs extends any[]>(
       callback: (...args: TArgs) => void,
-      ms?: number
+      ms?: number,
+      ...args: TArgs
     ): Timeout;
 
     /**
      * Cancels a `Timeout` object created by `setTimeout()`.
      * @param timeout A `Timeout` object as returned by {@link setTimeout}.
      */
-    function clearTimeout(timeout: Timeout): void;
+    function clearTimeout(timeout?: Timeout | number | null): void;
 
     /**
      * Schedules repeated execution of `callback` every `delay` milliseconds.
      *
-     * The `callback` will likely not be invoked at precisely `delay` milliseconds.
-     * raster_runtime makes no guarantees about the exact timing of when callbacks will fire,
-     * nor of their ordering. The callback will be called as close as possible to the
-     * time specified. The precision is limited to 4ms.
+     * Additional arguments are passed to the callback when it is invoked.
      *
      * @param callback The function to call when the timer elapses.
-     * @param [delay=4] The number of milliseconds to wait before calling the `callback`.
+     * @param [delay=0] The number of milliseconds to wait before calling the `callback`.
+     * @param args Optional arguments to pass when the `callback` is called.
      * @return for use with {@link clearInterval}
      */
     function setInterval<TArgs extends any[]>(
       callback: (...args: TArgs) => void,
-      ms?: number
+      ms?: number,
+      ...args: TArgs
     ): Timeout;
 
     /**
      * Cancels a `Timeout` object created by `setInterval()`.
-     * @param timeout A `Timeout` object as returned by {@link setInterval}
+     * @param interval A `Timeout` object as returned by {@link setInterval}
      */
-    function clearInterval(interval: Timeout): void;
+    function clearInterval(interval?: Timeout | number | null): void;
 
     /**
      * Schedules the "immediate" execution of the `callback` after I/O events'
      * callbacks.
      *
+     * Additional arguments are passed to the callback when it is invoked.
+     * `util.promisify(setImmediate)` is supported via `promisify.custom`.
+     *
      * @param callback The function to call at the end of this turn of the Node.js `Event Loop`
+     * @param args Optional arguments to pass when the `callback` is called.
      * @return for use with {@link clearImmediate}
      */
     function setImmediate<TArgs extends any[]>(
-      callback: (...args: TArgs) => void
-    ): void;
+      callback: (...args: TArgs) => void,
+      ...args: TArgs
+    ): Timeout;
+
+    /**
+     * Cancels an Immediate object created by {@link setImmediate}.
+     */
+    function clearImmediate(immediate?: Timeout | number | null): void;
   }
+}
+
+declare module "node:timers" {
+  export * from "timers";
 }

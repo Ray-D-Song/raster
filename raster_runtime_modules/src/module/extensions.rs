@@ -16,6 +16,37 @@ use super::import_load::load_source_via_import;
 use super::RequireState;
 use crate::package::resolver::detect_file_format;
 
+/// Build a Node-style `require` closed over this Module instance so free
+/// `require` always uses the correct parent (including lazy webpack external
+/// factories after CurrentModuleGuard is dropped).
+fn make_module_require<'js>(
+    ctx: &Ctx<'js>,
+    module: &Object<'js>,
+    _filename: &str,
+) -> Result<Function<'js>> {
+    // module.require.bind(module) — same shape as Node's makeRequireFunction.
+    ctx.eval::<Function, _>(
+        r#"(function (mod) {
+            function req(request) { return mod.require(request); }
+            req.resolve = function (request, options) {
+                return require.resolve(request, options);
+            };
+            Object.defineProperty(req, "cache", {
+                get() { return require.cache; },
+                configurable: true,
+                enumerable: true,
+            });
+            Object.defineProperty(req, "extensions", {
+                get() { return require.extensions; },
+                configurable: true,
+                enumerable: true,
+            });
+            return req;
+        })"#,
+    )?
+    .call((module.clone(),))
+}
+
 pub fn extensions_object<'js>(ctx: &Ctx<'js>) -> Result<Object<'js>> {
     let facade = ctx.userdata::<RefCell<ModuleFacadeState>>().or_throw(ctx)?;
     let extensions = facade.borrow().extensions.clone();
@@ -97,7 +128,10 @@ pub fn module_compile<'js>(
     let module = this.0;
     let dirname = path::dirname(&filename);
     let exports: Object = module.get("exports")?;
-    let require: Function = ctx.globals().get("require")?;
+    // Node gives each CJS module its own `require` closed over that Module so
+    // free `require` always uses the correct parent — including lazy webpack
+    // external factories that run after CurrentModuleGuard is dropped.
+    let require = make_module_require(&ctx, &module, &filename)?;
 
     let _guard = CurrentModuleGuard::push(ctx.clone(), module.clone())?;
 

@@ -307,6 +307,57 @@ declare module "async_hooks" {
       thisArg?: ThisParameterType<Func>
     ): OmitThisParameter<Func>;
   }
+
+  /**
+   * This class creates stores that stay coherent through asynchronous operations.
+   *
+   * Raster propagates stores across Promises, `await`, microtasks, and timers when
+   * an `AsyncLocalStorage` instance is active. Public `createHook()` callbacks still
+   * require `RASTER_RUNTIME_ASYNC_HOOKS=1`.
+   *
+   * @see [source](https://nodejs.org/docs/latest-v22.x/api/async_context.html#class-asynclocalstorage)
+   */
+  class AsyncLocalStorage<T = any> {
+    /**
+     * Runs a function synchronously within a context and returns its return value.
+     * The store is not accessible outside of the callback function.
+     */
+    run<R>(store: T, callback: (...args: any[]) => R, ...args: any[]): R;
+    /**
+     * Transitions into the context for the remainder of the current synchronous
+     * execution and then persists the store through any following asynchronous calls.
+     */
+    enterWith(store: T): void;
+    /**
+     * Runs a function synchronously outside of a context and returns its return value.
+     */
+    exit<R>(callback: (...args: any[]) => R, ...args: any[]): R;
+    /**
+     * Returns the current store. If called outside of an asynchronous context
+     * initialized by calling `asyncLocalStorage.run()` or
+     * `asyncLocalStorage.enterWith()`, it returns `undefined`.
+     */
+    getStore(): T | undefined;
+    /**
+     * Disables the instance. Subsequent `getStore()` calls return `undefined`
+     * until `run()` or `enterWith()` is called again.
+     */
+    disable(): void;
+    /**
+     * Binds the given function to run within a snapshot of all active
+     * `AsyncLocalStorage` stores (Node static API).
+     */
+    static bind<Func extends (...args: any[]) => any>(fn: Func): Func;
+    /**
+     * Captures the current stores of all active `AsyncLocalStorage` instances
+     * (including instances with no store) and returns a function that runs a
+     * callback under that captured context.
+     */
+    static snapshot(): <R, TArgs extends any[]>(
+      fn: (...args: TArgs) => R,
+      ...args: TArgs
+    ) => R;
+  }
 }
 declare module "node:async_hooks" {
   export * from "async_hooks";

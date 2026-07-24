@@ -762,7 +762,6 @@ impl<'js> ReadableByteStreamController<'js> {
         byte_offset: usize,
         byte_length: usize,
     ) {
-        let len = buffer.len();
         // Append a new readable byte stream queue entry with buffer buffer, byte offset byteOffset, and byte length byteLength to controller.[[queue]].
         self.queue.push_back(ReadableByteStreamQueueEntry {
             buffer,
@@ -771,7 +770,7 @@ impl<'js> ReadableByteStreamController<'js> {
         });
 
         // Set controller.[[queueTotalSize]] to controller.[[queueTotalSize]] + byteLength.
-        self.queue_total_size += len;
+        self.queue_total_size += byte_length;
     }
 
     fn readable_byte_stream_controller_process_pull_into_descriptors_using_queue<

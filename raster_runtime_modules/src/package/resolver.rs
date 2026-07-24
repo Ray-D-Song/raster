@@ -309,6 +309,7 @@ fn resolved_by_file_exists(path: Cow<'_, str>) -> Result<Cow<'_, str>> {
     to_abs_path(path)
 }
 
+
 fn to_abs_path(path: Cow<'_, str>) -> Result<Cow<'_, str>> {
     // Always normalize so `a/b/../c` and `a/c` share one module identity.
     let normalized = if path::is_absolute(&path) {

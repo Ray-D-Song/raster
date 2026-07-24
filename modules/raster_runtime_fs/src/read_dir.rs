@@ -10,6 +10,8 @@ use rquickjs::{
     atom::PredefinedAtom, prelude::Opt, Array, Class, Ctx, IntoJs, Object, Result, Value,
 };
 
+use crate::errors::throw_fs_error;
+
 #[derive(rquickjs::class::Trace, rquickjs::JsLifetime)]
 #[rquickjs::class]
 pub struct Dirent {
@@ -105,20 +107,30 @@ impl<'js> IntoJs<'js> for ReadDir {
     }
 }
 
-pub async fn read_dir(mut path: String, options: Opt<Object<'_>>) -> Result<ReadDir> {
+pub async fn read_dir(
+    ctx: Ctx<'_>,
+    mut path: String,
+    options: Opt<Object<'_>>,
+) -> Result<ReadDir> {
     let (with_file_types, skip_root_pos, mut directory_walker) =
         process_options_and_create_directory_walker(&mut path, options);
 
     let mut items = Vec::with_capacity(64);
 
-    while let Some((child, metadata)) = directory_walker.walk().await? {
-        append_directory_and_metadata_to_vec(
-            with_file_types,
-            skip_root_pos,
-            &mut items,
-            child,
-            metadata,
-        );
+    loop {
+        match directory_walker.walk().await {
+            Ok(Some((child, metadata))) => {
+                append_directory_and_metadata_to_vec(
+                    with_file_types,
+                    skip_root_pos,
+                    &mut items,
+                    child,
+                    metadata,
+                );
+            },
+            Ok(None) => break,
+            Err(err) => return Err(throw_fs_error(&ctx, err, "scandir", &path)),
+        }
     }
 
     items.sort_by(|a, b| a.name.partial_cmp(&b.name).unwrap());
@@ -126,19 +138,29 @@ pub async fn read_dir(mut path: String, options: Opt<Object<'_>>) -> Result<Read
     Ok(ReadDir { items, root: path })
 }
 
-pub fn read_dir_sync(mut path: String, options: Opt<Object<'_>>) -> Result<ReadDir> {
+pub fn read_dir_sync(
+    ctx: Ctx<'_>,
+    mut path: String,
+    options: Opt<Object<'_>>,
+) -> Result<ReadDir> {
     let (with_file_types, skip_root_pos, mut directory_walker) =
         process_options_and_create_directory_walker(&mut path, options);
 
     let mut items = Vec::with_capacity(64);
-    while let Some((child, metadata)) = directory_walker.walk_sync()? {
-        append_directory_and_metadata_to_vec(
-            with_file_types,
-            skip_root_pos,
-            &mut items,
-            child,
-            metadata,
-        );
+    loop {
+        match directory_walker.walk_sync() {
+            Ok(Some((child, metadata))) => {
+                append_directory_and_metadata_to_vec(
+                    with_file_types,
+                    skip_root_pos,
+                    &mut items,
+                    child,
+                    metadata,
+                );
+            },
+            Ok(None) => break,
+            Err(err) => return Err(throw_fs_error(&ctx, err, "scandir", &path)),
+        }
     }
 
     items.sort_by(|a, b| a.name.partial_cmp(&b.name).unwrap());

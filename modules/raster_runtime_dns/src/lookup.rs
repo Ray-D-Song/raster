@@ -33,7 +33,7 @@ pub fn lookup<'js>(
 
     // SAFETY: Since it checks in advance whether it is an Function type, we can always get a pointer to the Function.
     let uid = unsafe { qjs::JS_VALUE_GET_PTR(cb.as_raw()) } as usize;
-    register_finalization_registry(&ctx, cb.clone().into_value(), uid)?;
+    register_finalization_registry(&ctx, cb.clone().into_value(), uid, None)?;
     invoke_async_hook(&ctx, HookType::Init, ProviderType::GetAddrInfoReqWrap, uid)?;
 
     ctx.clone().spawn_exit(async move {

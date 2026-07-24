@@ -39,20 +39,22 @@ it("should log module", () => {
   expect(module).toEqual(
     `
 {
+  clearImmediate: [function: (anonymous)],
   clearInterval: [function: (anonymous)],
   clearTimeout: [function: (anonymous)],
   default: {
-    setTimeout: [function: (anonymous)],
+    setTimeout: [function: setTimeout],
     clearTimeout: [function: (anonymous)],
-    setInterval: [function: (anonymous)],
+    setInterval: [function: setInterval],
     clearInterval: [function: (anonymous)],
-    setImmediate: [function: (anonymous)],
+    setImmediate: [function: setImmediate],
+    clearImmediate: [function: (anonymous)],
     queueMicrotask: [function: (anonymous)]
   },
   queueMicrotask: [function: (anonymous)],
-  setImmediate: [function: (anonymous)],
-  setInterval: [function: (anonymous)],
-  setTimeout: [function: (anonymous)]
+  setImmediate: [function: setImmediate],
+  setInterval: [function: setInterval],
+  setTimeout: [function: setTimeout]
 }
 `.trim()
   );

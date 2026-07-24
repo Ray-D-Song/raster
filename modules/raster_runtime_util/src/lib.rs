@@ -29,9 +29,19 @@ fn inherits<'js>(ctor: Function<'js>, super_ctor: Function<'js>) -> Result<()> {
 fn create_promisify<'js>(ctx: &Ctx<'js>) -> Result<Function<'js>> {
     ctx.eval(
         r#"(function () {
+  const kCustomPromisifiedSymbol = Symbol.for("nodejs.util.promisify.custom");
+
   function promisify(original) {
     if (typeof original !== "function") {
       throw new TypeError('The "original" argument must be of type function');
+    }
+
+    const custom = original[kCustomPromisifiedSymbol];
+    if (custom !== undefined) {
+      if (typeof custom !== "function") {
+        throw new TypeError('The "util.promisify.custom" argument must be of type function');
+      }
+      return custom;
     }
 
     return function (...args) {
@@ -43,6 +53,7 @@ fn create_promisify<'js>(ctx: &Ctx<'js>) -> Result<Function<'js>> {
       });
     };
   }
+  promisify.custom = kCustomPromisifiedSymbol;
   return promisify;
 })()"#,
     )

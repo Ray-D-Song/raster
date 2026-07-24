@@ -274,6 +274,63 @@ impl DOMExceptionName {
     }
 }
 
+/// QuickJS CallSite only implements a subset of V8's API. Libraries such as
+/// `depd` (pulled in by Next's `send`) call `isEval()` / `getEvalOrigin()` and
+/// crash if they are missing. Patch the prototype once at startup.
+const CALLSITE_POLYFILL_JS: &str = r#"(function () {
+  if (typeof Error.captureStackTrace !== "function") {
+    return;
+  }
+  const prev = Error.prepareStackTrace;
+  Error.prepareStackTrace = function (_err, stack) {
+    return stack;
+  };
+  try {
+    const holder = {};
+    Error.captureStackTrace(holder);
+    const cs = holder.stack && holder.stack[0];
+    if (!cs) {
+      return;
+    }
+    const proto = Object.getPrototypeOf(cs);
+    if (!proto || proto.__rasterCallSitePolyfill) {
+      return;
+    }
+    const stubFalse = function () {
+      return false;
+    };
+    const stubNull = function () {
+      return null;
+    };
+    const stubUndef = function () {
+      return undefined;
+    };
+    if (typeof proto.isEval !== "function") proto.isEval = stubFalse;
+    if (typeof proto.isNative !== "function") proto.isNative = stubFalse;
+    if (typeof proto.isConstructor !== "function") proto.isConstructor = stubFalse;
+    if (typeof proto.isToplevel !== "function") proto.isToplevel = stubFalse;
+    if (typeof proto.getEvalOrigin !== "function") proto.getEvalOrigin = stubUndef;
+    if (typeof proto.getMethodName !== "function") proto.getMethodName = stubNull;
+    if (typeof proto.getTypeName !== "function") proto.getTypeName = stubNull;
+    if (typeof proto.getThis !== "function") proto.getThis = stubUndef;
+    // V8 CallSite#toString — without this, stacks print as "at [object CallSite]".
+    if (typeof proto.toString !== "function" || proto.toString === Object.prototype.toString) {
+      proto.toString = function () {
+        const fn = (typeof this.getFunctionName === "function" && this.getFunctionName()) || "";
+        const file = (typeof this.getFileName === "function" && this.getFileName()) || "<anonymous>";
+        const line = typeof this.getLineNumber === "function" ? this.getLineNumber() : null;
+        const col = typeof this.getColumnNumber === "function" ? this.getColumnNumber() : null;
+        const loc =
+          line != null ? file + ":" + line + (col != null ? ":" + col : "") : file;
+        return fn ? fn + " (" + loc + ")" : loc;
+      };
+    }
+    proto.__rasterCallSitePolyfill = true;
+  } finally {
+    Error.prepareStackTrace = prev;
+  }
+})()"#;
+
 pub fn init(ctx: &Ctx<'_>) -> Result<()> {
     let globals = ctx.globals();
 
@@ -290,6 +347,8 @@ pub fn init(ctx: &Ctx<'_>) -> Result<()> {
     let dom_ex_proto = Class::<DOMException>::prototype(ctx)?.unwrap();
     let error_prototype = &BasePrimordials::get(ctx)?.prototype_error;
     dom_ex_proto.set_prototype(Some(error_prototype))?;
+
+    let _: () = ctx.eval(CALLSITE_POLYFILL_JS)?;
 
     Ok(())
 }

@@ -2614,6 +2614,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "raster_runtime_inspector"
+version = "0.8.1-beta"
+dependencies = [
+ "raster_runtime_test",
+ "raster_runtime_utils",
+ "rquickjs",
+]
+
+[[package]]
 name = "raster_runtime_intl"
 version = "0.8.1-beta"
 dependencies = [
@@ -2676,6 +2685,7 @@ dependencies = [
  "raster_runtime_fs",
  "raster_runtime_hooking",
  "raster_runtime_http",
+ "raster_runtime_inspector",
  "raster_runtime_intl",
  "raster_runtime_json",
  "raster_runtime_navigator",
@@ -2790,6 +2800,7 @@ version = "0.8.1-beta"
 dependencies = [
  "libc",
  "raster_runtime_events",
+ "raster_runtime_hooking",
  "raster_runtime_test",
  "raster_runtime_utils",
  "rquickjs",
@@ -3127,8 +3138,6 @@ dependencies = [
 [[package]]
 name = "rquickjs-sys"
 version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eef73520804cf5aa4876097ac5733058d628c769eba9678e0f4dba5a4ef79703"
 dependencies = [
  "bindgen",
  "cc",

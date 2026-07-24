@@ -121,6 +121,7 @@ async fn main() -> Result<(), Error> {
 | abort          | ✔︎       | ✔︎️            | `abort`          | `raster_runtime_abort`          |
 | assert         | ✔︎       | ⚠️           | `assert`         | `raster_runtime_assert`         |
 | async_hooks    | ✔︎       | ⚠️           | `async-hooks`    | `raster_runtime_async_hooks`    |
+| inspector      | ✔︎       | ⚠️           | `inspector`      | `raster_runtime_inspector`      |
 | buffer         | ✔︎       | ⚠️           | `buffer`         | `raster_runtime_buffer`         |
 | child process  | ✔︎       | ⚠️           | `child-process`  | `raster_runtime_child_process`  |
 | console        | ✔︎       | ⚠️           | `console`        | `raster_runtime_console`        |
@@ -141,6 +142,7 @@ async fn main() -> Result<(), Error> {
 | stream (lib)   | N/A     | ✔︎            | N/A              | `raster_runtime_stream`         |
 | string_decoder | ✔︎       | ✔︎            | `string_decoder` | `raster_runtime_string_decoder` |
 | timers         | ✔︎       | ⚠️           | `timers`         | `raster_runtime_timers`         |
+| timers/promises| ✔︎       | ⚠️           | `timers`         | `raster_runtime_timers`         |
 | process        | ✔︎       | ⚠️           | `process`        | `raster_runtime_process`        |
 | temporal       | ✔︎       | ⚠️           | N/A              | `raster_runtime_temporal`       |
 | tty            | ✔︎       | ⚠️           | `tty`            | `raster_runtime_tty`            |

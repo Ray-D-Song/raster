@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 use std::collections::HashMap;
 use std::env;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 
 use raster_runtime_events::{Emitter, EventEmitter};
+use raster_runtime_hooking::{invoke_async_hook, HookType};
+use raster_runtime_utils::provider::ProviderType;
 use raster_runtime_utils::signals;
 
 use raster_runtime_utils::primordials::{BasePrimordials, Primordial};
@@ -26,6 +28,9 @@ use rquickjs::{
     Array, BigInt, Class, Ctx, Error, Function, IntoJs, Object, Result, Value,
 };
 
+/// Unique TickObject resource ids (not callback pointer).
+static TICK_ID: AtomicUsize = AtomicUsize::new(1);
+
 pub static EXIT_CODE: AtomicU8 = AtomicU8::new(0);
 static EXITING: AtomicBool = AtomicBool::new(false);
 
@@ -43,6 +48,7 @@ const EVENT_EMITTER_METHODS: &[&str] = &[
     "prependOnceListener",
     "eventNames",
     "listenerCount",
+    "listeners",
     "removeAllListeners",
 ];
 
@@ -57,11 +63,51 @@ const PROCESS_UNIX_EXPORTS: &[&str] = &[
 ];
 
 fn next_tick<'js>(ctx: Ctx<'js>, cb: Function<'js>, args: Rest<Value<'js>>) -> Result<()> {
-    let mut js_args = Args::new(ctx, args.len());
-    for arg in args.0 {
-        js_args.push_arg(arg)?;
+    let uid = TICK_ID.fetch_add(1, Ordering::Relaxed);
+    invoke_async_hook(&ctx, HookType::Init, ProviderType::TickObject, uid)?;
+
+    // Wrap callback so BEFORE/AFTER/destroy run around the deferred tick job.
+    // Keep true nextTick scheduling via defer (not Promise).
+    let wrap: Function = ctx.eval(
+        r#"(function (cb, uid, argList) {
+  return function () {
+    var inv = globalThis.invokeAsyncHook;
+    if (typeof inv === "function") {
+      inv("before", "", uid);
+      try {
+        return cb.apply(null, argList);
+      } finally {
+        inv("after", "", uid);
+        inv("destroy", "TickObject", uid);
+      }
     }
-    cb.defer_arg(js_args)
+    return cb.apply(null, argList);
+  };
+})"#,
+    )?;
+    let arg_arr = Array::new(ctx.clone())?;
+    for (i, arg) in args.0.into_iter().enumerate() {
+        arg_arr.set(i, arg)?;
+    }
+    let wrapped: Function = wrap.call((cb, uid as f64, arg_arr))?;
+    wrapped.defer::<()>(())?;
+    Ok(())
+}
+
+/// Minimal stdio stream surface for Node packages that probe `process.stdout.fd`
+/// / `process.stderr.fd` (e.g. `debug` via Next's `send`). Not a full Writable.
+fn create_stdio_stream<'js>(ctx: &Ctx<'js>, fd: i32) -> Result<Object<'js>> {
+    let stream = Object::new(ctx.clone())?;
+    stream.set("fd", fd)?;
+    let is_tty = unsafe { libc::isatty(fd) != 0 };
+    stream.set("isTTY", is_tty)?;
+    // Writable-ish stubs so naive `write` probes do not throw.
+    stream.set(
+        "write",
+        Func::from(|_ctx: Ctx<'_>, _chunk: Opt<Value<'_>>| -> Result<bool> { Ok(true) }),
+    )?;
+    stream.set("end", Func::from(|_ctx: Ctx<'_>| -> Result<()> { Ok(()) }))?;
+    Ok(stream)
 }
 
 fn cwd(ctx: Ctx<'_>) -> Result<String> {
@@ -342,6 +388,11 @@ pub fn init(ctx: &Ctx<'_>) -> Result<()> {
     }
 
     process.set("nextTick", Func::from(next_tick))?;
+
+    // Node stdio handles (minimal). Required by Next/debug/send for isatty checks.
+    process.set("stdin", create_stdio_stream(ctx, 0)?)?;
+    process.set("stdout", create_stdio_stream(ctx, 1)?)?;
+    process.set("stderr", create_stdio_stream(ctx, 2)?)?;
 
     globals.set("process", process)?;
 

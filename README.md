@@ -341,9 +341,11 @@ cargo build --release --no-default-features --features "macro,crypto-graviola-ru
 
 ### `RASTER_RUNTIME_ASYNC_HOOKS=value`
 
-When using asynchronous hooks, the hooking function inside QuickJS is activated. This is disabled by default as there is concern that it may have a significant impact on performance.
+Controls **public** `async_hooks.createHook()` user callbacks. When unset, user hook callbacks do not run.
 
-By setting this environment variable to `1`, the asynchronous hook function can be enabled, allowing you to track asynchronous processing using the `async_hooks` module.
+`AsyncLocalStorage` context propagation (Promises, `await`, microtasks, timers) works **without** this variable. Internal async tracking is enabled automatically while ALS instances are active.
+
+Set to `1` to enable user-facing `createHook()` lifecycle callbacks (init/before/after/destroy/promiseResolve).
 
 ### `RASTER_RUNTIME_EXTRA_CA_CERTS=file`
 

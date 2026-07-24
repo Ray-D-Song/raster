@@ -366,6 +366,60 @@ async function runNextStandalone(directory, raster, logPath, root) {
       }
     }
 
+    // Concurrent AsyncLocalStorage isolation across overlapping requests.
+    if (!serverExit) {
+      const alsIds = ["a1", "b2", "c3", "d4", "e5", "f6"];
+      try {
+        const results = await Promise.all(
+          alsIds.map(async (id) => {
+            const signal = AbortSignal.timeout(HTTP_CHECK_TIMEOUT_MS);
+            const res = await fetch(`${baseUrl}/api/als/${id}`, { signal });
+            const body = await res.text();
+            let json;
+            try {
+              json = JSON.parse(body);
+            } catch {
+              return {
+                id,
+                ok: false,
+                detail: `invalid JSON status=${res.status} body=${truncate(body, 200)}`,
+              };
+            }
+            const ok = res.status === 200 && json?.id === id;
+            return {
+              id,
+              ok,
+              detail: ok
+                ? null
+                : `status=${res.status} body=${JSON.stringify(json)}`,
+            };
+          })
+        );
+
+        const alsLog = results
+          .map((r) => `  ${r.id}: ${r.ok ? "ok" : r.detail}`)
+          .join("\n");
+        logParts.push(`\n# HTTP concurrent ALS\n${alsLog}`);
+
+        for (const r of results) {
+          if (!r.ok) {
+            failures.push(`GET /api/als/${r.id}: ${r.detail}`);
+          }
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logParts.push(`\n# HTTP concurrent ALS\nerror: ${msg}`);
+        failures.push(`concurrent ALS: request failed: ${msg}`);
+      }
+    } else {
+      failures.push(
+        `concurrent ALS: skipped (Raster already exited: ${formatExit(serverExit)})`
+      );
+      logParts.push(
+        `\n# HTTP concurrent ALS\nskipped: Raster exited ${formatExit(serverExit)}`
+      );
+    }
+
     // Capture any additional server output after requests
     logParts.push(
       `\n# Raster output after HTTP checks\nstdout:\n${stdout}\n\nstderr:\n${stderr}\n` +
@@ -383,7 +437,7 @@ async function runNextStandalone(directory, raster, logPath, root) {
 
     console.log(
       "next compatibility standalone runtime passed " +
-        "(Node build + Raster run; HTTP / /api/health /posts/42 OK)"
+        "(Node build + Raster run; HTTP / /api/health /posts/42 + concurrent ALS OK)"
     );
   } finally {
     if (server) {

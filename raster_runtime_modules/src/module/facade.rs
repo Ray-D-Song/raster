@@ -210,12 +210,29 @@ fn module_constructor<'js>(
     Ok(module)
 }
 
+/// Clear a pending QuickJS exception left by nested resolve attempts when the
+/// overall operation still succeeded. Without this, JS callers observe a
+/// phantom `ReferenceError: Error resolving module ...` after a successful
+/// `require()` (seen with Next's app-page-turbo load-manifest externals).
+fn clear_spurious_resolving_exception(ctx: &Ctx<'_>) {
+    if !ctx.has_exception() {
+        return;
+    }
+    let pending = ctx.catch();
+    // Intentionally drop. Successful module load is authoritative.
+    let _ = pending;
+}
+
 fn module_prototype_require<'js>(
     ctx: Ctx<'js>,
     this: This<Object<'js>>,
     request: String,
 ) -> Result<Value<'js>> {
-    super::require::require_from_module(ctx, this.0.clone(), request, true)
+    let result = super::require::require_from_module(ctx.clone(), this.0.clone(), request, true);
+    if result.is_ok() {
+        clear_spurious_resolving_exception(&ctx);
+    }
+    result
 }
 
 fn node_module_paths_fn(_ctx: Ctx<'_>, from: String) -> Result<Vec<String>> {
@@ -248,13 +265,17 @@ fn global_require_impl<'js>(ctx: Ctx<'js>, request: String) -> Result<Value<'js>
         .borrow()
         .current_module
         .clone();
-    if let Some(current) = current_module {
-        return super::require::require_from_module(ctx, current, request, true);
+    let result = if let Some(current) = current_module {
+        super::require::require_from_module(ctx.clone(), current, request, true)
+    } else {
+        let parent_filename = canonical_parent_filename(&ctx, None)?;
+        let parent = get_or_create_module_record(&ctx, &parent_filename, None)?;
+        super::require::require_from_module(ctx.clone(), parent, request, false)
+    };
+    if result.is_ok() {
+        clear_spurious_resolving_exception(&ctx);
     }
-
-    let parent_filename = canonical_parent_filename(&ctx, None)?;
-    let parent = get_or_create_module_record(&ctx, &parent_filename, None)?;
-    super::require::require_from_module(ctx, parent, request, false)
+    result
 }
 
 fn global_require_resolve_impl<'js>(
@@ -274,7 +295,11 @@ fn require_from_filename<'js>(
     request: String,
 ) -> Result<Value<'js>> {
     let parent = get_or_create_module_record(&ctx, &parent_filename, None)?;
-    super::require::require_from_module(ctx, parent, request, true)
+    let result = super::require::require_from_module(ctx.clone(), parent, request, true);
+    if result.is_ok() {
+        clear_spurious_resolving_exception(&ctx);
+    }
+    result
 }
 
 fn resolve_from_filename<'js>(

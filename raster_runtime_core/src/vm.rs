@@ -9,7 +9,6 @@ use rquickjs::{
 
 use crate::libs::{
     context::set_spawn_error_handler,
-    hooking::HOOKING_MODE,
     json,
     logging::print_error_and_exit,
     numbers,
@@ -50,7 +49,7 @@ impl Default for VmOptions {
 
         Self {
             module_builder,
-            max_stack_size: 512 * 1024,
+            max_stack_size: 2 * 1024 * 1024,
             gc_threshold_mb: {
                 const DEFAULT_GC_THRESHOLD_MB: usize = 20;
 
@@ -127,9 +126,10 @@ impl Vm {
         })
         .await?;
 
-        if HOOKING_MODE.to_owned() {
-            runtime.set_promise_hook(Some(promise_hook_tracker())).await;
-        }
+        // Always register the Promise hook when async-hooks is built in.
+        // The hook fast-paths when no AsyncLocalStorage consumers exist and
+        // user createHook tracking is inactive (RASTER_RUNTIME_ASYNC_HOOKS).
+        runtime.set_promise_hook(Some(promise_hook_tracker())).await;
 
         // Unhandled promise rejections must not look like a successful idle exit.
         // Defer emit + default handling to the next macrotask so same-turn

@@ -198,6 +198,7 @@ where
         proto.set("addListener", on)?;
         proto.set("removeListener", off)?;
         proto.set("listenerCount", Func::from(Self::listener_count))?;
+        proto.set("listeners", Func::from(Self::listeners))?;
         proto.set("removeAllListeners", Func::from(Self::remove_all_listeners))?;
 
         Ok(proto)
@@ -492,6 +493,17 @@ where
             .iter()
             .find(|(k, _)| k == &key)
             .map_or(0, |(_, items)| items.len()))
+    }
+
+    /// Returns a copy of the array of listeners for the event named `event`.
+    fn listeners(
+        this: This<Object<'js>>,
+        ctx: Ctx<'js>,
+        event: Value<'js>,
+    ) -> Result<Vec<Function<'js>>> {
+        let events = Self::resolve_events_from(&ctx, &this)?;
+        let key = EventKey::from_value(&ctx, event)?;
+        Ok(find_all_listeners(events, key))
     }
 
     fn remove_all_listeners(
