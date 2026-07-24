@@ -143,7 +143,7 @@ run-ssr: js
 	cargo build
 	cd example/functions && yarn build && cd build && ../../../target/debug/raster_runtime
 
-compat: compat-next compat-vite-plus
+compat: compat-next compat-vite-plus compat-better-sqlite3
 
 compat-next: js
 	cd compat/next && yarn install --frozen-lockfile
@@ -152,6 +152,10 @@ compat-next: js
 compat-vite-plus: js
 	cd compat/vite-plus && yarn install --frozen-lockfile
 	node compat/run.mjs vite-plus $(RASTER_RUNTIME)
+
+compat-better-sqlite3: js
+	cd compat/better-sqlite3 && yarn install --frozen-lockfile
+	node compat/run.mjs better-sqlite3 $(RASTER_RUNTIME)
 
 flame:
 	cargo flamegraph --profile flame -- index.mjs
@@ -263,4 +267,4 @@ check-crates:
 	  cargo check -p "$$crate"; \
 	done
 
-.PHONY: libs check check-all check-crates libs-arm64 libs-x64 toolchain clean-js release-linux release-darwin release-windows stdlib stdlib-x64 stdlib-arm64 test test-ci run js run-release build release clean flame deploy compat compat-next compat-vite-plus types-pack-check types-smoke
+.PHONY: libs check check-all check-crates libs-arm64 libs-x64 toolchain clean-js release-linux release-darwin release-windows stdlib stdlib-x64 stdlib-arm64 test test-ci run js run-release build release clean flame deploy compat compat-next compat-vite-plus compat-better-sqlite3 types-pack-check types-smoke

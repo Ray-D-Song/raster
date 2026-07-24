@@ -6,8 +6,9 @@ Each fixture installs its own locked dependencies. **Vite+** still runs the upst
 | ---------------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Next App Router standalone runtime | Next 16.2.10, React 19.2.5 | Node `next build` (`output: "standalone"`) → Raster runs `.next/standalone/server.js` → HTTP checks on `/`, `/api/health`, `/posts/42`, concurrent `/api/als/:id` | Batch 2 target: inspector probe, timers/promises, AsyncLocalStorage propagation (no `RASTER_RUNTIME_ASYNC_HOOKS`), concurrent ALS isolation. Deferred: worker_threads, Inspector Session/protocol, timer ref/unref, timers/promises setInterval/scheduler. CI uses Node 22.18.0; local runs use system Node. Only the server process is under Raster. |
 | Vite+ React library build          | Vite+ 0.2.5, React 19.2.5  | Raster runs `vp build`                                                                                                                 | Observing: local baseline stops while resolving Vite+'s native binding                                                                                                                                                                               |
+| better-sqlite3 sync API            | better-sqlite3 11.9.1      | Node `test.cjs` baseline → Raster runs `test.cjs` → stdout contains `better-sqlite3 compat OK`                                         | **Red**: blocked on native addon (`.node`) loading under Raster. Node baseline validates the fixture; Raster run is the acceptance target for a future N-API / `.node` implementation.                                                            |
 
-Run `make compat-next` or `make compat-vite-plus` after building Raster. Upgrade a fixture only in a dedicated change that updates its exact dependency versions and lockfile.
+Run `make compat-next`, `make compat-vite-plus`, or `make compat-better-sqlite3` after building Raster. Upgrade a fixture only in a dedicated change that updates its exact dependency versions and lockfile.
 
 ## Next (standalone runtime)
 
@@ -26,6 +27,21 @@ Run `make compat-next` or `make compat-vite-plus` after building Raster. Upgrade
 Diagnostics land in `compat/next/compat.log` (Node build command/output, Raster start command/output, readiness last error, each HTTP check). Static assets (`.next/static`, CSS, images) are **not** copied or verified in this fixture; coverage is HTML SSR, API, dynamic route, and concurrent ALS isolation only.
 
 A green Next result means **Node-built standalone + Raster runtime HTTP**, not “Raster can execute `next build`”.
+
+## better-sqlite3 (sync API)
+
+1. **Node baseline** (30s timeout): `node test.cjs` in `compat/better-sqlite3/` — must exit `0` and print `better-sqlite3 compat OK`. Validates the fixture, dependency install, and test script. If this fails, Raster is not started.
+2. **Raster run** (60s timeout): `$RASTER_RUNTIME test.cjs` with the same cwd — same exit code and stdout marker. This is the compatibility acceptance step.
+
+`test.cjs` exercises (sync API only):
+
+- In-memory `Database`, `exec`, `prepare`, `run`, `get`, `all`
+- `transaction()` commit and rollback on thrown error
+- File-backed database, `pragma('journal_mode = WAL')`, cleanup
+
+Deferred: `worker_threads`, `backup()`, custom SQL functions, `loadExtension()`, ESM import.
+
+Diagnostics land in `compat/better-sqlite3/compat.log` (Node baseline and Raster run stdout/stderr). Until Raster supports loading `.node` native addons, expect the Raster step to fail while the Node baseline passes.
 
 ## Failures and CI
 

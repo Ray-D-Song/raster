@@ -1,0 +1,12 @@
+{
+  "name": "@raster-runtime/compat-better-sqlite3",
+  "private": true,
+  "version": "0.0.0",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "packageManager": "yarn@1.22.22",
+  "dependencies": {
+    "better-sqlite3": "11.9.1"
+  }
+}
