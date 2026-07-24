@@ -7,6 +7,7 @@ use raster_runtime_utils::{
     bytes::{get_array_bytes, get_start_end_indexes, ObjectBytes},
     error_messages::{ERROR_MSG_ARRAY_BUFFER_DETACHED, ERROR_MSG_NOT_ARRAY_BUFFER},
     iterable_enum,
+    option::Undefined,
     primordials::Primordial,
     result::ResultExt,
     string::{get_coerced_string, get_string},
@@ -104,13 +105,13 @@ fn alloc<'js>(
     ctx: Ctx<'js>,
     length: usize,
     fill: Opt<Value<'js>>,
-    encoding: Opt<String>,
+    encoding: Opt<Undefined<String>>,
 ) -> Result<Value<'js>> {
     if let Some(value) = fill.0 {
         if let Some(value) = value.as_string() {
             let string = value.to_string()?;
 
-            if let Some(encoding) = encoding.0 {
+            if let Some(encoding) = encoding.0.and_then(|u| u.0) {
                 let encoder = Encoder::from_str(&encoding).or_throw(&ctx)?;
                 let bytes = encoder.decode_from_string(string).or_throw(&ctx)?;
                 return alloc_byte_ref(&ctx, &bytes, length);
@@ -182,9 +183,13 @@ fn alloc_unsafe_slow(ctx: Ctx<'_>, size: usize) -> Result<Value<'_>> {
     Buffer(bytes).into_js(&ctx)
 }
 
-fn byte_length<'js>(ctx: Ctx<'js>, value: Value<'js>, encoding: Opt<String>) -> Result<usize> {
+fn byte_length<'js>(
+    ctx: Ctx<'js>,
+    value: Value<'js>,
+    encoding: Opt<Undefined<String>>,
+) -> Result<usize> {
     //slow path
-    if let Some(encoding) = encoding.0 {
+    if let Some(encoding) = encoding.0.and_then(|u| u.0) {
         let encoder = Encoder::from_str(&encoding).or_throw(&ctx)?;
         let a = ObjectBytes::from(&ctx, &value)?;
         let bytes = a.as_bytes(&ctx)?;
@@ -400,7 +405,7 @@ fn subarray<'js>(
 fn to_string(
     this: This<Object<'_>>,
     ctx: Ctx,
-    encoding: Opt<String>,
+    encoding: Opt<Undefined<String>>,
     start: Opt<i32>,
     end: Opt<i32>,
 ) -> Result<String> {
@@ -419,6 +424,7 @@ fn to_string(
         .min(bytes.len());
     let bytes = &bytes[start..end];
 
+    let encoding = encoding.0.and_then(|u| u.0);
     let encoder = Encoder::from_optional_str(encoding.as_deref()).or_throw(&ctx)?;
     encoder.encode_to_string(bytes, true).or_throw(&ctx)
 }
