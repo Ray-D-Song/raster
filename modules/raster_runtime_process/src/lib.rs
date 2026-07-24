@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 use std::collections::HashMap;
 use std::env;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use raster_runtime_events::{Emitter, EventEmitter};
-use raster_runtime_hooking::{invoke_async_hook, HookType};
+use raster_runtime_hooking::{allocate_hook_resource_id, invoke_async_hook, HookType};
 use raster_runtime_utils::provider::ProviderType;
 use raster_runtime_utils::signals;
 
@@ -27,9 +27,6 @@ use rquickjs::{
     prelude::{Func, Opt, Rest},
     Array, BigInt, Class, Ctx, Error, Function, IntoJs, Object, Result, Value,
 };
-
-/// Unique TickObject resource ids (not callback pointer).
-static TICK_ID: AtomicUsize = AtomicUsize::new(1);
 
 pub static EXIT_CODE: AtomicU8 = AtomicU8::new(0);
 static EXITING: AtomicBool = AtomicBool::new(false);
@@ -63,7 +60,7 @@ const PROCESS_UNIX_EXPORTS: &[&str] = &[
 ];
 
 fn next_tick<'js>(ctx: Ctx<'js>, cb: Function<'js>, args: Rest<Value<'js>>) -> Result<()> {
-    let uid = TICK_ID.fetch_add(1, Ordering::Relaxed);
+    let uid = allocate_hook_resource_id();
     invoke_async_hook(&ctx, HookType::Init, ProviderType::TickObject, uid)?;
 
     // Wrap callback so BEFORE/AFTER/destroy run around the deferred tick job.

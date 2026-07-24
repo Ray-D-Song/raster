@@ -2620,6 +2620,7 @@ dependencies = [
  "raster_runtime_test",
  "raster_runtime_utils",
  "rquickjs",
+ "tokio",
 ]
 
 [[package]]

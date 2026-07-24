@@ -13,6 +13,7 @@ use std::{
 
 use once_cell::sync::Lazy;
 use raster_runtime_context::CtxExtension;
+use raster_runtime_hooking::allocate_hook_resource_id;
 pub use raster_runtime_hooking::{invoke_async_hook, HookType};
 use raster_runtime_utils::{
     module::{export_default, ModuleInfo},
@@ -39,6 +40,11 @@ pub struct RuntimeTimerState {
     running: bool,
     deadline: Instant,
     notify: Rc<Notify>,
+    /// hook_id of the timer whose callback is currently executing (0 = none).
+    /// Lets `clear_timeout_interval` detect a self-clear inside the callback
+    /// and defer destroy until after After, matching Node's lifecycle order
+    /// (init → before → after → destroy).
+    executing_hook_id: usize,
 }
 impl RuntimeTimerState {
     fn new(rt: *mut qjs::JSRuntime) -> Self {
@@ -49,6 +55,7 @@ impl RuntimeTimerState {
             deadline,
             running: false,
             notify: Default::default(),
+            executing_hook_id: 0,
         }
     }
 }
@@ -61,8 +68,14 @@ pub struct Timeout {
     deadline: Instant,
     raw_ctx: NonNull<qjs::JSContext>,
     id: usize,
+    hook_id: usize,
     repeating: bool,
     interval: u64,
+    /// Set when the timer was cleared *inside its own callback*. The clear
+    /// must not fire destroy immediately (that would drop the id_map entry
+    /// before After runs and leak the async context stack); poll_timers
+    /// fires destroy after After once this flag is set.
+    pending_destroy: bool,
 }
 
 impl Default for Timeout {
@@ -72,17 +85,16 @@ impl Default for Timeout {
             deadline: Instant::now(),
             raw_ctx: NonNull::dangling(),
             id: 0,
+            hook_id: 0,
             repeating: false,
             interval: 0,
+            pending_destroy: false,
         }
     }
 }
 
-/// Unique id space for microtask resources (not callback pointer).
-static MICROTASK_ID: AtomicUsize = AtomicUsize::new(1);
-
 fn queue_microtask<'js>(ctx: Ctx<'js>, cb: Function<'js>) -> Result<()> {
-    let uid = MICROTASK_ID.fetch_add(1, Ordering::Relaxed);
+    let uid = allocate_hook_resource_id();
     invoke_async_hook(&ctx, HookType::Init, ProviderType::Microtask, uid)?;
 
     // Stay on the true microtask queue (cb.defer); wrap for BEFORE/AFTER/destroy.
@@ -129,9 +141,13 @@ pub fn set_timeout_interval<'js>(
         },
     };
 
-    // Use timer id as async resource identity (not callback pointer).
+    // External timer id (returned to JS, used by clearTimeout) stays a
+    // per-module monotonic counter. The async-hooks lifecycle uses a
+    // process-wide unique hook_resource_id so it cannot collide with
+    // TickObject / Microtask entries in the shared id_map.
     let id = TIMER_ID.fetch_add(1, Ordering::Relaxed);
-    invoke_async_hook(ctx, HookType::Init, provider_type, id)?;
+    let hook_id = allocate_hook_resource_id();
+    invoke_async_hook(ctx, HookType::Init, provider_type, hook_id)?;
 
     let callback = Persistent::<Function>::save(ctx, cb);
 
@@ -140,8 +156,10 @@ pub fn set_timeout_interval<'js>(
         callback: Some(callback),
         raw_ctx: ctx.as_raw(),
         id,
+        hook_id,
         repeating,
         interval: delay,
+        pending_destroy: false,
     };
 
     let rt_ptr = unsafe { qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
@@ -186,14 +204,26 @@ fn clear_timeout_interval(ctx: Ctx<'_>, id: Opt<Value>) -> Result<()> {
             let _ = timeout.callback.take();
             timeout.repeating = false;
             timeout.deadline = Instant::now() - Duration::from_secs(1);
+            let hook_id = timeout.hook_id;
+            // If this timer's own callback is currently executing, defer the
+            // destroy until After has run and popped the async context
+            // (otherwise After cannot find the id_map entry and the context
+            // stack leaks). External clears fire destroy immediately.
+            let self_clear = state.executing_hook_id == hook_id && hook_id != 0;
+            if self_clear {
+                timeout.pending_destroy = true;
+                // Wake the timer loop so it re-polls now and drops the pending
+                // entry, instead of sleeping until the next interval cycle
+                // (which would delay process exit by a full period).
+                state.notify.notify_one();
+                drop(rt_timers);
+                return Ok(());
+            }
             state.notify.notify_one();
             // Drop async-id map entry for this timer resource.
             drop(rt_timers);
-            if let Ok(Some(func)) = ctx
-                .globals()
-                .get_optional::<_, Function>("invokeAsyncHook")
-            {
-                let _ = func.call::<_, ()>(("destroy", "Timeout", id));
+            if let Ok(Some(func)) = ctx.globals().get_optional::<_, Function>("invokeAsyncHook") {
+                let _ = func.call::<_, ()>(("destroy", "Timeout", hook_id));
             }
             return Ok(());
         }
@@ -455,24 +485,17 @@ pub fn init(ctx: &Ctx<'_>) -> Result<()> {
     rt_timers.push(RuntimeTimerState::new(rt_ptr));
     drop(rt_timers);
 
-    let native_set_timeout = Function::new(
-        ctx.clone(),
-        move |ctx, cb, delay: Opt<f64>| {
-            let delay = delay.unwrap_or(0.).max(0.) as u64;
-            set_timeout_interval(&ctx, cb, delay, ProviderType::Timeout)
-        },
-    )?;
-    let native_set_interval = Function::new(
-        ctx.clone(),
-        move |ctx, cb, delay: Opt<f64>| {
-            let delay = delay.unwrap_or(0.).max(0.) as u64;
-            set_timeout_interval(&ctx, cb, delay, ProviderType::Interval)
-        },
-    )?;
-    let native_set_immediate = Function::new(
-        ctx.clone(),
-        move |ctx, cb| set_timeout_interval(&ctx, cb, 0, ProviderType::Immediate),
-    )?;
+    let native_set_timeout = Function::new(ctx.clone(), move |ctx, cb, delay: Opt<f64>| {
+        let delay = delay.unwrap_or(0.).max(0.) as u64;
+        set_timeout_interval(&ctx, cb, delay, ProviderType::Timeout)
+    })?;
+    let native_set_interval = Function::new(ctx.clone(), move |ctx, cb, delay: Opt<f64>| {
+        let delay = delay.unwrap_or(0.).max(0.) as u64;
+        set_timeout_interval(&ctx, cb, delay, ProviderType::Interval)
+    })?;
+    let native_set_immediate = Function::new(ctx.clone(), move |ctx, cb| {
+        set_timeout_interval(&ctx, cb, 0, ProviderType::Immediate)
+    })?;
     let native_clear = Function::new(ctx.clone(), clear_timeout_interval)?;
     let native_queue_microtask = Function::new(ctx.clone(), queue_microtask)?;
 
@@ -520,10 +543,24 @@ pub struct ExecutingTimer(
     Instant,
     NonNull<qjs::JSContext>,
     Persistent<Function<'static>>,
-    usize, // timer resource id for async hooks
+    usize, // hook resource id for async hooks (not the external timer id)
 );
 
 unsafe impl Send for ExecutingTimer {}
+
+/// RAII guard that clears `executing_hook_id` on drop so an early `?`
+/// return from Before/After/callback cannot leave the marker stale.
+struct ExecutingGuard {
+    rt: *mut qjs::JSRuntime,
+}
+impl Drop for ExecutingGuard {
+    fn drop(&mut self) {
+        if let Ok(mut rt_timers) = RT_TIMER_STATE.lock() {
+            let state = get_timer_state(&mut rt_timers, self.rt);
+            state.executing_hook_id = 0;
+        }
+    }
+}
 
 pub fn poll_timers(
     rt: *mut qjs::JSRuntime,
@@ -550,7 +587,7 @@ pub fn poll_timers(
                         timeout.deadline,
                         ctx,
                         cb,
-                        timeout.id,
+                        timeout.hook_id,
                     )));
                     return false;
                 }
@@ -562,7 +599,7 @@ pub fn poll_timers(
                     timeout.deadline,
                     ctx,
                     cb.clone(),
-                    timeout.id,
+                    timeout.hook_id,
                 )));
                 timeout.callback.replace(cb);
             } else {
@@ -595,7 +632,7 @@ pub fn poll_timers(
 
     let mut is_first_time = true;
     for item in call_vec.iter_mut() {
-        if let Some(ExecutingTimer(_, ctx, timeout, timer_id)) = item.take() {
+        if let Some(ExecutingTimer(_, ctx, timeout, hook_id)) = item.take() {
             let ctx2 = unsafe { Ctx::from_raw(ctx) };
 
             if is_first_time {
@@ -603,32 +640,48 @@ pub fn poll_timers(
                 is_first_time = false;
             }
 
-            if let Ok(timeout) = timeout.restore(&ctx2) {
-                invoke_async_hook(&ctx2, HookType::Before, ProviderType::None, timer_id)?;
-
-                // User callback errors must not leave async context dirty.
-                let call_result = timeout.call::<_, ()>(());
-
-                invoke_async_hook(&ctx2, HookType::After, ProviderType::None, timer_id)?;
-
-                // One-shot timers leave the list above; destroy async id mapping.
-                // Intervals keep the same resource across fires.
-                let still_live = {
+            {
+                let _guard = ExecutingGuard { rt };
+                // Mark this timer as executing so a self-clearInterval inside
+                // the callback defers destroy until after After.
+                {
                     let mut rt_timers = RT_TIMER_STATE.lock().unwrap();
-                    let state = get_timer_state(&mut rt_timers, rt);
-                    state.timers.iter().any(|t| t.id == timer_id)
-                };
-                if !still_live {
-                    if let Ok(Some(func)) = ctx2
-                        .globals()
-                        .get_optional::<_, Function>("invokeAsyncHook")
-                    {
-                        let _ = func.call::<_, ()>(("destroy", "Timeout", timer_id));
-                    }
+                    get_timer_state(&mut rt_timers, rt).executing_hook_id = hook_id;
                 }
 
-                call_result?;
+                if let Ok(timeout) = timeout.restore(&ctx2) {
+                    invoke_async_hook(&ctx2, HookType::Before, ProviderType::None, hook_id)?;
+
+                    // User callback errors must not leave async context dirty.
+                    let call_result = timeout.call::<_, ()>(());
+
+                    invoke_async_hook(&ctx2, HookType::After, ProviderType::None, hook_id)?;
+
+                    // Destroy after After when the timer left the list
+                    // (one-shot completed) or was cleared inside its own
+                    // callback (pending_destroy). Intervals that persist keep
+                    // their id_map entry across fires.
+                    let destroy_now = {
+                        let mut rt_timers = RT_TIMER_STATE.lock().unwrap();
+                        let state = get_timer_state(&mut rt_timers, rt);
+                        match state.timers.iter().find(|t| t.hook_id == hook_id) {
+                            None => true,
+                            Some(t) => t.pending_destroy,
+                        }
+                    };
+                    if destroy_now {
+                        if let Ok(Some(func)) = ctx2
+                            .globals()
+                            .get_optional::<_, Function>("invokeAsyncHook")
+                        {
+                            let _ = func.call::<_, ()>(("destroy", "Timeout", hook_id));
+                        }
+                    }
+
+                    call_result?;
+                }
             }
+            // _guard dropped: executing_hook_id cleared before pending jobs.
 
             while ctx2.execute_pending_job() {}
         }
@@ -736,6 +789,75 @@ mod tests {
                 .unwrap();
                 let result = call_test::<String, _>(&ctx, &module, ()).await;
                 assert_eq!(result, "canceled");
+            })
+        })
+        .await;
+    }
+
+    /// Regression: an interval cleared inside its own callback must wake the
+    /// timer loop so the pending entry is dropped promptly (within a few ms),
+    /// not after a full interval cycle. Without the wake, the loop sleeps
+    /// until the next period and a CLI process cannot exit until then.
+    ///
+    /// The check inspects the internal timer list directly from Rust because
+    /// any JS-side probe timer would itself notify the loop and mask the bug.
+    #[tokio::test]
+    async fn self_clearing_interval_wakes_loop_and_drops_entry() {
+        test_async_with(|ctx| {
+            Box::pin(async move {
+                init(&ctx).unwrap();
+                ModuleEvaluator::eval_rust::<TimersModule>(ctx.clone(), "timers")
+                    .await
+                    .unwrap();
+
+                let rt_ptr = unsafe { qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+
+                // Schedule a self-clearing interval. The JS fn resolves the
+                // promise from inside the callback, so once `call_test`
+                // returns we know the clear already happened. No other timer
+                // is scheduled, so nothing masks a missing loop wake-up.
+                let module = ModuleEvaluator::eval_js(
+                    ctx.clone(),
+                    "test_self_clear_wake",
+                    r#"
+                        export function test() {
+                            return new Promise((resolve) => {
+                                const handle = setInterval(() => {
+                                    clearInterval(handle);
+                                    resolve();
+                                }, 300);
+                            });
+                        }
+                    "#,
+                )
+                .await
+                .unwrap();
+                call_test::<(), _>(&ctx, &module, ()).await;
+
+                // With the fix the loop is woken during the await above and the
+                // pending entry is already gone. Poll for a window well short
+                // of the next 300ms cycle to also cover slow CI scheduling.
+                let mut removed = false;
+                for _ in 0..15 {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    let empty = {
+                        let rt_timers = RT_TIMER_STATE.lock().unwrap();
+                        rt_timers
+                            .iter()
+                            .find(|s| s.rt == rt_ptr)
+                            .map(|s| s.timers.is_empty())
+                            .unwrap_or(true)
+                    };
+                    if empty {
+                        removed = true;
+                        break;
+                    }
+                }
+                assert!(
+                    removed,
+                    "timer loop was not woken after interval self-clear; \
+                     pending entry lingered for a full cycle"
+                );
             })
         })
         .await;

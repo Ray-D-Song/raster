@@ -13,7 +13,10 @@
 //! - A value thrown by a JS import callback is re-thrown as-is (identity
 //!   preserved), never wrapped in a `RuntimeError`.
 
-use rquickjs::{atom::PredefinedAtom, function::Constructor, Coerced, Ctx, Exception, FromJs, Object, Result, Value};
+use rquickjs::{
+    atom::PredefinedAtom, function::Constructor, Coerced, Ctx, Exception, FromJs, Object, Result,
+    Value,
+};
 
 use crate::host_state::{ErrorConstructors, HostState};
 
@@ -63,7 +66,10 @@ macro_rules! define_error_class {
         #[rquickjs::methods]
         impl $name {
             #[qjs(constructor)]
-            pub fn new<'js>(ctx: Ctx<'js>, message: rquickjs::prelude::Opt<Value<'js>>) -> Result<Self> {
+            pub fn new<'js>(
+                ctx: Ctx<'js>,
+                message: rquickjs::prelude::Opt<Value<'js>>,
+            ) -> Result<Self> {
                 let message = to_message_string(&ctx, message.0)?;
                 let stack = capture_stack(&ctx, $tag, &message)?;
                 Ok(Self { message, stack })
@@ -130,8 +136,14 @@ pub fn install<'js>(ctx: &Ctx<'js>, namespace: &Object<'js>) -> Result<ErrorCons
             // itself -- `Symbol.toStringTag` alone (defined as a per-instance
             // getter above) does not affect `Error.prototype.toString()` or
             // any code that reads `err.name` directly.
-            proto.prop(PredefinedAtom::Name, Property::from($name).writable().configurable())?;
-            namespace.prop($name, Property::from(ctor.clone()).writable().configurable())?;
+            proto.prop(
+                PredefinedAtom::Name,
+                Property::from($name).writable().configurable(),
+            )?;
+            namespace.prop(
+                $name,
+                Property::from(ctor.clone()).writable().configurable(),
+            )?;
             Persistent::save(ctx, ctor)
         }};
     }
@@ -159,19 +171,35 @@ impl HostState {
         Ok(value)
     }
 
-    pub fn compile_error<'js>(&self, ctx: &Ctx<'js>, message: impl Into<String>) -> Result<Value<'js>> {
+    pub fn compile_error<'js>(
+        &self,
+        ctx: &Ctx<'js>,
+        message: impl Into<String>,
+    ) -> Result<Value<'js>> {
         self.construct_error(ctx, &self.errors.compile_error, message)
     }
 
-    pub fn link_error<'js>(&self, ctx: &Ctx<'js>, message: impl Into<String>) -> Result<Value<'js>> {
+    pub fn link_error<'js>(
+        &self,
+        ctx: &Ctx<'js>,
+        message: impl Into<String>,
+    ) -> Result<Value<'js>> {
         self.construct_error(ctx, &self.errors.link_error, message)
     }
 
-    pub fn runtime_error<'js>(&self, ctx: &Ctx<'js>, message: impl Into<String>) -> Result<Value<'js>> {
+    pub fn runtime_error<'js>(
+        &self,
+        ctx: &Ctx<'js>,
+        message: impl Into<String>,
+    ) -> Result<Value<'js>> {
         self.construct_error(ctx, &self.errors.runtime_error, message)
     }
 
-    pub fn throw_compile_error(&self, ctx: &Ctx<'_>, message: impl Into<String>) -> rquickjs::Error {
+    pub fn throw_compile_error(
+        &self,
+        ctx: &Ctx<'_>,
+        message: impl Into<String>,
+    ) -> rquickjs::Error {
         match self.compile_error(ctx, message) {
             Ok(value) => ctx.throw(value),
             Err(err) => err,
@@ -185,7 +213,11 @@ impl HostState {
         }
     }
 
-    pub fn throw_runtime_error(&self, ctx: &Ctx<'_>, message: impl Into<String>) -> rquickjs::Error {
+    pub fn throw_runtime_error(
+        &self,
+        ctx: &Ctx<'_>,
+        message: impl Into<String>,
+    ) -> rquickjs::Error {
         match self.runtime_error(ctx, message) {
             Ok(value) => ctx.throw(value),
             Err(err) => err,
@@ -234,7 +266,11 @@ pub fn classify_wasmi_error(error: &wasmi::Error) -> ErrorClass {
     }
 }
 
-pub fn throw_for_wasmi_error(ctx: &Ctx<'_>, host: &HostState, error: wasmi::Error) -> rquickjs::Error {
+pub fn throw_for_wasmi_error(
+    ctx: &Ctx<'_>,
+    host: &HostState,
+    error: wasmi::Error,
+) -> rquickjs::Error {
     let class = classify_wasmi_error(&error);
     let message = error.to_string();
     match class {
@@ -255,7 +291,10 @@ pub struct PendingJsExceptionSentinel;
 
 impl std::fmt::Display for PendingJsExceptionSentinel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "pending JS exception (should never be observed directly)")
+        write!(
+            f,
+            "pending JS exception (should never be observed directly)"
+        )
     }
 }
 
@@ -285,7 +324,11 @@ pub fn to_wasmi_error(ctx: &Ctx<'_>, host: &HostState, err: rquickjs::Error) -> 
 /// [`PendingJsExceptionSentinel`] first and, if found, restores and re-throws
 /// the original JS value/identity exactly as thrown (never wrapped in a
 /// `RuntimeError`). Otherwise classifies and throws normally.
-pub fn throw_for_wasmi_error_or_sentinel(ctx: &Ctx<'_>, host: &HostState, mut error: wasmi::Error) -> rquickjs::Error {
+pub fn throw_for_wasmi_error_or_sentinel(
+    ctx: &Ctx<'_>,
+    host: &HostState,
+    mut error: wasmi::Error,
+) -> rquickjs::Error {
     if error.downcast_mut::<PendingJsExceptionSentinel>().is_some() {
         if let Some(value) = host.take_pending_exception(ctx) {
             return ctx.throw(value);

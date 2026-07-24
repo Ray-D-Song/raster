@@ -37,16 +37,20 @@ pub fn wrap_func<'js>(
 ) -> Result<Function<'js>> {
     let bits = unsafe { crate::store_access::handle_bits(func) };
     if let Some(existing) = host.cached_wrapper(ctx, WrapKind::Func, bits) {
-        return Function::from_value(existing)
-            .map_err(|_| host.throw_runtime_error(ctx, "cached function wrapper was not a function"));
+        return Function::from_value(existing).map_err(|_| {
+            host.throw_runtime_error(ctx, "cached function wrapper was not a function")
+        });
     }
 
     let ty = func.ty(store.as_context());
     let realm_id = host.realm_id;
 
-    let js_func = Function::new(ctx.clone(), move |ctx: Ctx<'js>, args: Rest<Value<'js>>| -> Result<Value<'js>> {
-        crate::instance::call_exported_func(&ctx, realm_id, func, &ty, args.0)
-    })?;
+    let js_func = Function::new(
+        ctx.clone(),
+        move |ctx: Ctx<'js>, args: Rest<Value<'js>>| -> Result<Value<'js>> {
+            crate::instance::call_exported_func(&ctx, realm_id, func, &ty, args.0)
+        },
+    )?;
     let _ = js_func.set_name(format!("wasm_func_{bits:x}"));
 
     let value = js_func.clone().into_js(ctx)?;

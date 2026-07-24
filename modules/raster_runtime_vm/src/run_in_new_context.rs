@@ -206,7 +206,7 @@ fn parse_options(ctx: &Ctx<'_>, options: Option<Value<'_>>) -> JsResult<CString>
             }
 
             filename
-        }
+        },
     };
 
     validated_filename_cstring(ctx, &filename)
@@ -457,12 +457,10 @@ pub(crate) fn run_in_new_context_impl<'js>(
         parent_ctx: &parent_ctx,
         child: &child,
     };
-    let initial_global_keys: HashSet<String> = get_own_enumerable_string_keys(
-        &scope,
-        child_global.raw(),
-    )?
-    .into_iter()
-    .collect();
+    let initial_global_keys: HashSet<String> =
+        get_own_enumerable_string_keys(&scope, child_global.raw())?
+            .into_iter()
+            .collect();
 
     unsafe {
         copy_sandbox_to_child_global(&scope, &sandbox, child_global.raw())?;
@@ -491,7 +489,7 @@ pub(crate) fn run_in_new_context_impl<'js>(
                 return Err(sync_err);
             }
             Ok(value.transfer_to_parent(parent_ctx))
-        }
+        },
     }
 }
 
@@ -635,17 +633,17 @@ mod tests {
                             .and_then(|object| object.get::<_, String>("message").ok())
                             .unwrap_or_default();
                         assert!(message.contains("script boom"), "unexpected: {message}");
-                    }
+                    },
                     Err(CaughtError::Error(err)) => {
                         assert!(
                             err.to_string().contains("script boom"),
                             "unexpected: {err:?}"
                         );
-                    }
+                    },
                     Err(CaughtError::Exception(exception)) => {
                         let message = exception.message().unwrap_or_default();
                         assert!(message.contains("script boom"), "unexpected: {message}");
-                    }
+                    },
                     Ok(_) => panic!("expected error"),
                 }
             })
@@ -721,13 +719,9 @@ mod tests {
         test_async_with(|ctx| {
             Box::pin(async move {
                 let code = ctx.eval::<String, _>("'1\\u0000'").unwrap();
-                let result = run_in_new_context_impl(
-                    ctx.clone(),
-                    code.into_js(&ctx).unwrap(),
-                    None,
-                    None,
-                )
-                .catch(&ctx);
+                let result =
+                    run_in_new_context_impl(ctx.clone(), code.into_js(&ctx).unwrap(), None, None)
+                        .catch(&ctx);
 
                 assert!(result.is_err());
                 match result {
@@ -737,14 +731,14 @@ mod tests {
                             .and_then(|object| object.get::<_, String>("name").ok())
                             .unwrap_or_default();
                         assert_eq!(name, "SyntaxError", "unexpected error name: {name}");
-                    }
+                    },
                     Err(CaughtError::Error(err)) => {
                         assert!(
                             err.to_string().contains("SyntaxError"),
                             "unexpected: {err:?}"
                         );
-                    }
-                    Err(CaughtError::Exception(_)) => {}
+                    },
+                    Err(CaughtError::Exception(_)) => {},
                     Ok(_) => panic!("expected error"),
                 }
             })
@@ -757,9 +751,7 @@ mod tests {
         test_async_with(|ctx| {
             Box::pin(async move {
                 let function: Value = ctx.eval("(function () {})").unwrap();
-                let proxy: Value = ctx
-                    .eval("new Proxy(function () {}, {})")
-                    .unwrap();
+                let proxy: Value = ctx.eval("new Proxy(function () {}, {})").unwrap();
 
                 for sandbox in [function, proxy] {
                     let result = run_in_new_context_impl(

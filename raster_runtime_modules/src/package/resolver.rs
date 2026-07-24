@@ -208,11 +208,9 @@ pub fn require_resolve_with_options<'a>(
                 };
                 for base in paths {
                     let y_plus_x = Rc::new([base.as_str(), "/", suffix].concat());
-                    if let Some(path) = continue_on_unresolved_option(load_as_file(
-                        ctx,
-                        y_plus_x.clone(),
-                        is_esm,
-                    ))? {
+                    if let Some(path) =
+                        continue_on_unresolved_option(load_as_file(ctx, y_plus_x.clone(), is_esm))?
+                    {
                         trace!("+- Resolved by `LOAD_AS_FILE` (paths): {}", path);
                         return to_abs_path(path);
                     }
@@ -308,7 +306,6 @@ fn resolved_by_file_exists(path: Cow<'_, str>) -> Result<Cow<'_, str>> {
     trace!("+- Resolved by `FILE`: {}", path);
     to_abs_path(path)
 }
-
 
 fn to_abs_path(path: Cow<'_, str>) -> Result<Cow<'_, str>> {
     // Always normalize so `a/b/../c` and `a/c` share one module identity.
@@ -1109,11 +1106,7 @@ pub(crate) fn find_the_closest_package_scope(start: &str) -> Option<Box<str>> {
 
     loop {
         // Align with node_modules.cc: do not use or cross `.../node_modules/package.json`.
-        if current_dir
-            .file_name()
-            .and_then(|name| name.to_str())
-            == Some("node_modules")
-        {
+        if current_dir.file_name().and_then(|name| name.to_str()) == Some("node_modules") {
             return None;
         }
 
@@ -1266,9 +1259,7 @@ pub(crate) fn file_extname(path: &str) -> &str {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DetectedFormat {
     Esm,
-    Cjs {
-        allow_esm_detect: bool,
-    },
+    Cjs { allow_esm_detect: bool },
 }
 
 impl DetectedFormat {

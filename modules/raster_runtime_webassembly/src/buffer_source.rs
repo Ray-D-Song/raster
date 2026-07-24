@@ -47,7 +47,11 @@ use crate::host_state::HostState;
 ///    object cannot satisfy) -- takes exactly that view's own
 ///    `byteOffset`/`byteLength` window of its backing buffer.
 /// 3. Anything else -- `TypeError`.
-pub fn extract_buffer_source<'js>(ctx: &Ctx<'js>, host: &HostState, value: &Value<'js>) -> Result<Vec<u8>> {
+pub fn extract_buffer_source<'js>(
+    ctx: &Ctx<'js>,
+    host: &HostState,
+    value: &Value<'js>,
+) -> Result<Vec<u8>> {
     let obj = value
         .as_object()
         .ok_or_else(|| host.throw_type_error(ctx, "expected an ArrayBuffer or ArrayBufferView"))?;
@@ -63,7 +67,9 @@ pub fn extract_buffer_source<'js>(ctx: &Ctx<'js>, host: &HostState, value: &Valu
     // context) already initialized it.
     BasePrimordials::init(ctx)?;
     let primordials = BasePrimordials::get(ctx)?;
-    let is_view = primordials.function_array_buffer_is_view.call::<_, bool>((obj.clone(),))?;
+    let is_view = primordials
+        .function_array_buffer_is_view
+        .call::<_, bool>((obj.clone(),))?;
     if is_view {
         let buffer: ArrayBuffer = obj.get("buffer")?;
         let byte_offset: usize = obj.get("byteOffset")?;
@@ -74,7 +80,9 @@ pub fn extract_buffer_source<'js>(ctx: &Ctx<'js>, host: &HostState, value: &Valu
         let end = byte_offset
             .checked_add(byte_length)
             .filter(|end| *end <= bytes.len())
-            .ok_or_else(|| host.throw_type_error(ctx, "ArrayBufferView is out of bounds of its buffer"))?;
+            .ok_or_else(|| {
+                host.throw_type_error(ctx, "ArrayBufferView is out of bounds of its buffer")
+            })?;
         return Ok(bytes[byte_offset..end].to_vec());
     }
 

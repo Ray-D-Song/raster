@@ -39,7 +39,11 @@ fn compile_sync<'js>(ctx: Ctx<'js>, source: Value<'js>) -> Result<Value<'js>> {
 /// `Instance`) or a `BufferSource` (compiling first, resolving to
 /// `{module, instance}`), matching the two-overload behavior mandated by the
 /// spec for `WebAssembly.instantiate`.
-fn instantiate_sync<'js>(ctx: Ctx<'js>, source: Value<'js>, imports: Opt<Object<'js>>) -> Result<Value<'js>> {
+fn instantiate_sync<'js>(
+    ctx: Ctx<'js>,
+    source: Value<'js>,
+    imports: Opt<Object<'js>>,
+) -> Result<Value<'js>> {
     let realm = crate::realm::realm(&ctx)?;
     let host = realm.state.clone();
 
@@ -199,10 +203,18 @@ fn validate<'js>(ctx: Ctx<'js>, source: Value<'js>) -> Result<bool> {
 /// the namespace object by reading that global rather than receiving it as a
 /// parameter.
 pub fn install<'js>(ctx: &Ctx<'js>, namespace: &Object<'js>) -> Result<()> {
-    namespace.prop("validate", Property::from(Func::from(validate)).writable().configurable())?;
+    namespace.prop(
+        "validate",
+        Property::from(Func::from(validate))
+            .writable()
+            .configurable(),
+    )?;
 
     namespace.prop(COMPILE_SYNC_KEY, Property::from(Func::from(compile_sync)))?;
-    namespace.prop(INSTANTIATE_SYNC_KEY, Property::from(Func::from(instantiate_sync)))?;
+    namespace.prop(
+        INSTANTIATE_SYNC_KEY,
+        Property::from(Func::from(instantiate_sync)),
+    )?;
 
     ctx.eval::<(), _>(GLUE_JS)?;
     Ok(())
@@ -211,7 +223,7 @@ pub fn install<'js>(ctx: &Ctx<'js>, namespace: &Object<'js>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use raster_runtime_test::{call_test, test_async_with, ModuleEvaluator};
-    use rquickjs::{Class, Value, prelude::Func};
+    use rquickjs::{prelude::Func, Class, Value};
 
     #[derive(rquickjs::class::Trace, rquickjs::JsLifetime)]
     #[rquickjs::class(rename = "Response")]
@@ -267,9 +279,13 @@ mod tests {
             Box::pin(async move {
                 crate::init(&ctx).unwrap();
                 set_wasm_bytes(&ctx, ADD_WAT);
-                let ok: bool = ctx.eval("WebAssembly.validate(globalThis.__wasmBytes)").unwrap();
+                let ok: bool = ctx
+                    .eval("WebAssembly.validate(globalThis.__wasmBytes)")
+                    .unwrap();
                 assert!(ok);
-                let bad: bool = ctx.eval("WebAssembly.validate(new ArrayBuffer(4))").unwrap();
+                let bad: bool = ctx
+                    .eval("WebAssembly.validate(new ArrayBuffer(4))")
+                    .unwrap();
                 assert!(!bad);
             })
         })

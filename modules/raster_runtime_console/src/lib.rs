@@ -85,7 +85,11 @@ impl Console {
 
     pub fn count<'js>(&mut self, ctx: Ctx<'js>, label: Opt<Value<'js>>) -> Result<()> {
         let label = Self::label_string(&ctx, label)?;
-        let count = self.counts.entry(label.clone()).and_modify(|c| *c += 1).or_insert(1);
+        let count = self
+            .counts
+            .entry(label.clone())
+            .and_modify(|c| *c += 1)
+            .or_insert(1);
         write_console_log(
             stdout(),
             &ctx,
@@ -148,12 +152,7 @@ impl Console {
                 colors = enabled;
             }
         }
-        write_console_log(
-            stdout(),
-            &ctx,
-            Rest(vec![value]),
-            colors,
-        )
+        write_console_log(stdout(), &ctx, Rest(vec![value]), colors)
     }
 }
 

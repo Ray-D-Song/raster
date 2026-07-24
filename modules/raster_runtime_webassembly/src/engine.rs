@@ -22,12 +22,12 @@ use wasmi::{Config, Engine};
 
 fn build_config() -> Config {
     let mut config = Config::default();
-          config
-              // Explicit even though this is wasmi's own default: `Module::custom_sections()`
-              // (used by `Module.customSections()`, see `crate::module`) yields nothing if
-              // this is ever flipped to `true`.
-              .ignore_custom_sections(false)
-              .wasm_mutable_global(true)
+    config
+        // Explicit even though this is wasmi's own default: `Module::custom_sections()`
+        // (used by `Module.customSections()`, see `crate::module`) yields nothing if
+        // this is ever flipped to `true`.
+        .ignore_custom_sections(false)
+        .wasm_mutable_global(true)
         .wasm_sign_extension(true)
         .wasm_saturating_float_to_int(true)
         .wasm_multi_value(true)

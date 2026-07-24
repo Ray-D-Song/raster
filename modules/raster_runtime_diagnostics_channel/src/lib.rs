@@ -139,7 +139,10 @@ fn install_module<'js>(ctx: &Ctx<'js>) -> Result<Object<'js>> {
 
     let factory: Function = ctx.eval(FACTORY_JS)?;
     let state_value: Value = factory.call(())?;
-    let state = state_value.as_object().expect("diagnostics channel state").clone();
+    let state = state_value
+        .as_object()
+        .expect("diagnostics channel state")
+        .clone();
     globals.set(STATE_KEY, state.clone())?;
     Ok(state)
 }

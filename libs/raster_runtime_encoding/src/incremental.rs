@@ -69,7 +69,7 @@ impl IncrementalDecoder {
                     }
                     self.pending.clear();
                 }
-            }
+            },
             Encoder::Utf16le | Encoder::Utf16be => {
                 if self.utf16_lead_surrogate.is_some() && self.utf16_odd_byte.is_some() {
                     if lossy {
@@ -97,13 +97,13 @@ impl IncrementalDecoder {
                         self.utf16_lead_surrogate = None;
                     }
                 }
-            }
+            },
             Encoder::Hex | Encoder::Base64 => {
                 if !self.pending.is_empty() {
                     output.push_str(&encoder.encode_to_string(&self.pending, lossy)?);
                     self.pending.clear();
                 }
-            }
+            },
         }
 
         self.reset();
@@ -140,7 +140,7 @@ impl IncrementalDecoder {
         match encoder {
             Encoder::Utf8 | Encoder::Windows1252 => {
                 decode_utf8_like(&bytes, lossy, stream, &mut self.pending)
-            }
+            },
             Encoder::Utf16le => decode_utf16_stream(
                 &bytes,
                 Endian::Little,
@@ -164,7 +164,7 @@ impl IncrementalDecoder {
                 } else {
                     encoder.encode_to_string(&bytes, lossy)
                 }
-            }
+            },
         }
     }
 }
@@ -239,7 +239,7 @@ fn decode_utf8_like(
             Ok(valid) => {
                 output.push_str(valid);
                 break;
-            }
+            },
             Err(error) => {
                 let valid_up_to = error.valid_up_to();
                 if valid_up_to > 0 {
@@ -256,13 +256,13 @@ fn decode_utf8_like(
                         }
                         output.push(REPLACEMENT);
                         pos += invalid_len;
-                    }
+                    },
                     None => {
                         pending.extend_from_slice(&bytes[pos..]);
                         break;
-                    }
+                    },
                 }
-            }
+            },
         }
     }
 

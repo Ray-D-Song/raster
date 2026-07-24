@@ -74,10 +74,7 @@ fn get_heap_statistics(ctx: Ctx<'_>) -> Result<Object<'_>> {
     obj.set("number_of_detached_contexts", 0)?;
     obj.set("total_global_handles_size", 0)?;
     obj.set("used_global_handles_size", 0)?;
-    obj.set(
-        "external_memory",
-        safe_number_i64(usage.binary_object_size),
-    )?;
+    obj.set("external_memory", safe_number_i64(usage.binary_object_size))?;
     obj.set("total_allocated_bytes", malloc_size)?;
     Ok(obj)
 }
@@ -112,10 +109,7 @@ fn get_heap_code_statistics(ctx: Ctx<'_>) -> Result<Object<'_>> {
         "code_and_metadata_size",
         safe_number_i64(usage.js_func_size),
     )?;
-    obj.set(
-        "bytecode_and_metadata_size",
-        safe_number_i64(bytecode),
-    )?;
+    obj.set("bytecode_and_metadata_size", safe_number_i64(bytecode))?;
     obj.set("external_script_source_size", 0)?;
     obj.set("cpu_profiler_metadata_size", 0)?;
     Ok(obj)
@@ -152,10 +146,7 @@ impl ModuleDef for V8Module {
 
     fn evaluate<'js>(ctx: &Ctx<'js>, exports: &Exports<'js>) -> Result<()> {
         export_default(ctx, exports, |default| {
-            default.set(
-                "getHeapStatistics",
-                Func::from(get_heap_statistics),
-            )?;
+            default.set("getHeapStatistics", Func::from(get_heap_statistics))?;
             default.set(
                 "getHeapSpaceStatistics",
                 Func::from(get_heap_space_statistics),
@@ -164,10 +155,7 @@ impl ModuleDef for V8Module {
                 "getHeapCodeStatistics",
                 Func::from(get_heap_code_statistics),
             )?;
-            default.set(
-                "setFlagsFromString",
-                Func::from(set_flags_from_string),
-            )?;
+            default.set("setFlagsFromString", Func::from(set_flags_from_string))?;
             Ok(())
         })
     }

@@ -145,7 +145,12 @@ impl HostState {
 
     // -- wrapper identity cache ----------------------------------------------
 
-    pub fn cached_wrapper<'js>(&self, ctx: &Ctx<'js>, kind: WrapKind, bits: u64) -> Option<Value<'js>> {
+    pub fn cached_wrapper<'js>(
+        &self,
+        ctx: &Ctx<'js>,
+        kind: WrapKind,
+        bits: u64,
+    ) -> Option<Value<'js>> {
         let persistent = self.wrappers.borrow().get(&(kind, bits)).cloned()?;
         persistent.restore(ctx).ok()
     }
@@ -194,7 +199,8 @@ impl HostState {
         store: &mut dyn wasmi::AsContextMut<Data = std::rc::Rc<HostState>>,
         value: &Value<'_>,
     ) -> wasmi::ExternRef {
-        let has_stable_identity_ptr = value.is_object() || value.is_string() || value.is_symbol() || value.is_big_int();
+        let has_stable_identity_ptr =
+            value.is_object() || value.is_string() || value.is_symbol() || value.is_big_int();
 
         if has_stable_identity_ptr {
             let ptr = unsafe { qjs::JS_VALUE_GET_PTR(value.as_raw()) } as usize;
@@ -205,11 +211,19 @@ impl HostState {
             }
             let id = self.allocate_externref_id(store, value);
             self.externref_by_object_ptr.borrow_mut().insert(ptr, id);
-            return *self.externref_handles.borrow().get(&id).expect("just inserted above");
+            return *self
+                .externref_handles
+                .borrow()
+                .get(&id)
+                .expect("just inserted above");
         }
 
         let id = self.allocate_externref_id(store, value);
-        *self.externref_handles.borrow().get(&id).expect("just inserted above")
+        *self
+            .externref_handles
+            .borrow()
+            .get(&id)
+            .expect("just inserted above")
     }
 
     fn allocate_externref_id(

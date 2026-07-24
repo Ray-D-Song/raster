@@ -31,7 +31,7 @@ mod table;
 mod top_level;
 mod value_conv;
 
-use rquickjs::{class::Class, object::Property, Ctx, Object, atom::PredefinedAtom, Result};
+use rquickjs::{atom::PredefinedAtom, class::Class, object::Property, Ctx, Object, Result};
 
 use global::WasmGlobal;
 use instance::WasmInstance;
@@ -45,8 +45,12 @@ use table::WasmTable;
 /// pattern already used for `CompileError`/`LinkError`/`RuntimeError` in
 /// [`errors::install`]) rather than `Class::define`'s plain (enumerable)
 /// assignment.
-fn install_class<'js, C: rquickjs::class::JsClass<'js> + 'js>(ctx: &Ctx<'js>, namespace: &Object<'js>) -> Result<()> {
-    let ctor = Class::<C>::create_constructor(ctx)?.expect("WebAssembly native classes always define a constructor");
+fn install_class<'js, C: rquickjs::class::JsClass<'js> + 'js>(
+    ctx: &Ctx<'js>,
+    namespace: &Object<'js>,
+) -> Result<()> {
+    let ctor = Class::<C>::create_constructor(ctx)?
+        .expect("WebAssembly native classes always define a constructor");
     namespace.prop(C::NAME, Property::from(ctor).writable().configurable())?;
     Ok(())
 }

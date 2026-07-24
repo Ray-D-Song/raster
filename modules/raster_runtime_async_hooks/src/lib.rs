@@ -293,11 +293,7 @@ fn collect_internal_hooks<'js>(state: &AsyncHookState<'js>, kind: HookKind) -> V
 fn has_enabled_destroy_hooks(ctx: &Ctx<'_>) -> Result<bool> {
     let bind_state = ctx.userdata::<RefCell<AsyncHookState>>().or_throw(ctx)?;
     let state = bind_state.borrow();
-    if state.internal_consumer_count > 0
-        && state
-            .internal_hooks
-            .iter()
-            .any(|h| h.destroy.is_some())
+    if state.internal_consumer_count > 0 && state.internal_hooks.iter().any(|h| h.destroy.is_some())
     {
         return Ok(true);
     }
@@ -313,9 +309,7 @@ fn has_enabled_destroy_hooks(ctx: &Ctx<'_>) -> Result<bool> {
 fn has_enabled_init_hooks(ctx: &Ctx<'_>) -> Result<bool> {
     let bind_state = ctx.userdata::<RefCell<AsyncHookState>>().or_throw(ctx)?;
     let state = bind_state.borrow();
-    if state.internal_consumer_count > 0
-        && state.internal_hooks.iter().any(|h| h.init.is_some())
-    {
+    if state.internal_consumer_count > 0 && state.internal_hooks.iter().any(|h| h.init.is_some()) {
         return Ok(true);
     }
     if !*HOOKING_MODE {
@@ -855,7 +849,6 @@ const ASYNC_LOCAL_STORAGE_FACTORY_JS: &str = r#"(function (
   return AsyncLocalStorage;
 })"#;
 
-
 fn create_async_resource_constructor<'js>(ctx: &Ctx<'js>) -> Result<Value<'js>> {
     let factory: Function = ctx.eval(ASYNC_RESOURCE_FACTORY_JS)?;
     let allocate_native = Function::new(ctx.clone(), async_resource_allocate)?;
@@ -1029,7 +1022,15 @@ fn invoke_async_hook<'js>(
     let bind_state = ctx.userdata::<RefCell<AsyncHookState>>().or_throw(ctx)?;
 
     // Snapshot callbacks, then release the state borrow before calling JS.
-    let (internal_init, internal_before, internal_after, user_init, user_before, user_after, user_resolve) = {
+    let (
+        internal_init,
+        internal_before,
+        internal_after,
+        user_init,
+        user_before,
+        user_after,
+        user_resolve,
+    ) = {
         let state = bind_state.borrow();
         let user = *HOOKING_MODE;
         (

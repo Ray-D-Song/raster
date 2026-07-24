@@ -20,7 +20,10 @@
 
 use std::rc::Rc;
 
-use rquickjs::{class::Trace, ArrayBuffer, Class, Ctx, IntoJs, Object, Persistent, atom::PredefinedAtom, Result, Value};
+use rquickjs::{
+    atom::PredefinedAtom, class::Trace, ArrayBuffer, Class, Ctx, IntoJs, Object, Persistent,
+    Result, Value,
+};
 use wasmi::{AsContextMut, Memory, MemoryType};
 
 use crate::host_state::{HostState, WrapKind};
@@ -60,8 +63,13 @@ impl<'js> Trace<'js> for WasmMemory {
     fn trace<'a>(&self, _tracer: rquickjs::class::Tracer<'a, 'js>) {}
 }
 
-fn parse_memory_descriptor<'js>(ctx: &Ctx<'js>, host: &HostState, descriptor: &Object<'js>) -> Result<MemoryType> {
-    let initial_value = crate::descriptor::get_required(ctx, host, descriptor, "initial", "WebAssembly.Memory")?;
+fn parse_memory_descriptor<'js>(
+    ctx: &Ctx<'js>,
+    host: &HostState,
+    descriptor: &Object<'js>,
+) -> Result<MemoryType> {
+    let initial_value =
+        crate::descriptor::get_required(ctx, host, descriptor, "initial", "WebAssembly.Memory")?;
     let initial = crate::descriptor::to_u32_enforce_range(ctx, host, initial_value, "initial")?;
     let maximum = crate::descriptor::optional_u32_enforce_range(ctx, host, descriptor, "maximum")?;
     let shared = crate::descriptor::optional_bool(ctx, descriptor, "shared", false)?;
@@ -81,7 +89,9 @@ fn parse_memory_descriptor<'js>(ctx: &Ctx<'js>, host: &HostState, descriptor: &O
             return Err(host.throw_range_error(ctx, "maximum memory size exceeds the wasm32 limit"));
         }
         if max < initial {
-            return Err(host.throw_range_error(ctx, "maximum memory size is smaller than initial size"));
+            return Err(
+                host.throw_range_error(ctx, "maximum memory size is smaller than initial size")
+            );
         }
     }
     Ok(MemoryType::new(initial, maximum))
@@ -94,8 +104,9 @@ impl WasmMemory {
         let realm = crate::realm::realm(&ctx)?;
         let host = realm.state.clone();
         let ty = parse_memory_descriptor(&ctx, &host, &descriptor)?;
-        let handle = crate::realm::with_context_mut(&realm, |store| Memory::new(store.as_context_mut(), ty))
-            .map_err(|err| host.throw_range_error(&ctx, err.to_string()))?;
+        let handle =
+            crate::realm::with_context_mut(&realm, |store| Memory::new(store.as_context_mut(), ty))
+                .map_err(|err| host.throw_range_error(&ctx, err.to_string()))?;
         Ok(Self {
             realm_id: host.realm_id,
             handle,
@@ -109,17 +120,17 @@ impl WasmMemory {
         crate::realm::with_context_mut(&realm, |store| materialize(&ctx, &host, store, self.handle))
     }
 
-        pub fn grow(&self, ctx: Ctx<'_>, delta: u32) -> Result<u32> {
-            let realm = require_same_realm(&ctx, self.realm_id)?;
-            let host = realm.state.clone();
-            crate::realm::with_context_mut(&realm, |store| grow(&ctx, &host, store, self.handle, delta))
-        }
-
-        #[qjs(get, rename = PredefinedAtom::SymbolToStringTag)]
-        pub fn to_string_tag(&self) -> &'static str {
-            "WebAssembly.Memory"
-        }
+    pub fn grow(&self, ctx: Ctx<'_>, delta: u32) -> Result<u32> {
+        let realm = require_same_realm(&ctx, self.realm_id)?;
+        let host = realm.state.clone();
+        crate::realm::with_context_mut(&realm, |store| grow(&ctx, &host, store, self.handle, delta))
     }
+
+    #[qjs(get, rename = PredefinedAtom::SymbolToStringTag)]
+    pub fn to_string_tag(&self) -> &'static str {
+        "WebAssembly.Memory"
+    }
+}
 
 fn require_same_realm(ctx: &Ctx<'_>, realm_id: u64) -> Result<Rc<crate::realm::WasmRealm>> {
     let realm = crate::realm::realm(ctx)?;
@@ -188,9 +199,9 @@ pub(crate) fn corrupt_mirror_for_test(ctx: &Ctx<'_>, host: &HostState, memory: M
     let bits = unsafe { crate::store_access::handle_bits(memory) };
     let not_an_array_buffer: Value = Object::new(ctx.clone()).unwrap().into_value();
     let mut mirrors = host.memory_mirrors.borrow_mut();
-    let entry = mirrors
-        .get_mut(&bits)
-        .expect("memory must already be materialized (.buffer accessed) before injecting this fault");
+    let entry = mirrors.get_mut(&bits).expect(
+        "memory must already be materialized (.buffer accessed) before injecting this fault",
+    );
     entry.buffer = Persistent::save(ctx, not_an_array_buffer);
 }
 
@@ -205,7 +216,11 @@ pub fn materialize<'js>(
     let bits = unsafe { crate::store_access::handle_bits(memory) };
     let current_len = memory.data_size(store.as_context());
 
-    let existing = host.memory_mirrors.borrow().get(&bits).map(|entry| entry.byte_len);
+    let existing = host
+        .memory_mirrors
+        .borrow()
+        .get(&bits)
+        .map(|entry| entry.byte_len);
     if let Some(byte_len) = existing {
         if byte_len == current_len {
             // Already materialized at the right size: just copy fresh bytes in.
@@ -406,7 +421,6 @@ mod tests {
         crate::realm::install(ctx, errors).unwrap()
     }
 
-
     #[tokio::test]
     async fn buffer_identity_is_stable_across_repeated_access() {
         test_sync_with(|ctx| {
@@ -417,12 +431,19 @@ mod tests {
             .unwrap();
 
             let b1 = realm.state.clone();
-            let b1 = crate::realm::with_context_mut(&realm, |store| materialize(&ctx, &b1, store, memory))?;
+            let b1 = crate::realm::with_context_mut(&realm, |store| {
+                materialize(&ctx, &b1, store, memory)
+            })?;
             let b2 = realm.state.clone();
-            let b2 = crate::realm::with_context_mut(&realm, |store| materialize(&ctx, &b2, store, memory))?;
+            let b2 = crate::realm::with_context_mut(&realm, |store| {
+                materialize(&ctx, &b2, store, memory)
+            })?;
             let ptr1 = unsafe { rquickjs::qjs::JS_VALUE_GET_PTR(b1.as_raw()) };
             let ptr2 = unsafe { rquickjs::qjs::JS_VALUE_GET_PTR(b2.as_raw()) };
-            assert_eq!(ptr1, ptr2, "repeated .buffer access must return the same object");
+            assert_eq!(
+                ptr1, ptr2,
+                "repeated .buffer access must return the same object"
+            );
             Ok(())
         })
         .await;
@@ -441,17 +462,26 @@ mod tests {
             });
 
             let host = realm.state.clone();
-            let old_buffer = crate::realm::with_context_mut(&realm, |store| materialize(&ctx, &host, store, memory))?;
+            let old_buffer = crate::realm::with_context_mut(&realm, |store| {
+                materialize(&ctx, &host, store, memory)
+            })?;
             let old_array_buffer = ArrayBuffer::from_value(old_buffer).unwrap();
             assert_eq!(old_array_buffer.len(), 65536);
 
             let host = realm.state.clone();
-            let old_pages = crate::realm::with_context_mut(&realm, |store| grow(&ctx, &host, store, memory, 1))?;
+            let old_pages = crate::realm::with_context_mut(&realm, |store| {
+                grow(&ctx, &host, store, memory, 1)
+            })?;
             assert_eq!(old_pages, 1);
-            assert!(old_array_buffer.as_bytes().is_none(), "old buffer must be detached");
+            assert!(
+                old_array_buffer.as_bytes().is_none(),
+                "old buffer must be detached"
+            );
 
             let host = realm.state.clone();
-            let new_buffer = crate::realm::with_context_mut(&realm, |store| materialize(&ctx, &host, store, memory))?;
+            let new_buffer = crate::realm::with_context_mut(&realm, |store| {
+                materialize(&ctx, &host, store, memory)
+            })?;
             let new_array_buffer = ArrayBuffer::from_value(new_buffer).unwrap();
             assert_eq!(new_array_buffer.len(), 131072);
             assert_eq!(&new_array_buffer.as_bytes().unwrap()[0..5], b"hello");
@@ -492,7 +522,10 @@ mod tests {
                     }})()
                     "#
                 ))?;
-                assert!(ok, "descriptor.{key} getter's thrown value must propagate as-is");
+                assert!(
+                    ok,
+                    "descriptor.{key} getter's thrown value must propagate as-is"
+                );
             }
             Ok(())
         })
@@ -518,7 +551,10 @@ mod tests {
                 })()
                 "#,
             )?;
-            assert!(ok, "a numeric string 'initial'/'maximum' must coerce like Node");
+            assert!(
+                ok,
+                "a numeric string 'initial'/'maximum' must coerce like Node"
+            );
 
             let threw: bool = ctx.eval(
                 r#"
@@ -532,7 +568,10 @@ mod tests {
                 })()
                 "#,
             )?;
-            assert!(threw, "'initial: NaN' must throw TypeError, not be silently accepted as 0");
+            assert!(
+                threw,
+                "'initial: NaN' must throw TypeError, not be silently accepted as 0"
+            );
             Ok(())
         })
         .await;
@@ -560,7 +599,9 @@ mod tests {
                     Memory::new(store.as_context_mut(), MemoryType::new(1, Some(1)))
                 })
                 .unwrap();
-                crate::realm::with_context_mut(&realm, |store| materialize(&ctx, &host, store, memory))?;
+                crate::realm::with_context_mut(&realm, |store| {
+                    materialize(&ctx, &host, store, memory)
+                })?;
                 assert!(is_materialized(&host, memory));
                 // `realm` (and, with it, `host`/`HostState::memory_mirrors`)
                 // is dropped here at the end of this iteration.
@@ -580,9 +621,17 @@ mod tests {
             })
             .unwrap();
 
-            assert!(!is_materialized(&host, memory), "must not be materialized before first .buffer access");
-            crate::realm::with_context_mut(&realm, |store| materialize(&ctx, &host, store, memory))?;
-            assert!(is_materialized(&host, memory), "must be materialized after .buffer access");
+            assert!(
+                !is_materialized(&host, memory),
+                "must not be materialized before first .buffer access"
+            );
+            crate::realm::with_context_mut(&realm, |store| {
+                materialize(&ctx, &host, store, memory)
+            })?;
+            assert!(
+                is_materialized(&host, memory),
+                "must be materialized after .buffer access"
+            );
             Ok(())
         })
         .await;

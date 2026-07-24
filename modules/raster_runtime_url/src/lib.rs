@@ -41,10 +41,7 @@ pub fn path_to_file_url<'js>(ctx: Ctx<'js>, path: String, _: Opt<Value>) -> Resu
 /// Rejects encoded path separators that Node's `fileURLToPath` also rejects.
 pub fn file_path_from_url(ctx: &Ctx<'_>, url: &Url) -> Result<String> {
     if url.scheme() != "file" {
-        return Err(Exception::throw_type(
-            ctx,
-            "The URL must be of scheme file",
-        ));
+        return Err(Exception::throw_type(ctx, "The URL must be of scheme file"));
     }
 
     reject_encoded_path_separators(ctx, url)?;

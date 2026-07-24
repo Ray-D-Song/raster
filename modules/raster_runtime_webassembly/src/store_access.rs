@@ -93,7 +93,9 @@ const _: () = assert!(std::mem::size_of::<wasmi::ExternRef>() == std::mem::size_
 /// and the returned slice must not be held past a point where `buffer` could
 /// be detached or resized (i.e. it must be used and dropped within a single,
 /// non-reentrant synchronization pass).
-pub unsafe fn array_buffer_bytes_mut<'a>(buffer: &rquickjs::ArrayBuffer<'a>) -> Option<&'a mut [u8]> {
+pub unsafe fn array_buffer_bytes_mut<'a>(
+    buffer: &rquickjs::ArrayBuffer<'a>,
+) -> Option<&'a mut [u8]> {
     let raw = buffer.as_raw()?;
     Some(unsafe { std::slice::from_raw_parts_mut(raw.ptr.as_ptr(), raw.len) })
 }
@@ -109,8 +111,13 @@ pub unsafe fn array_buffer_bytes_mut<'a>(buffer: &rquickjs::ArrayBuffer<'a>) -> 
 /// `obj` must be a live, non-null QuickJS object value owned by `ctx`. This
 /// holds for any `rquickjs::Object` obtained normally (e.g.
 /// `rquickjs::Object::new`), which is the only way this function is called.
-pub unsafe fn prevent_extensions(ctx: &rquickjs::Ctx<'_>, obj: &rquickjs::Object<'_>) -> Result<(), ()> {
-    let ret = unsafe { rquickjs::qjs::JS_PreventExtensions(ctx.as_raw().as_ptr(), obj.as_value().as_raw()) };
+pub unsafe fn prevent_extensions(
+    ctx: &rquickjs::Ctx<'_>,
+    obj: &rquickjs::Object<'_>,
+) -> Result<(), ()> {
+    let ret = unsafe {
+        rquickjs::qjs::JS_PreventExtensions(ctx.as_raw().as_ptr(), obj.as_value().as_raw())
+    };
     if ret < 0 {
         Err(())
     } else {
@@ -151,7 +158,9 @@ impl ActiveCallerGuard {
         // pointer type sidesteps that (and avoids clippy's
         // `unnecessary_cast` false positive on the direct
         // same-looking-modulo-lifetime double cast this used to be).
-        let erased = (caller as *mut Caller<'_, StoreData>).cast::<()>().cast::<Caller<'static, StoreData>>();
+        let erased = (caller as *mut Caller<'_, StoreData>)
+            .cast::<()>()
+            .cast::<Caller<'static, StoreData>>();
         ACTIVE_CALLERS.with(|stack| stack.borrow_mut().push((realm_id, erased)));
         Self { realm_id }
     }
@@ -207,8 +216,7 @@ mod tests {
     fn handle_bits_are_stable_for_the_same_handle() {
         let engine = crate::engine::shared_engine();
         let mut store = wasmi::Store::new(&engine, ());
-        let memory = wasmi::Memory::new(&mut store, wasmi::MemoryType::new(1, Some(1)))
-            .unwrap();
+        let memory = wasmi::Memory::new(&mut store, wasmi::MemoryType::new(1, Some(1))).unwrap();
         let a = unsafe { handle_bits(memory) };
         let b = unsafe { handle_bits(memory) };
         assert_eq!(a, b);
@@ -218,10 +226,8 @@ mod tests {
     fn handle_bits_differ_for_distinct_memories() {
         let engine = crate::engine::shared_engine();
         let mut store = wasmi::Store::new(&engine, ());
-        let m1 = wasmi::Memory::new(&mut store, wasmi::MemoryType::new(1, Some(1)))
-            .unwrap();
-        let m2 = wasmi::Memory::new(&mut store, wasmi::MemoryType::new(1, Some(1)))
-            .unwrap();
+        let m1 = wasmi::Memory::new(&mut store, wasmi::MemoryType::new(1, Some(1))).unwrap();
+        let m2 = wasmi::Memory::new(&mut store, wasmi::MemoryType::new(1, Some(1))).unwrap();
         let a = unsafe { handle_bits(m1) };
         let b = unsafe { handle_bits(m2) };
         assert_ne!(a, b);

@@ -47,7 +47,9 @@ pub fn val_to_js<'js>(
                 .externref_object(ctx, store, *externref)
                 .ok_or_else(|| host.throw_runtime_error(ctx, "externref object identity was lost")),
         },
-        Val::V128(_) => Err(host.throw_type_error(ctx, "v128 values cannot cross the JS/Wasm boundary")),
+        Val::V128(_) => {
+            Err(host.throw_type_error(ctx, "v128 values cannot cross the JS/Wasm boundary"))
+        },
     }
 }
 
@@ -68,27 +70,31 @@ pub fn js_to_val<'js>(
             // JS values and otherwise saturates a Rust `as i32` cast instead
             // of wrapping (e.g. it maps `2**32 + 1` to `i32::MAX`, not `1`).
             let n = Coerced::<i32>::from_js(ctx, value)
-                .map_err(|_| host.throw_type_error(ctx, "expected a value convertible to a 32-bit integer"))?
+                .map_err(|_| {
+                    host.throw_type_error(ctx, "expected a value convertible to a 32-bit integer")
+                })?
                 .0;
             Ok(Val::I32(n))
-        }
+        },
         ValType::I64 => {
             let big = BigInt::from_js(ctx, value)
                 .map_err(|_| host.throw_type_error(ctx, "expected a BigInt for an i64 value"))?;
-            Ok(Val::I64(big.to_i64().map_err(|_| host.throw_type_error(ctx, "BigInt value is out of i64 range"))?))
-        }
+            Ok(Val::I64(big.to_i64().map_err(|_| {
+                host.throw_type_error(ctx, "BigInt value is out of i64 range")
+            })?))
+        },
         ValType::F32 => {
             let n = Coerced::<f64>::from_js(ctx, value)
                 .map_err(|_| host.throw_type_error(ctx, "expected a Number"))?
                 .0;
             Ok(Val::F32((n as f32).into()))
-        }
+        },
         ValType::F64 => {
             let n = Coerced::<f64>::from_js(ctx, value)
                 .map_err(|_| host.throw_type_error(ctx, "expected a Number"))?
                 .0;
             Ok(Val::F64(n.into()))
-        }
+        },
         ValType::FuncRef => {
             if value.is_null() || value.is_undefined() {
                 return Ok(Val::FuncRef(Ref::Null));
@@ -100,7 +106,7 @@ pub fn js_to_val<'js>(
                 )
             })?;
             Ok(Val::FuncRef(Ref::Val(func)))
-        }
+        },
         ValType::ExternRef => {
             // Only JS `null` maps to the Wasm-side null `externref`. `undefined`
             // is a normal, distinct JS value and must round-trip as itself
@@ -112,8 +118,10 @@ pub fn js_to_val<'js>(
             }
             let handle = host.intern_externref(store, &value);
             Ok(Val::ExternRef(Ref::Val(handle)))
-        }
-        ValType::V128 => Err(host.throw_type_error(ctx, "v128 values cannot cross the JS/Wasm boundary")),
+        },
+        ValType::V128 => {
+            Err(host.throw_type_error(ctx, "v128 values cannot cross the JS/Wasm boundary"))
+        },
     }
 }
 
@@ -137,7 +145,13 @@ pub fn default_val<'js>(
     ty: ValType,
 ) -> Result<Val> {
     if ty == ValType::ExternRef {
-        return js_to_val(ctx, host, store, Value::new_undefined(ctx.clone()), ValType::ExternRef);
+        return js_to_val(
+            ctx,
+            host,
+            store,
+            Value::new_undefined(ctx.clone()),
+            ValType::ExternRef,
+        );
     }
     Ok(Val::default(ty))
 }
@@ -189,7 +203,8 @@ mod tests {
             let realm = crate::realm::install(&ctx, errors)?;
             let host = realm.state.clone();
             let val = Val::V128(0u128.into());
-            let err = crate::realm::with_context_mut(&realm, |store| val_to_js(&ctx, &host, store, &val));
+            let err =
+                crate::realm::with_context_mut(&realm, |store| val_to_js(&ctx, &host, store, &val));
             assert!(err.is_err());
             Ok(())
         })

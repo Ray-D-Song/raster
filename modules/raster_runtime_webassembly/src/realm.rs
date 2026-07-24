@@ -216,12 +216,17 @@ fn with_registry<R>(ctx: &Ctx<'_>, f: impl FnOnce(&RealmRegistry) -> R) -> R {
 
 pub(crate) fn insert_into_registry(ctx: &Ctx<'_>, realm: Rc<WasmRealm>) {
     with_registry(ctx, |registry| {
-        registry.realms.borrow_mut().insert(realm.state.realm_id, realm);
+        registry
+            .realms
+            .borrow_mut()
+            .insert(realm.state.realm_id, realm);
     });
 }
 
 fn lookup_in_registry(ctx: &Ctx<'_>, realm_id: u64) -> Option<Rc<WasmRealm>> {
-    with_registry(ctx, |registry| registry.realms.borrow().get(&realm_id).cloned())
+    with_registry(ctx, |registry| {
+        registry.realms.borrow().get(&realm_id).cloned()
+    })
 }
 
 fn condemned_list(ctx: &Ctx<'_>) -> CondemnedList {
@@ -282,7 +287,13 @@ pub fn install<'js>(ctx: &Ctx<'js>, errors: ErrorConstructors) -> Result<Rc<Wasm
     let realm_id = realm.state.realm_id;
     insert_into_registry(ctx, realm.clone());
     let condemned = condemned_list(ctx);
-    let holder = Class::instance(ctx.clone(), WasmRealmHolder { realm_id, condemned })?;
+    let holder = Class::instance(
+        ctx.clone(),
+        WasmRealmHolder {
+            realm_id,
+            condemned,
+        },
+    )?;
     ctx.globals().prop(HOLDER_KEY, Property::from(holder))?;
     Ok(realm)
 }
@@ -335,8 +346,12 @@ pub fn realm(ctx: &Ctx<'_>) -> Result<Rc<WasmRealm>> {
     let realm_id = holder.try_borrow().map(|b| b.realm_id).map_err(|_| {
         rquickjs::Exception::throw_internal(ctx, "WebAssembly realm is being torn down")
     })?;
-    lookup_in_registry(ctx, realm_id)
-        .ok_or_else(|| rquickjs::Exception::throw_internal(ctx, "WebAssembly realm state is not initialized for this context"))
+    lookup_in_registry(ctx, realm_id).ok_or_else(|| {
+        rquickjs::Exception::throw_internal(
+            ctx,
+            "WebAssembly realm state is not initialized for this context",
+        )
+    })
 }
 
 #[cfg(test)]
@@ -485,8 +500,13 @@ mod tests {
                 })
                 .await
                 .unwrap();
-            let present = ctx1.with(|ctx| lookup_in_registry(&ctx, id).is_some()).await;
-            assert!(present, "realm must be registered while its context is alive");
+            let present = ctx1
+                .with(|ctx| lookup_in_registry(&ctx, id).is_some())
+                .await;
+            assert!(
+                present,
+                "realm must be registered while its context is alive"
+            );
             id
             // `ctx1` (the `AsyncContext`, and with it this context's
             // `globalThis` and `WasmRealmHolder`) is dropped here.
@@ -499,7 +519,9 @@ mod tests {
         // behavior -- not the goal of this fix.
         let ctx2 = rquickjs::AsyncContext::full(&rt).await.unwrap();
         ctx2.with(|ctx| ctx.run_gc()).await;
-        let still_present = ctx2.with(|ctx| lookup_in_registry(&ctx, realm_id).is_some()).await;
+        let still_present = ctx2
+            .with(|ctx| lookup_in_registry(&ctx, realm_id).is_some())
+            .await;
         assert!(
             still_present,
             "documenting current rquickjs behavior: the realm is not reaped \

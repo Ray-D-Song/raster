@@ -399,7 +399,10 @@ const QUERYSTRING_FACTORY: &str = r#"(function () {
 
 fn create_querystring<'js>(ctx: &Ctx<'js>) -> Result<Object<'js>> {
     let module_value: Value = ctx.eval(QUERYSTRING_FACTORY)?;
-    Ok(module_value.as_object().expect("querystring module").clone())
+    Ok(module_value
+        .as_object()
+        .expect("querystring module")
+        .clone())
 }
 
 pub struct QuerystringModule;

@@ -276,10 +276,7 @@ impl ModuleDef for UtilModule {
             default.set("inherits", Func::from(inherits))?;
             default.set("promisify", promisify)?;
             default.set("inspect", Func::from(inspect_value))?;
-            default.set(
-                "formatWithOptions",
-                Func::from(format_with_options),
-            )?;
+            default.set("formatWithOptions", Func::from(format_with_options))?;
             default.set("debuglog", debuglog.clone())?;
             default.set("debug", debuglog)?;
             default.set("toUSVString", to_usv_string)?;

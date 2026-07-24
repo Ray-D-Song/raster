@@ -16,3 +16,4 @@ rquickjs = { version = "=0.12.1", default-features = false }
 
 [dev-dependencies]
 raster_runtime_test = { path = "../../libs/raster_runtime_test" }
+tokio = { version = "1", features = ["macros", "rt"], default-features = false }

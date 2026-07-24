@@ -11,7 +11,9 @@
 
 use std::rc::Rc;
 
-use rquickjs::{class::Trace, Array, ArrayBuffer, Class, Ctx, Object, atom::PredefinedAtom, Result, Value};
+use rquickjs::{
+    atom::PredefinedAtom, class::Trace, Array, ArrayBuffer, Class, Ctx, Object, Result, Value,
+};
 use wasmi::Module as WasmiModule;
 
 use crate::host_state::HostState;
@@ -35,7 +37,6 @@ impl ExternKind {
             ExternKind::Global => "global",
         }
     }
-
 }
 
 /// Runs a `wasmparser::Validator` pass configured with exactly the feature
@@ -47,7 +48,10 @@ impl ExternKind {
 /// ever reach wasmi's own compilation pipeline.
 pub fn precheck(bytes: &[u8]) -> std::result::Result<(), String> {
     let mut validator = wasmparser::Validator::new_with_features(crate::engine::wasm_features());
-    validator.validate_all(bytes).map(|_| ()).map_err(|err| err.to_string())
+    validator
+        .validate_all(bytes)
+        .map(|_| ())
+        .map_err(|err| err.to_string())
 }
 
 /// One `{module, name, kind}` entry, in the exact order it appears in the
@@ -97,7 +101,7 @@ fn extract_module_metadata(bytes: &[u8]) -> std::result::Result<ModuleMetadata, 
                         kind: extern_kind_from_type_ref(&import.ty),
                     });
                 }
-            }
+            },
             wasmparser::Payload::ExportSection(reader) => {
                 for export in reader {
                     let export = export.map_err(|err| err.to_string())?;
@@ -106,13 +110,13 @@ fn extract_module_metadata(bytes: &[u8]) -> std::result::Result<ModuleMetadata, 
                         kind: extern_kind_from_external_kind(export.kind),
                     });
                 }
-            }
+            },
             wasmparser::Payload::CustomSection(reader) => {
                 metadata
                     .custom_sections
                     .push((reader.name().to_string(), reader.data().to_vec()));
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
     Ok(metadata)
@@ -156,13 +160,22 @@ impl<'js> Trace<'js> for WasmModule {
 /// Compiles `source` (a `BufferSource`) into a [`WasmModule`]. Shared by the
 /// `new WebAssembly.Module(source)` constructor and the top-level
 /// `WebAssembly.compile`/`instantiate` helpers.
-pub fn compile_module<'js>(ctx: &Ctx<'js>, host: &HostState, source: &Value<'js>) -> Result<WasmModule> {
+pub fn compile_module<'js>(
+    ctx: &Ctx<'js>,
+    host: &HostState,
+    source: &Value<'js>,
+) -> Result<WasmModule> {
     let bytes = crate::buffer_source::extract_buffer_source(ctx, host, source)?;
     precheck(&bytes).map_err(|message| host.throw_compile_error(ctx, message))?;
-    let metadata = extract_module_metadata(&bytes).map_err(|message| host.throw_compile_error(ctx, message))?;
+    let metadata = extract_module_metadata(&bytes)
+        .map_err(|message| host.throw_compile_error(ctx, message))?;
     let engine = crate::engine::shared_engine();
-    let inner = WasmiModule::new(&engine, &bytes[..]).map_err(|err| host.throw_compile_error(ctx, err.to_string()))?;
-    Ok(WasmModule { inner: Rc::new(inner), metadata: Rc::new(metadata) })
+    let inner = WasmiModule::new(&engine, &bytes[..])
+        .map_err(|err| host.throw_compile_error(ctx, err.to_string()))?;
+    Ok(WasmModule {
+        inner: Rc::new(inner),
+        metadata: Rc::new(metadata),
+    })
 }
 
 /// `WebAssembly.validate(source)`: same precheck + compile pipeline as
@@ -178,7 +191,12 @@ pub fn validate_bytes<'js>(ctx: &Ctx<'js>, host: &HostState, source: &Value<'js>
     Ok(WasmiModule::new(&engine, &bytes[..]).is_ok())
 }
 
-fn descriptor_object<'js>(ctx: &Ctx<'js>, module: Option<&str>, name: &str, kind: ExternKind) -> Result<Object<'js>> {
+fn descriptor_object<'js>(
+    ctx: &Ctx<'js>,
+    module: Option<&str>,
+    name: &str,
+    kind: ExternKind,
+) -> Result<Object<'js>> {
     let obj = Object::new(ctx.clone())?;
     if let Some(module) = module {
         obj.set("module", module)?;
@@ -188,8 +206,13 @@ fn descriptor_object<'js>(ctx: &Ctx<'js>, module: Option<&str>, name: &str, kind
     Ok(obj)
 }
 
-fn require_module<'js>(ctx: &Ctx<'js>, host: &HostState, value: &Value<'js>) -> Result<Class<'js, WasmModule>> {
-    Class::<WasmModule>::from_value(value).map_err(|_| host.throw_type_error(ctx, "expected a WebAssembly.Module"))
+fn require_module<'js>(
+    ctx: &Ctx<'js>,
+    host: &HostState,
+    value: &Value<'js>,
+) -> Result<Class<'js, WasmModule>> {
+    Class::<WasmModule>::from_value(value)
+        .map_err(|_| host.throw_type_error(ctx, "expected a WebAssembly.Module"))
 }
 
 #[rquickjs::methods]
@@ -212,7 +235,8 @@ impl WasmModule {
         let borrow = class.borrow();
         let array = Array::new(ctx.clone())?;
         for (idx, import) in borrow.metadata.imports.iter().enumerate() {
-            let descriptor = descriptor_object(&ctx, Some(&import.module), &import.name, import.kind)?;
+            let descriptor =
+                descriptor_object(&ctx, Some(&import.module), &import.name, import.kind)?;
             array.set(idx, descriptor)?;
         }
         Ok(array)
@@ -232,7 +256,11 @@ impl WasmModule {
     }
 
     #[qjs(rename = "customSections", static)]
-    pub fn custom_sections<'js>(ctx: Ctx<'js>, module: Value<'js>, name: String) -> Result<Array<'js>> {
+    pub fn custom_sections<'js>(
+        ctx: Ctx<'js>,
+        module: Value<'js>,
+        name: String,
+    ) -> Result<Array<'js>> {
         let host = crate::realm::realm(&ctx)?.state.clone();
         let class = require_module(&ctx, &host, &module)?;
         let borrow = class.borrow();
@@ -276,10 +304,7 @@ mod tests {
 
     #[tokio::test]
     async fn precheck_rejects_shared_memory() {
-        let wasm = wat::parse_str(
-            r#"(module (memory 1 1 shared))"#,
-        )
-        .unwrap();
+        let wasm = wat::parse_str(r#"(module (memory 1 1 shared))"#).unwrap();
         assert!(precheck(&wasm).is_err());
     }
 
@@ -299,7 +324,10 @@ mod tests {
             let engine = crate::engine::shared_engine();
             let inner = WasmiModule::new(&engine, &bytes[..]).unwrap();
             let metadata = extract_module_metadata(&bytes).unwrap();
-            let module = WasmModule { inner: Rc::new(inner), metadata: Rc::new(metadata) };
+            let module = WasmModule {
+                inner: Rc::new(inner),
+                metadata: Rc::new(metadata),
+            };
             let class = Class::instance(ctx.clone(), module)?;
             let value: Value = class.clone().into_js(&ctx)?;
             let _ = &realm;

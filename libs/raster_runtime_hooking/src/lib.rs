@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use std::cell::Cell;
 use std::env;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use once_cell::sync::Lazy;
 use raster_runtime_utils::{object::ObjectExt, provider::ProviderType};
@@ -11,6 +12,35 @@ use rquickjs::{Ctx, Exception, Function, JsLifetime, Object, Result, Value};
 /// Internal async context propagation (AsyncLocalStorage) does not require this.
 pub static HOOKING_MODE: Lazy<bool> =
     Lazy::new(|| env::var("RASTER_RUNTIME_ASYNC_HOOKS").as_deref() == Ok("1"));
+
+/// Process-wide allocator for async-resource hook IDs.
+///
+/// All counter-backed async resource providers (TickObject, Microtask,
+/// Timeout, ...) share this single counter so their IDs cannot collide in
+/// the per-context async-hooks `id_map`. Previously each module kept an
+/// independent counter (`TICK_ID` / `MICROTASK_ID` / `TIMER_ID` all started
+/// at 1), so a microtask and a nextTick could both receive ID 1 and clobber
+/// each other's mapping — causing AsyncLocalStorage context cross-talk
+/// (`[["micro","tick"],["tick",null]]` instead of
+/// `[["micro","micro"],["tick","tick"]]`).
+///
+/// `0` is reserved as the "no resource" sentinel returned by `get_id_map`,
+/// and `1` is reserved for the bootstrap execution context, so the first
+/// usable id is `2`. Pointer-backed providers (Promise / DNS / module
+/// loading) keep using raw object pointers as their id; those are large
+/// heap addresses and never collide with these small sequential ids.
+static HOOK_RESOURCE_ID: AtomicUsize = AtomicUsize::new(1);
+
+/// Allocate a process-wide unique async-resource hook ID (see
+/// `HOOK_RESOURCE_ID`).
+pub fn allocate_hook_resource_id() -> usize {
+    loop {
+        let id = HOOK_RESOURCE_ID.fetch_add(1, Ordering::Relaxed);
+        if id > 1 {
+            return id;
+        }
+    }
+}
 
 /// Per-context flag: true when internal consumers (ALS) exist or user hooks may run.
 /// Stored as userdata so promise/timer fast paths avoid string allocations.

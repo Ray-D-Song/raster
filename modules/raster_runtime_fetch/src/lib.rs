@@ -9,7 +9,7 @@ use raster_runtime_utils::{
     primordials::{BasePrimordials, Primordial},
     result::ResultExt,
 };
-use rquickjs::{Class, Ctx, Result, Value, prelude::Func};
+use rquickjs::{prelude::Func, Class, Ctx, Result, Value};
 
 pub(crate) mod body_helpers;
 pub mod fetch;
@@ -48,7 +48,10 @@ pub fn init(ctx: &Ctx) -> Result<()> {
     Class::<Request>::define(&globals)?;
     Class::<Response>::define(&globals)?;
     Class::<Headers>::define_with_custom_inspect(&globals)?;
-    globals.prop(RESPONSE_BRAND_CHECK_KEY, Func::from(has_native_response_brand))?;
+    globals.prop(
+        RESPONSE_BRAND_CHECK_KEY,
+        Func::from(has_native_response_brand),
+    )?;
 
     Ok(())
 }

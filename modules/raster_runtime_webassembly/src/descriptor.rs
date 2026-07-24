@@ -38,7 +38,11 @@ use crate::host_state::HostState;
 /// or reject.
 pub fn get_optional<'js>(descriptor: &Object<'js>, key: &str) -> Result<Option<Value<'js>>> {
     let value: Value = descriptor.get(key)?;
-    Ok(if value.is_undefined() { None } else { Some(value) })
+    Ok(if value.is_undefined() {
+        None
+    } else {
+        Some(value)
+    })
 }
 
 /// Same as [`get_optional`], but throws a descriptive `TypeError` (crediting
@@ -51,8 +55,12 @@ pub fn get_required<'js>(
     key: &str,
     owner: &str,
 ) -> Result<Value<'js>> {
-    get_optional(descriptor, key)?
-        .ok_or_else(|| host.throw_type_error(ctx, format!("{owner} descriptor must have a '{key}' property")))
+    get_optional(descriptor, key)?.ok_or_else(|| {
+        host.throw_type_error(
+            ctx,
+            format!("{owner} descriptor must have a '{key}' property"),
+        )
+    })
 }
 
 /// WebIDL `ToString` (i.e. plain JS `ToString`) coercion for a descriptor
@@ -87,21 +95,35 @@ pub fn to_bool<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> Result<bool> {
 /// some in-range value instead of rejecting it as out of range). A thrown
 /// `ToNumber` exception (`Symbol`, or a `valueOf`/`toString` that itself
 /// throws) keeps its exact original identity.
-pub fn to_u32_enforce_range<'js>(ctx: &Ctx<'js>, host: &HostState, value: Value<'js>, key: &str) -> Result<u32> {
+pub fn to_u32_enforce_range<'js>(
+    ctx: &Ctx<'js>,
+    host: &HostState,
+    value: Value<'js>,
+    key: &str,
+) -> Result<u32> {
     let n = Coerced::<f64>::from_js(ctx, value)?.0;
     if !n.is_finite() {
-        return Err(host.throw_type_error(ctx, format!("descriptor property '{key}' must be a finite number")));
+        return Err(host.throw_type_error(
+            ctx,
+            format!("descriptor property '{key}' must be a finite number"),
+        ));
     }
     let truncated = n.trunc();
     if truncated < 0.0 || truncated > f64::from(u32::MAX) {
-        return Err(host.throw_type_error(ctx, format!("descriptor property '{key}' is out of range")));
+        return Err(
+            host.throw_type_error(ctx, format!("descriptor property '{key}' is out of range"))
+        );
     }
     Ok(truncated as u32)
 }
 
 /// Convenience for an optional [`to_string`]-coerced field: `None`/
 /// `undefined` yields `None`; any other value is [`to_string`]-coerced.
-pub fn optional_string<'js>(ctx: &Ctx<'js>, descriptor: &Object<'js>, key: &str) -> Result<Option<String>> {
+pub fn optional_string<'js>(
+    ctx: &Ctx<'js>,
+    descriptor: &Object<'js>,
+    key: &str,
+) -> Result<Option<String>> {
     match get_optional(descriptor, key)? {
         Some(value) => Ok(Some(to_string(ctx, value)?)),
         None => Ok(None),
@@ -125,7 +147,12 @@ pub fn optional_u32_enforce_range<'js>(
 /// Convenience for an optional [`to_bool`]-coerced field (`shared`,
 /// `mutable`) with a default: `None`/`undefined` yields `default`; any
 /// other value is [`to_bool`]-coerced.
-pub fn optional_bool<'js>(ctx: &Ctx<'js>, descriptor: &Object<'js>, key: &str, default: bool) -> Result<bool> {
+pub fn optional_bool<'js>(
+    ctx: &Ctx<'js>,
+    descriptor: &Object<'js>,
+    key: &str,
+    default: bool,
+) -> Result<bool> {
     match get_optional(descriptor, key)? {
         Some(value) => to_bool(ctx, value),
         None => Ok(default),

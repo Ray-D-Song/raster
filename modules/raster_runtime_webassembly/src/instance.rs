@@ -22,7 +22,9 @@ use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 
 use rquickjs::function::{IntoArgs, Rest};
-use rquickjs::{class::Trace, Array, Class, Ctx, JsLifetime, Object, atom::PredefinedAtom, Result, Value};
+use rquickjs::{
+    atom::PredefinedAtom, class::Trace, Array, Class, Ctx, JsLifetime, Object, Result, Value,
+};
 use wasmi::{AsContextMut, ExternType, Func, FuncType, Val};
 
 use crate::host_state::HostState;
@@ -58,7 +60,11 @@ impl<'js> Trace<'js> for WasmInstance<'js> {
 #[rquickjs::methods]
 impl<'js> WasmInstance<'js> {
     #[qjs(constructor)]
-    pub fn new(ctx: Ctx<'js>, module: Value<'js>, imports: rquickjs::prelude::Opt<Object<'js>>) -> Result<Self> {
+    pub fn new(
+        ctx: Ctx<'js>,
+        module: Value<'js>,
+        imports: rquickjs::prelude::Opt<Object<'js>>,
+    ) -> Result<Self> {
         let realm = crate::realm::realm(&ctx)?;
         let host = realm.state.clone();
         let module_class = Class::<WasmModule>::from_value(&module)
@@ -90,7 +96,10 @@ pub fn instantiate_module<'js>(
     let host = realm.state.clone();
 
     if !module.metadata.imports.is_empty() && imports.is_none() {
-        return Err(host.throw_type_error(ctx, "module requires an imports object but none was provided"));
+        return Err(host.throw_type_error(
+            ctx,
+            "module requires an imports object but none was provided",
+        ));
     }
 
     // `module.metadata.imports` preserves the binary's declaration order
@@ -149,9 +158,12 @@ pub fn instantiate_module<'js>(
         // missing/mistyped import).
         let namespace_obj = imports.as_ref().expect("checked above");
         let namespace_val: Value = namespace_obj.get(module_name)?;
-        let namespace = namespace_val
-            .as_object()
-            .ok_or_else(|| host.throw_link_error(ctx, format!("import namespace '{module_name}' is not an object")))?;
+        let namespace = namespace_val.as_object().ok_or_else(|| {
+            host.throw_link_error(
+                ctx,
+                format!("import namespace '{module_name}' is not an object"),
+            )
+        })?;
         let value: Value = namespace.get(field_name)?;
 
         let ty = by_key
@@ -185,7 +197,9 @@ pub fn instantiate_module<'js>(
     .map_err(|err| crate::errors::throw_for_wasmi_error_or_sentinel(ctx, &host, err))?;
 
     let exports_obj = build_exports_object(ctx, &host, realm, module, handle)?;
-    Ok(WasmInstance { exports: exports_obj })
+    Ok(WasmInstance {
+        exports: exports_obj,
+    })
 }
 
 fn resolve_import<'js>(
@@ -203,14 +217,20 @@ fn resolve_import<'js>(
                 return Ok(wasmi::Extern::Func(existing));
             }
             let js_func = value.as_function().cloned().ok_or_else(|| {
-                host.throw_link_error(ctx, format!("import '{module_name}.{field_name}' is not a function"))
+                host.throw_link_error(
+                    ctx,
+                    format!("import '{module_name}.{field_name}' is not a function"),
+                )
             })?;
             let func = build_dynamic_host_func(realm, host, func_ty.clone(), js_func);
             Ok(wasmi::Extern::Func(func))
-        }
+        },
         ExternType::Memory(_) => {
             let class = Class::<crate::memory::WasmMemory>::from_value(value).map_err(|_| {
-                host.throw_link_error(ctx, format!("import '{module_name}.{field_name}' expected a WebAssembly.Memory"))
+                host.throw_link_error(
+                    ctx,
+                    format!("import '{module_name}.{field_name}' expected a WebAssembly.Memory"),
+                )
             })?;
             let borrow = class.borrow();
             if borrow.realm_id != host.realm_id {
@@ -220,10 +240,13 @@ fn resolve_import<'js>(
             drop(borrow);
             register_wrapper_provenance(host, crate::host_state::WrapKind::Memory, handle, value);
             Ok(wasmi::Extern::Memory(handle))
-        }
+        },
         ExternType::Table(_) => {
             let class = Class::<crate::table::WasmTable>::from_value(value).map_err(|_| {
-                host.throw_link_error(ctx, format!("import '{module_name}.{field_name}' expected a WebAssembly.Table"))
+                host.throw_link_error(
+                    ctx,
+                    format!("import '{module_name}.{field_name}' expected a WebAssembly.Table"),
+                )
             })?;
             let borrow = class.borrow();
             if borrow.realm_id != host.realm_id {
@@ -233,10 +256,13 @@ fn resolve_import<'js>(
             drop(borrow);
             register_wrapper_provenance(host, crate::host_state::WrapKind::Table, handle, value);
             Ok(wasmi::Extern::Table(handle))
-        }
+        },
         ExternType::Global(_) => {
             let class = Class::<crate::global::WasmGlobal>::from_value(value).map_err(|_| {
-                host.throw_link_error(ctx, format!("import '{module_name}.{field_name}' expected a WebAssembly.Global"))
+                host.throw_link_error(
+                    ctx,
+                    format!("import '{module_name}.{field_name}' expected a WebAssembly.Global"),
+                )
             })?;
             let borrow = class.borrow();
             if borrow.realm_id != host.realm_id {
@@ -246,7 +272,7 @@ fn resolve_import<'js>(
             drop(borrow);
             register_wrapper_provenance(host, crate::host_state::WrapKind::Global, handle, value);
             Ok(wasmi::Extern::Global(handle))
-        }
+        },
     }
 }
 
@@ -303,17 +329,22 @@ fn build_exports_object<'js>(
                 .get_export(store.as_context(), name)
                 .expect("export declared by the Module must be resolvable on its own Instance");
             let value: Value = match extern_ {
-                wasmi::Extern::Func(func) => crate::func_wrapper::wrap_func(ctx, host, store, func)?.into_value(),
-                wasmi::Extern::Memory(memory) => crate::memory::wrap_memory(ctx, host, memory)?.into_value(),
+                wasmi::Extern::Func(func) => {
+                    crate::func_wrapper::wrap_func(ctx, host, store, func)?.into_value()
+                },
+                wasmi::Extern::Memory(memory) => {
+                    crate::memory::wrap_memory(ctx, host, memory)?.into_value()
+                },
                 wasmi::Extern::Table(table) => {
                     let element = table.ty(store.as_context()).element();
                     crate::table::wrap_table(ctx, host, table, element)?.into_value()
-                }
+                },
                 wasmi::Extern::Global(global) => {
                     let ty = global.ty(store.as_context());
                     let mutable = matches!(ty.mutability(), wasmi::Mutability::Var);
-                    crate::global::wrap_global(ctx, host, global, ty.content(), mutable)?.into_value()
-                }
+                    crate::global::wrap_global(ctx, host, global, ty.content(), mutable)?
+                        .into_value()
+                },
             };
             use rquickjs::object::Property;
             exports.prop(name, Property::from(value).enumerable())?;
@@ -323,8 +354,9 @@ fn build_exports_object<'js>(
 
     // SAFETY: `exports` is a live `Object` owned by `ctx`, per
     // `store_access::prevent_extensions`'s documented invariant.
-    unsafe { crate::store_access::prevent_extensions(ctx, &exports) }
-        .map_err(|_| host.throw_runtime_error(ctx, "failed to make Instance.exports non-extensible"))?;
+    unsafe { crate::store_access::prevent_extensions(ctx, &exports) }.map_err(|_| {
+        host.throw_runtime_error(ctx, "failed to make Instance.exports non-extensible")
+    })?;
     Ok(exports)
 }
 
@@ -334,13 +366,22 @@ fn build_exports_object<'js>(
 /// implementation plan; the actual JS `Function` is looked up through
 /// [`HostState::callback`] each time the trampoline runs, using the `Ctx`
 /// reconstructed from `Caller::data()`.
-fn build_dynamic_host_func(realm: &Rc<WasmRealm>, host: &HostState, ty: FuncType, js_func: rquickjs::Function<'_>) -> Func {
+fn build_dynamic_host_func(
+    realm: &Rc<WasmRealm>,
+    host: &HostState,
+    ty: FuncType,
+    js_func: rquickjs::Function<'_>,
+) -> Func {
     let callback_id = host.register_callback(js_func);
     let realm_id = host.realm_id;
     crate::realm::with_context_mut(realm, |store| {
-        wasmi::Func::new(store.as_context_mut(), ty, move |caller, inputs, outputs| {
-            call_js_import(realm_id, callback_id, caller, inputs, outputs)
-        })
+        wasmi::Func::new(
+            store.as_context_mut(),
+            ty,
+            move |caller, inputs, outputs| {
+                call_js_import(realm_id, callback_id, caller, inputs, outputs)
+            },
+        )
     })
 }
 
@@ -392,7 +433,7 @@ fn call_js_import(
             // error/exception (already captured above) must always win.
             let _ = crate::memory::sync_all_js_to_wasm(&ctx, &host, &mut caller);
             Err(wasmi_err)
-        }
+        },
     }
 }
 
@@ -421,10 +462,13 @@ fn run_js_import_callback<'js>(
         let ty = outputs[0].ty();
         outputs[0] = crate::value_conv::js_to_val(ctx, host, caller, result, ty)?;
     } else {
-        let array = Array::from_value(result)
-            .map_err(|_| host.throw_type_error(ctx, "a multi-result import callback must return an array"))?;
+        let array = Array::from_value(result).map_err(|_| {
+            host.throw_type_error(ctx, "a multi-result import callback must return an array")
+        })?;
         if array.len() < outputs.len() {
-            return Err(host.throw_type_error(ctx, "import callback returned too few result values"));
+            return Err(
+                host.throw_type_error(ctx, "import callback returned too few result values")
+            );
         }
         for (i, slot) in outputs.iter_mut().enumerate() {
             let ty = slot.ty();
@@ -447,7 +491,9 @@ pub fn call_exported_func<'js>(
 ) -> Result<Value<'js>> {
     let realm = crate::realm::realm(ctx)?;
     if realm.state.realm_id != realm_id {
-        return Err(realm.state.throw_link_error(ctx, "function belongs to a different realm"));
+        return Err(realm
+            .state
+            .throw_link_error(ctx, "function belongs to a different realm"));
     }
     let host = realm.state.clone();
 
@@ -465,7 +511,10 @@ pub fn call_exported_func<'js>(
         let param_types = ty.params();
         let mut inputs = Vec::with_capacity(param_types.len());
         for (i, pty) in param_types.iter().enumerate() {
-            let arg = args.get(i).cloned().unwrap_or_else(|| Value::new_undefined(ctx.clone()));
+            let arg = args
+                .get(i)
+                .cloned()
+                .unwrap_or_else(|| Value::new_undefined(ctx.clone()));
             inputs.push(crate::value_conv::js_to_val(ctx, &host, store, arg, *pty)?);
         }
         let result_types = ty.results();
@@ -479,7 +528,7 @@ pub fn call_exported_func<'js>(
             Ok(()) => {
                 sync_result?;
                 to_js_results(ctx, &host, store, &outputs)
-            }
+            },
             Err(err) => {
                 // `throw_for_wasmi_error_or_sentinel`'s sentinel path
                 // restores the original callback exception straight out of
@@ -498,8 +547,10 @@ pub fn call_exported_func<'js>(
                 if sync_result.is_err() {
                     let _ = ctx.catch();
                 }
-                Err(crate::errors::throw_for_wasmi_error_or_sentinel(ctx, &host, err))
-            }
+                Err(crate::errors::throw_for_wasmi_error_or_sentinel(
+                    ctx, &host, err,
+                ))
+            },
         }
     })
 }
@@ -519,7 +570,7 @@ fn to_js_results<'js>(
                 array.set(idx, crate::value_conv::val_to_js(ctx, host, store, v)?)?;
             }
             Ok(array.into_value())
-        }
+        },
     }
 }
 
@@ -528,7 +579,11 @@ mod tests {
     use raster_runtime_test::test_sync_with;
     use rquickjs::{Class, Object, Value};
 
-    fn set_wasm_bytes<'js>(ctx: &rquickjs::Ctx<'js>, name: &str, wat: &str) -> rquickjs::Result<()> {
+    fn set_wasm_bytes<'js>(
+        ctx: &rquickjs::Ctx<'js>,
+        name: &str,
+        wat: &str,
+    ) -> rquickjs::Result<()> {
         let bytes = wat::parse_str(wat).unwrap();
         let buffer = rquickjs::ArrayBuffer::new_copy(ctx.clone(), &bytes)?;
         ctx.globals().set(name, buffer)?;
@@ -677,17 +732,20 @@ mod tests {
             // realm) avoids this correctly by capturing only a plain
             // `realm_id: u64` and looking `HostState` up fresh from `ctx` on
             // every call; do the same here rather than capturing `host`.
-            let corrupt_fn = rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'_>| -> rquickjs::Result<()> {
-                let instance: Object = ctx.globals().get("__instance")?;
-                let exports: Object = instance.get("exports")?;
-                let mem_value: Value = exports.get("mem")?;
-                let mem_class = Class::<crate::memory::WasmMemory>::from_value(&mem_value)
-                    .expect("exports.mem must be a WebAssembly.Memory");
-                let handle = mem_class.borrow().handle;
-                let host = crate::realm::realm(&ctx)?.state.clone();
-                crate::memory::corrupt_mirror_for_test(&ctx, &host, handle);
-                Ok(())
-            })?;
+            let corrupt_fn = rquickjs::Function::new(
+                ctx.clone(),
+                |ctx: rquickjs::Ctx<'_>| -> rquickjs::Result<()> {
+                    let instance: Object = ctx.globals().get("__instance")?;
+                    let exports: Object = instance.get("exports")?;
+                    let mem_value: Value = exports.get("mem")?;
+                    let mem_class = Class::<crate::memory::WasmMemory>::from_value(&mem_value)
+                        .expect("exports.mem must be a WebAssembly.Memory");
+                    let handle = mem_class.borrow().handle;
+                    let host = crate::realm::realm(&ctx)?.state.clone();
+                    crate::memory::corrupt_mirror_for_test(&ctx, &host, handle);
+                    Ok(())
+                },
+            )?;
             ctx.globals().set("__corrupt", corrupt_fn)?;
 
             ctx.eval::<(), _>(

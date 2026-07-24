@@ -402,8 +402,7 @@ impl<'js> ServerResponse<'js> {
             validate_header_value(ctx.clone(), name.clone(), v.clone())?;
         }
         if !self.headers_sent {
-            self.headers
-                .insert(name.to_ascii_lowercase(), values);
+            self.headers.insert(name.to_ascii_lowercase(), values);
         }
         Ok(())
     }
@@ -421,18 +420,16 @@ impl<'js> ServerResponse<'js> {
         Ok(())
     }
     pub fn get_header(&self, name: String) -> Option<String> {
-        self.headers
-            .get(&name.to_ascii_lowercase())
-            .map(|values| {
-                if name.eq_ignore_ascii_case("set-cookie") {
-                    // Node returns the first set-cookie string from getHeader for
-                    // historical reasons when a single value exists; multi returns
-                    // joined — keep simple join for non-array consumers.
-                    values.join(", ")
-                } else {
-                    values.join(", ")
-                }
-            })
+        self.headers.get(&name.to_ascii_lowercase()).map(|values| {
+            if name.eq_ignore_ascii_case("set-cookie") {
+                // Node returns the first set-cookie string from getHeader for
+                // historical reasons when a single value exists; multi returns
+                // joined — keep simple join for non-array consumers.
+                values.join(", ")
+            } else {
+                values.join(", ")
+            }
+        })
     }
     pub fn has_header(&self, name: String) -> bool {
         self.headers.contains_key(&name.to_ascii_lowercase())
@@ -583,9 +580,7 @@ impl<'js> ServerResponse<'js> {
                     validate_header_name(ctx.clone(), name.clone())?;
                     validate_header_value(ctx.clone(), name.clone(), v.clone())?;
                 }
-                response
-                    .headers
-                    .insert(name.to_ascii_lowercase(), values);
+                response.headers.insert(name.to_ascii_lowercase(), values);
             }
         }
         response.start();

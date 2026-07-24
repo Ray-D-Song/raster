@@ -5,7 +5,7 @@
 
 use std::rc::Rc;
 
-use rquickjs::{class::Trace, Class, Ctx, IntoJs, Object, atom::PredefinedAtom, Result, Value};
+use rquickjs::{atom::PredefinedAtom, class::Trace, Class, Ctx, IntoJs, Object, Result, Value};
 use wasmi::{Mutability, ValType};
 
 use crate::host_state::{HostState, WrapKind};
@@ -23,8 +23,13 @@ impl<'js> Trace<'js> for WasmGlobal {
     fn trace<'a>(&self, _tracer: rquickjs::class::Tracer<'a, 'js>) {}
 }
 
-fn parse_value_type<'js>(ctx: &Ctx<'js>, host: &HostState, descriptor: &Object<'js>) -> Result<ValType> {
-    let value_value = crate::descriptor::get_required(ctx, host, descriptor, "value", "WebAssembly.Global")?;
+fn parse_value_type<'js>(
+    ctx: &Ctx<'js>,
+    host: &HostState,
+    descriptor: &Object<'js>,
+) -> Result<ValType> {
+    let value_value =
+        crate::descriptor::get_required(ctx, host, descriptor, "value", "WebAssembly.Global")?;
     // Ordinary JS `ToString`, matching the WebIDL `ValueType` enum's
     // conversion (not a strict "must already be a JS string" check).
     let value = crate::descriptor::to_string(ctx, value_value)?;
@@ -36,25 +41,35 @@ fn parse_value_type<'js>(ctx: &Ctx<'js>, host: &HostState, descriptor: &Object<'
         "v128" => Err(host.throw_type_error(ctx, "v128 globals are not accessible from JS")),
         "anyfunc" | "funcref" => Ok(ValType::FuncRef),
         "externref" => Ok(ValType::ExternRef),
-        other => Err(host.throw_type_error(ctx, format!("unsupported global value type '{other}'"))),
+        other => {
+            Err(host.throw_type_error(ctx, format!("unsupported global value type '{other}'")))
+        },
     }
 }
 
 #[rquickjs::methods]
 impl WasmGlobal {
     #[qjs(constructor)]
-    pub fn new<'js>(ctx: Ctx<'js>, descriptor: Object<'js>, value: rquickjs::prelude::Opt<Value<'js>>) -> Result<Self> {
+    pub fn new<'js>(
+        ctx: Ctx<'js>,
+        descriptor: Object<'js>,
+        value: rquickjs::prelude::Opt<Value<'js>>,
+    ) -> Result<Self> {
         let realm = crate::realm::realm(&ctx)?;
         let host = realm.state.clone();
         let value_type = parse_value_type(&ctx, &host, &descriptor)?;
         let mutable = crate::descriptor::optional_bool(&ctx, &descriptor, "mutable", false)?;
-        let mutability = if mutable { Mutability::Var } else { Mutability::Const };
+        let mutability = if mutable {
+            Mutability::Var
+        } else {
+            Mutability::Const
+        };
 
         let handle = crate::realm::with_context_mut(&realm, |store| -> Result<wasmi::Global> {
             let init = match &value.0 {
                 Some(v) if !v.is_undefined() => {
                     crate::value_conv::js_to_val(&ctx, &host, store, v.clone(), value_type)?
-                }
+                },
                 _ => crate::value_conv::default_val(&ctx, &host, store, value_type)?,
             };
             Ok(wasmi::Global::new(store.as_context_mut(), init, mutability))
@@ -82,7 +97,10 @@ impl WasmGlobal {
         let realm = require_same_realm(&ctx, self.realm_id)?;
         let host = realm.state.clone();
         if !self.mutable {
-            return Err(host.throw_type_error(&ctx, "cannot set the value of an immutable WebAssembly.Global"));
+            return Err(host.throw_type_error(
+                &ctx,
+                "cannot set the value of an immutable WebAssembly.Global",
+            ));
         }
         crate::realm::with_context_mut(&realm, |store| {
             let val = crate::value_conv::js_to_val(&ctx, &host, store, value, self.value_type)?;
@@ -106,7 +124,9 @@ impl WasmGlobal {
 fn require_same_realm(ctx: &Ctx<'_>, realm_id: u64) -> Result<Rc<crate::realm::WasmRealm>> {
     let realm = crate::realm::realm(ctx)?;
     if realm.state.realm_id != realm_id {
-        return Err(realm.state.throw_link_error(ctx, "Global belongs to a different realm"));
+        return Err(realm
+            .state
+            .throw_link_error(ctx, "Global belongs to a different realm"));
     }
     Ok(realm)
 }
@@ -256,7 +276,10 @@ mod tests {
                     }})()
                     "#
                 ))?;
-                assert!(ok, "descriptor.{key} getter's thrown value must propagate as-is");
+                assert!(
+                    ok,
+                    "descriptor.{key} getter's thrown value must propagate as-is"
+                );
             }
             Ok(())
         })
