@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        case: [next, vite-plus, better-sqlite3]
+        case: [next, vite-plus, better-sqlite3, napi-hello]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -22,7 +22,7 @@ jobs:
       - run: yarn install --frozen-lockfile
       - run: make js JS_MINIFY=0
       - run: rustup toolchain install nightly
-      - run: cargo +nightly build
+      - run: cargo +nightly build ${{ matrix.case == 'napi-hello' && '--features napi' || '' }}
       - run: make compat-${{ matrix.case }}
       - if: always()
         run: |

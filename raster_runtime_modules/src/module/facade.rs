@@ -25,6 +25,7 @@ pub struct ModuleFacadeState<'js> {
     pub extensions: Object<'js>,
     pub native_js_handler: Function<'js>,
     pub native_json_handler: Function<'js>,
+    pub native_node_handler: Function<'js>,
 }
 
 pub fn module_not_found(ctx: &Ctx<'_>, request: &str, parent: &str) -> Result<()> {
@@ -435,7 +436,8 @@ pub fn init_module_facade<'js>(
     }
 
     let cache = Object::new(ctx.clone())?;
-    let (extensions, native_js_handler, native_json_handler) = init_extensions_table(ctx)?;
+    let (extensions, native_js_handler, native_json_handler, native_node_handler) =
+        init_extensions_table(ctx)?;
     module_ctor.set("_cache", cache.clone())?;
     module_ctor.set("_extensions", extensions.clone())?;
     module_ctor.set("_nodeModulePaths", Func::from(node_module_paths_fn))?;
@@ -459,6 +461,7 @@ pub fn init_module_facade<'js>(
         extensions,
         native_js_handler,
         native_json_handler,
+        native_node_handler,
     }))?;
 
     Ok(module_ctor)

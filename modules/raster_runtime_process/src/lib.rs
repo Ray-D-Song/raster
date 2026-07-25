@@ -54,10 +54,29 @@ const PROCESS_NAMED_EXPORTS: &[&str] = &[
     "version", "versions", "exitCode", "exit", "kill", "nextTick",
 ];
 
+#[cfg(feature = "napi")]
+const PROCESS_NAPI_EXPORTS: &[&str] = &["dlopen"];
+
 #[cfg(unix)]
 const PROCESS_UNIX_EXPORTS: &[&str] = &[
     "getuid", "getgid", "geteuid", "getegid", "setuid", "setgid", "seteuid", "setegid",
 ];
+
+#[cfg(feature = "napi")]
+fn dlopen<'js>(
+    ctx: Ctx<'js>,
+    module: Object<'js>,
+    filename: String,
+    flags: Opt<u32>,
+) -> Result<Object<'js>> {
+    let exports: Object = module.get("exports")?;
+    let exports_val = exports.clone().into_value().as_raw();
+    let ctx_ptr = ctx.as_raw();
+    let flag_bits = flags.0.unwrap_or(0);
+    raster_runtime_napi::dlopen::process_dlopen(ctx_ptr, exports_val, &filename, flag_bits)
+        .map_err(|e| Exception::throw_message(&ctx, &e))?;
+    Ok(exports)
+}
 
 fn next_tick<'js>(ctx: Ctx<'js>, cb: Function<'js>, args: Rest<Value<'js>>) -> Result<()> {
     let uid = allocate_hook_resource_id();
@@ -386,6 +405,11 @@ pub fn init(ctx: &Ctx<'_>) -> Result<()> {
 
     process.set("nextTick", Func::from(next_tick))?;
 
+    #[cfg(feature = "napi")]
+    {
+        process.set("dlopen", Func::from(dlopen))?;
+    }
+
     // Node stdio handles (minimal). Required by Next/debug/send for isatty checks.
     process.set("stdin", create_stdio_stream(ctx, 0)?)?;
     process.set("stdout", create_stdio_stream(ctx, 1)?)?;
@@ -402,6 +426,13 @@ impl ModuleDef for ProcessModule {
     fn declare(declare: &Declarations) -> Result<()> {
         for &name in PROCESS_NAMED_EXPORTS {
             declare.declare(name)?;
+        }
+
+        #[cfg(feature = "napi")]
+        {
+            for &name in PROCESS_NAPI_EXPORTS {
+                declare.declare(name)?;
+            }
         }
 
         for &name in EVENT_EMITTER_METHODS {
@@ -428,6 +459,13 @@ impl ModuleDef for ProcessModule {
         for &name in PROCESS_NAMED_EXPORTS {
             let value: Value = process.get(name)?;
             exports.export(name, value)?;
+        }
+        #[cfg(feature = "napi")]
+        {
+            for &name in PROCESS_NAPI_EXPORTS {
+                let value: Value = process.get(name)?;
+                exports.export(name, value)?;
+            }
         }
         for &name in EVENT_EMITTER_METHODS {
             let value: Value = process.get(name)?;

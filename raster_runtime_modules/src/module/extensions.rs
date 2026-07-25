@@ -208,15 +208,57 @@ fn default_json_handler<'js>(ctx: Ctx<'js>, module: Object<'js>, filename: Strin
     Ok(())
 }
 
+#[cfg(feature = "napi")]
+fn default_node_handler<'js>(ctx: Ctx<'js>, module: Object<'js>, filename: String) -> Result<()> {
+    let ctx_ptr = ctx.as_raw();
+    let exports: Object = module.get("exports")?;
+    let exports_val = exports.clone().into_value().as_raw();
+
+    raster_runtime_napi::dlopen::process_dlopen(ctx_ptr, exports_val, &filename, 0)
+        .map_err(|e| Exception::throw_message(&ctx, &e))?;
+
+    Ok(())
+}
+
+#[cfg(not(feature = "napi"))]
+fn default_node_handler_unsupported<'js>(
+    ctx: Ctx<'js>,
+    _module: Object<'js>,
+    filename: String,
+) -> Result<()> {
+    Err(Exception::throw_message(
+        &ctx,
+        &format!(
+            "Native addon loading is not supported (build raster_runtime with --features napi): {}",
+            filename
+        ),
+    ))
+}
+
 pub fn init_extensions_table<'js>(
     ctx: &Ctx<'js>,
-) -> Result<(Object<'js>, Function<'js>, Function<'js>)> {
+) -> Result<(
+    Object<'js>,
+    Function<'js>,
+    Function<'js>,
+    Function<'js>,
+)> {
     let extensions: Object = ctx.eval("Object.create(null)")?;
     let js_handler = Function::new(ctx.clone(), default_js_handler)?;
     let json_handler = Function::new(ctx.clone(), default_json_handler)?;
     extensions.set(".js", js_handler.clone())?;
     extensions.set(".json", json_handler.clone())?;
-    Ok((extensions, js_handler, json_handler))
+    #[cfg(feature = "napi")]
+    {
+        let node_handler = Function::new(ctx.clone(), default_node_handler)?;
+        extensions.set(".node", node_handler.clone())?;
+        return Ok((extensions, js_handler, json_handler, node_handler));
+    }
+    #[cfg(not(feature = "napi"))]
+    {
+        let node_handler = Function::new(ctx.clone(), default_node_handler_unsupported)?;
+        Ok((extensions, js_handler, json_handler, node_handler))
+    }
 }
 
 fn resolve_extension_handler<'js>(ctx: &Ctx<'js>, extension: &str) -> Result<Function<'js>> {
@@ -235,6 +277,7 @@ fn resolve_extension_handler<'js>(ctx: &Ctx<'js>, extension: &str) -> Result<Fun
         // `.js`/`.json` resolution still works; Node leaves the slot empty instead.
         ".js" => Ok(facade.native_js_handler.clone()),
         ".json" => Ok(facade.native_json_handler.clone()),
+        ".node" => Ok(facade.native_node_handler.clone()),
         _ => Err(Exception::throw_type(
             ctx,
             "require.extensions handler must be a function",

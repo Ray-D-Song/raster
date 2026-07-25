@@ -116,6 +116,15 @@ async fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
 
     vm.idle().await?;
 
+    #[cfg(feature = "napi")]
+    {
+        vm.run_with(|ctx| {
+            raster_runtime_napi::prepare_shutdown(&ctx);
+            Ok(())
+        })
+        .await;
+    }
+
     Ok(ExitCode::from(EXIT_CODE.load(Ordering::Relaxed)))
 }
 

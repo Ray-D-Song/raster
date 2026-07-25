@@ -128,7 +128,7 @@ _⚠️ = partially supported in RASTER_RUNTIME_<br />
 _⏱ = planned partial support_<br />
 _\* = Not native_<br />
 _\*\* = The `module.registerHooks()` API allows you to emulate some functionality. See also `example/register-hooks`._<br />
-_`node:module` provides a CommonJS loader facade (`Module`, `require.resolve`, `require.cache`, `require.extensions`, writable `_resolveFilename` / `_nodeModulePaths`, and `Module._compile` for require-hook compatibility). Extension hooks apply to the CommonJS loader only; they do not change static ESM `import` semantics. Native addon (`.node`) loading is not supported._<br />
+_`node:module` provides a CommonJS loader facade (`Module`, `require.resolve`, `require.cache`, `require.extensions`, writable `_resolveFilename` / `_nodeModulePaths`, and `Module._compile` for require-hook compatibility). Extension hooks apply to the CommonJS loader only; they do not change static ESM `import` semantics. **N-API** native addon (`.node`) loading is supported when Raster is built with `--features napi` on a dynamically linked target; V8 C++ ABI addons (e.g. `better-sqlite3`) are not supported._<br />
 
 ## Using node_modules (dependencies) with raster_runtime
 

@@ -6,6 +6,10 @@ edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/ray-d-song/raster_runtime"
 
+[features]
+default = []
+napi = ["dep:raster_runtime_napi"]
+
 [lib]
 name = "raster_runtime_process"
 path = "src/lib.rs"
@@ -15,6 +19,7 @@ raster_runtime_events = { version = "0.8.1-beta", path = "../raster_runtime_even
 raster_runtime_hooking = { version = "0.8.1-beta", path = "../../libs/raster_runtime_hooking" }
 raster_runtime_utils = { version = "0.8.1-beta", path = "../../libs/raster_runtime_utils", default-features = false }
 rquickjs = { version = "=0.12.1", features = ["std"], default-features = false }
+raster_runtime_napi = { version = "0.8.1-beta", path = "../raster_runtime_napi", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = { version = "0.2", default-features = false }

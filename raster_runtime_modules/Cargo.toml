@@ -131,6 +131,7 @@ v8 = ["dep:raster_runtime_v8"]
 vm = ["raster_runtime_vm"]
 webassembly = ["raster_runtime_webassembly"]
 zlib = ["raster_runtime_zlib"]
+napi = ["dep:raster_runtime_napi", "raster_runtime_process/napi"]
 
 [dependencies]
 home = { version = "0.5", default-features = false }
@@ -182,6 +183,7 @@ raster_runtime_v8 = { version = "0.8.1-beta", path = "../modules/raster_runtime_
 raster_runtime_vm = { version = "0.8.1-beta", path = "../modules/raster_runtime_vm", optional = true }
 raster_runtime_webassembly = { version = "0.8.1-beta", path = "../modules/raster_runtime_webassembly", optional = true }
 raster_runtime_zlib = { version = "0.8.1-beta", path = "../modules/raster_runtime_zlib", optional = true }
+raster_runtime_napi = { version = "0.8.1-beta", path = "../modules/raster_runtime_napi", optional = true }
 
 [dev-dependencies]
 raster_runtime_test = { path = "../libs/raster_runtime_test" }

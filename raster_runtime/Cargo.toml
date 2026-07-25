@@ -3,6 +3,7 @@ name = "raster_runtime"
 version = "0.8.1-beta"
 edition = "2021"
 license-file = "LICENSE"
+build = "build.rs"
 
 [features]
 default = ["base", "macro", "tls-ring", "crypto-rust"]
@@ -28,6 +29,7 @@ crypto-openssl = ["raster_runtime_core/crypto-openssl"]
 
 # OpenSSL vendored (builds OpenSSL from source)
 openssl-vendored = ["raster_runtime_core/openssl-vendored"]
+napi = ["raster_runtime_core/napi", "dep:raster_runtime_napi"]
 
 [dependencies]
 constcat = { version = "0.6", default-features = false }
@@ -37,6 +39,7 @@ crossterm = { version = "0.29", features = [
 ], default-features = false }
 jiff = { version = "0.2" }
 raster_runtime_core = { path = "../raster_runtime_core", default-features = false }
+raster_runtime_napi = { path = "../modules/raster_runtime_napi", optional = true }
 tokio = { version = "1", features = [
   "macros",
   "rt-multi-thread",

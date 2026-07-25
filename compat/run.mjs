@@ -34,12 +34,18 @@ const cases = {
     script: "test.cjs",
     successMarker: "better-sqlite3 compat OK",
   },
+  "napi-hello": {
+    directory: "compat/napi-hello",
+    script: "test.cjs",
+    successMarker: "napi-hello compat OK",
+    buildCommand: "yarn build",
+  },
 };
 
 const testCase = cases[name];
 if (!testCase || !rasterPath) {
   throw new Error(
-    "Usage: node compat/run.mjs <next|vite-plus|better-sqlite3> <raster-runtime>"
+    "Usage: node compat/run.mjs <next|vite-plus|better-sqlite3|napi-hello> <raster-runtime>"
   );
 }
 
@@ -49,8 +55,8 @@ const logPath = path.join(directory, "compat.log");
 
 if (name === "next") {
   await runNextStandalone(directory, raster, logPath, root);
-} else if (name === "better-sqlite3") {
-  await runBetterSqlite3(testCase, directory, raster, logPath, root);
+} else if (name === "better-sqlite3" || name === "napi-hello") {
+  await runScriptCompat(testCase, directory, raster, logPath, root);
 } else {
   await runVitePlusBuild(testCase, directory, raster, logPath, root);
 }
@@ -127,13 +133,34 @@ async function runVitePlusBuild(testCase, directory, raster, logPath, root) {
   console.log(`${name} compatibility build passed`);
 }
 
-async function runBetterSqlite3(testCase, directory, raster, logPath, root) {
+async function runScriptCompat(testCase, directory, raster, logPath, root) {
   const logParts = [];
+
+  if (testCase.buildCommand) {
+    logParts.push(`# Build addon\n$ ${testCase.buildCommand}`);
+    console.log(`[compat-${name}] building addon: ${testCase.buildCommand}`);
+    const buildResult = await spawnCollect(
+      "sh",
+      ["-c", testCase.buildCommand],
+      { cwd: directory, env: { ...process.env } },
+      BUILD_TIMEOUT_MS
+    );
+    logParts.push(
+      `exit: ${buildResult.code ?? buildResult.signal}\n\nstdout:\n${buildResult.stdout}\n\nstderr:\n${buildResult.stderr}`
+    );
+    if (buildResult.code !== 0) {
+      await writeLog(logPath, logParts);
+      throw new Error(
+        `${name} addon build failed (exit ${buildResult.code ?? buildResult.signal}). ` +
+          `See ${path.relative(root, logPath)}.`
+      );
+    }
+  }
 
   // --- Phase 1: Node baseline (validates fixture + test script) ---
   const nodeCmd = `${process.execPath} ${testCase.script}`;
   logParts.push(`# Node baseline\n$ ${nodeCmd}`);
-  console.log(`[compat-better-sqlite3] Node baseline: ${nodeCmd}`);
+  console.log(`[compat-${name}] Node baseline: ${nodeCmd}`);
 
   const nodeResult = await spawnCollect(
     process.execPath,
@@ -154,7 +181,7 @@ async function runBetterSqlite3(testCase, directory, raster, logPath, root) {
   if (nodeResult.timedOut) {
     await writeLog(logPath, logParts);
     throw new Error(
-      `better-sqlite3 Node baseline timed out after ${NODE_BASELINE_TIMEOUT_MS}ms. ` +
+      `${name} Node baseline timed out after ${NODE_BASELINE_TIMEOUT_MS}ms. ` +
         `See ${path.relative(root, logPath)}. Raster was not started.`
     );
   }
@@ -162,7 +189,7 @@ async function runBetterSqlite3(testCase, directory, raster, logPath, root) {
   if (nodeResult.code !== 0) {
     await writeLog(logPath, logParts);
     throw new Error(
-      `better-sqlite3 Node baseline failed (exit ${nodeResult.code ?? nodeResult.signal}). ` +
+      `${name} Node baseline failed (exit ${nodeResult.code ?? nodeResult.signal}). ` +
         `See ${path.relative(root, logPath)}. Raster was not started.`
     );
   }
@@ -170,7 +197,7 @@ async function runBetterSqlite3(testCase, directory, raster, logPath, root) {
   if (!nodeResult.stdout.includes(testCase.successMarker)) {
     await writeLog(logPath, logParts);
     throw new Error(
-      `better-sqlite3 Node baseline exited 0 but stdout missing "${testCase.successMarker}". ` +
+      `${name} Node baseline exited 0 but stdout missing "${testCase.successMarker}". ` +
         `See ${path.relative(root, logPath)}. Raster was not started.`
     );
   }
@@ -178,7 +205,7 @@ async function runBetterSqlite3(testCase, directory, raster, logPath, root) {
   // --- Phase 2: Raster run ---
   const rasterCmd = `${raster} ${testCase.script}`;
   logParts.push(`\n# Raster run\n$ ${rasterCmd}`);
-  console.log(`[compat-better-sqlite3] Raster run: ${rasterCmd}`);
+  console.log(`[compat-${name}] Raster run: ${rasterCmd}`);
 
   const rasterResult = await spawnCollect(
     raster,
@@ -199,27 +226,27 @@ async function runBetterSqlite3(testCase, directory, raster, logPath, root) {
 
   if (rasterResult.timedOut) {
     throw new Error(
-      `better-sqlite3 Raster run timed out after ${SCRIPT_TIMEOUT_MS}ms. ` +
+      `${name} Raster run timed out after ${SCRIPT_TIMEOUT_MS}ms. ` +
         `See ${path.relative(root, logPath)}.`
     );
   }
 
   if (rasterResult.code !== 0) {
     throw new Error(
-      `better-sqlite3 Raster run failed (exit ${rasterResult.code ?? rasterResult.signal}). ` +
+      `${name} Raster run failed (exit ${rasterResult.code ?? rasterResult.signal}). ` +
         `See ${path.relative(root, logPath)}.`
     );
   }
 
   if (!rasterResult.stdout.includes(testCase.successMarker)) {
     throw new Error(
-      `better-sqlite3 Raster run exited 0 but stdout missing "${testCase.successMarker}". ` +
+      `${name} Raster run exited 0 but stdout missing "${testCase.successMarker}". ` +
         `See ${path.relative(root, logPath)}.`
     );
   }
 
   console.log(
-    "better-sqlite3 compatibility passed (Node baseline + Raster run)"
+    `${name} compatibility passed (Node baseline + Raster run)`
   );
 }
 

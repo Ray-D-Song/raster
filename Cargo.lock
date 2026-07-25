@@ -2246,6 +2246,7 @@ dependencies = [
  "jiff",
  "libc",
  "raster_runtime_core",
+ "raster_runtime_napi",
  "raster_runtime_test",
  "snmalloc-rs",
  "tokio",
@@ -2689,6 +2690,7 @@ dependencies = [
  "raster_runtime_inspector",
  "raster_runtime_intl",
  "raster_runtime_json",
+ "raster_runtime_napi",
  "raster_runtime_navigator",
  "raster_runtime_net",
  "raster_runtime_os",
@@ -2712,6 +2714,20 @@ dependencies = [
  "raster_runtime_zlib",
  "rquickjs",
  "simd-json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "raster_runtime_napi"
+version = "0.8.1-beta"
+dependencies = [
+ "libc",
+ "libloading",
+ "once_cell",
+ "parking_lot",
+ "raster_runtime_test",
+ "rquickjs",
  "tokio",
  "tracing",
 ]
@@ -2802,6 +2818,7 @@ dependencies = [
  "libc",
  "raster_runtime_events",
  "raster_runtime_hooking",
+ "raster_runtime_napi",
  "raster_runtime_test",
  "raster_runtime_utils",
  "rquickjs",

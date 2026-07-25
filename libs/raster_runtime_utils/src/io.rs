@@ -27,4 +27,4 @@ macro_rules! define_supported_extensions {
     };
 }
 
-define_supported_extensions!(BYTECODE_FILE_EXT, ".js", ".mjs", ".cjs");
+define_supported_extensions!(BYTECODE_FILE_EXT, ".js", ".mjs", ".cjs", ".node");

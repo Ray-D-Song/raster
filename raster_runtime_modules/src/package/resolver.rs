@@ -390,6 +390,14 @@ fn load_as_file<'a>(ctx: &Ctx<'_>, x: Rc<String>, is_esm: bool) -> Result<Option
     }
 
     // 4. If X.node is a file, load X.node as binary addon. STOP
+    if let Some(mut current_file) = base_file.take() {
+        current_file.truncate(base_file_length);
+        current_file.push_str(".node");
+        if Path::new(&current_file).is_file() {
+            trace!("|  load_as_file(4): {}", current_file);
+            return Ok(Some(current_file.into()));
+        }
+    }
 
     Ok(None)
 }
@@ -457,6 +465,14 @@ fn load_index<'a>(ctx: &Ctx<'_>, x: Rc<String>, is_esm: bool) -> Result<Option<C
     }
 
     // 3. If X/index.node is a file, load X/index.node as binary addon. STOP
+    if let Some(mut file) = base_file.take() {
+        file.truncate(base_file_length);
+        file.push_str(".node");
+        if Path::new(&file).is_file() {
+            trace!("|  load_index(3): {}", file);
+            return Ok(Some(file.into()));
+        }
+    }
 
     Ok(None)
 }
