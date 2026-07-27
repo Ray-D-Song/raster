@@ -34,6 +34,12 @@ const cases = {
     script: "test.cjs",
     successMarker: "better-sqlite3 compat OK",
   },
+  "v8-hello": {
+    directory: "compat/v8-hello",
+    buildCommand: "npm run build",
+    script: "test.cjs",
+    successMarker: "v8-hello compat OK",
+  },
   "napi-hello": {
     directory: "compat/napi-hello",
     buildCommand: "yarn build",
@@ -72,7 +78,7 @@ const cases = {
 const testCase = cases[name];
 if (!testCase || !rasterPath) {
   throw new Error(
-    "Usage: node compat/run.mjs <next|vite-plus|better-sqlite3|napi-hello> <raster-runtime>"
+    "Usage: node compat/run.mjs <next|vite-plus|better-sqlite3|v8-hello|napi-hello> <raster-runtime>"
   );
 }
 
@@ -82,7 +88,7 @@ const logPath = path.join(directory, "compat.log");
 
 if (name === "next") {
   await runNextStandalone(directory, raster, logPath, root);
-} else if (name === "better-sqlite3" || name === "napi-hello") {
+} else if (name === "better-sqlite3" || name === "napi-hello" || name === "v8-hello") {
   await runScriptCompat(testCase, directory, raster, logPath, root);
 } else {
   await runVitePlusBuild(testCase, directory, raster, logPath, root);

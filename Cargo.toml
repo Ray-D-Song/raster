@@ -11,6 +11,7 @@ members = [
   "libs/raster_runtime_test",
   "libs/raster_runtime_test_tls",
   "libs/raster_runtime_utils",
+  "v8_compat",
   "modules/raster_runtime_abort",
   "modules/raster_runtime_async_hooks",
   "modules/raster_runtime_buffer",

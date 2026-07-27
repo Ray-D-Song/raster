@@ -5,6 +5,16 @@ on:
   workflow_dispatch:
 
 jobs:
+  v8-abi:
+    name: v8-abi-drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.3.0
+      - run: bash v8_compat/tools/check_abi.sh
+
   compatibility:
     name: ${{ matrix.case }}
     runs-on: ubuntu-latest
@@ -12,17 +22,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        case: [next, vite-plus, better-sqlite3, napi-hello]
+        case: [next, vite-plus, better-sqlite3, v8-hello, napi-hello]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22.18.0
+          node-version: ${{ (matrix.case == 'better-sqlite3' || matrix.case == 'v8-hello') && '24.3.0' || '22.18.0' }}
           cache: yarn
       - run: yarn install --frozen-lockfile
       - run: make js JS_MINIFY=0
       - run: rustup toolchain install nightly
-      - run: cargo +nightly build ${{ matrix.case == 'napi-hello' && '--features napi' || '' }}
+      - name: Build raster_runtime
+        run: |
+          FEATURES=""
+          if [ "${{ matrix.case }}" = "napi-hello" ]; then FEATURES="--features napi"; fi
+          if [ "${{ matrix.case }}" = "better-sqlite3" ] || [ "${{ matrix.case }}" = "v8-hello" ]; then FEATURES="--features v8-compat"; fi
+          cargo +nightly build $FEATURES
       - run: make compat-${{ matrix.case }}
       - if: always()
         run: |

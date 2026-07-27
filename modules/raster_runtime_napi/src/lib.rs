@@ -25,7 +25,14 @@ pub use dlopen::{dlopen_module, prepare_shutdown, shutdown_all};
 pub use env::Env;
 pub use types::*;
 
+#[cfg(feature = "v8-compat")]
+pub fn init_v8_shim() {
+    v8_compat::ensure_shim_linked();
+}
+
 pub fn register_async_context(ctx: std::ptr::NonNull<rquickjs::qjs::JSContext>) {
+    #[cfg(feature = "v8-compat")]
+    init_v8_shim();
     let _ = ctx;
     raster_runtime_utils::driver_poll::set_driver_poll_hook(Some(crate::api::poll_pending_drivers));
 }

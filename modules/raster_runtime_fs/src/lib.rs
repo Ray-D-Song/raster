@@ -110,6 +110,7 @@ impl ModuleDef for FsModule {
         declare.declare("readFileSync")?;
         declare.declare("rmdirSync")?;
         declare.declare("rmSync")?;
+        declare.declare("unlinkSync")?;
         declare.declare("stat")?;
         declare.declare("statSync")?;
         declare.declare("lstat")?;
@@ -157,6 +158,7 @@ impl ModuleDef for FsModule {
             default.set("readFileSync", Func::from(read_file_sync))?;
             default.set("rmdirSync", Func::from(rmdir_sync))?;
             default.set("rmSync", Func::from(rmfile_sync))?;
+            default.set("unlinkSync", Func::from(rmfile_sync))?;
 
             let stat_fn_export = Function::new(ctx.clone(), stat_callback)?;
             let lstat_fn_export = Function::new(ctx.clone(), lstat_callback)?;

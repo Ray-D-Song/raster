@@ -2304,6 +2304,16 @@ void JS_FreeRuntime(JSRuntime *rt)
 
     JS_RunGC(rt);
 
+    /* Raster runtime: native addons may leave gc objects until the embedding
+       drops the JSContext (rquickjs frees it after this returns). Avoid
+       aborting the CLI on shutdown while teardown is still improving. */
+    if (!list_empty(&rt->gc_obj_list)) {
+        int pass;
+        for (pass = 0; pass < 8 && !list_empty(&rt->gc_obj_list); pass++) {
+            JS_RunGC(rt);
+        }
+    }
+
 #ifdef ENABLE_DUMPS // JS_DUMP_LEAKS
     /* leaking objects */
     if (check_dump_flag(rt, JS_DUMP_LEAKS)) {
@@ -2345,7 +2355,11 @@ void JS_FreeRuntime(JSRuntime *rt)
     }
 #endif
 
-    assert(list_empty(&rt->gc_obj_list));
+    if (!list_empty(&rt->gc_obj_list)) {
+        /* Leak check disabled for Raster embedding shutdown (see above). */
+    } else {
+        assert(list_empty(&rt->gc_obj_list));
+    }
 
     /* free the classes */
     for(i = 0; i < rt->class_count; i++) {

@@ -91,6 +91,10 @@ pub fn prepare_shutdown<'js>(ctx: &Ctx<'js>) {
                 if (!req || !req.cache) return 0;
                 const keys = Object.keys(req.cache);
                 for (const key of keys) {
+                    const entry = req.cache[key];
+                    if (entry) {
+                        entry.exports = null;
+                    }
                     delete req.cache[key];
                 }
                 return keys.length;
@@ -101,16 +105,29 @@ pub fn prepare_shutdown<'js>(ctx: &Ctx<'js>) {
     if remaining > 0 {
         tracing::debug!("napi prepare_shutdown: cleared {} require cache entries", remaining);
     }
-    ctx.run_gc();
     crate::api::clear_function_callbacks();
     if let Some(env_ptr) = env_for_ctx(ctx.as_raw().as_ptr()) {
         let napi_env = unsafe { (*env_ptr).as_napi_env() };
         crate::async_work::close_all_tsfn_for_env(napi_env);
     }
+    #[cfg(feature = "v8-compat")]
+    {
+        v8_compat::prepare_shutdown(ctx.as_raw().as_ptr());
+    }
     if let Some(ctx_ptr) = NonNull::new(ctx.as_raw().as_ptr()) {
         unregister_env(ctx_ptr);
     }
     let rt = unsafe { qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+    for _ in 0..3 {
+        ctx.run_gc();
+        unsafe {
+            qjs::JS_RunGC(rt);
+        }
+    }
+    #[cfg(feature = "v8-compat")]
+    {
+        v8_compat::shutdown_runtime(rt);
+    }
     if env_ptrs_for_runtime(rt).is_empty() {
         raster_runtime_utils::driver_poll::unregister_driver_notify(rt);
         crate::gc_hook::unregister_holder_class(rt);
@@ -247,8 +264,47 @@ fn dlopen_impl(
     let napi_env = unsafe { (*env_ptr).as_napi_env() };
     let exports_napi = value_to_napi_borrowed(unsafe { &mut *env_ptr }, exports_obj);
 
+    #[cfg(feature = "v8-compat")]
+    let _v8_guard = {
+        static V8_BRIDGE_INIT: std::sync::Once = std::sync::Once::new();
+        V8_BRIDGE_INIT.call_once(|| {
+            v8_compat::bind_bridge(ctx_ptr.as_ptr());
+        });
+        let rt = unsafe { qjs::JS_GetRuntime(ctx_ptr.as_ptr()) };
+        let isolate = v8_compat::ensure_isolate_for_runtime(rt);
+        let context_state = v8_compat::ensure_context_for_ctx(ctx_ptr.as_ptr());
+        Some(v8_compat::push_native_load(ctx_ptr.as_ptr(), isolate, context_state))
+    };
+
+    #[cfg(not(feature = "v8-compat"))]
+    let _v8_guard: Option<()> = None;
+
     let library = unsafe { Library::new(filename) }
         .map_err(|e| format!("dlopen failed for '{}': {}", filename, e))?;
+
+    #[cfg(feature = "v8-compat")]
+    {
+        let v8_modules = v8_compat::drain_pending_v8_modules();
+        if v8_modules.len() == 1 {
+            let module = v8_modules[0] as *mut v8_compat::NodeModule;
+            unsafe {
+                v8_compat::run_v8_module_init(ctx_ptr.as_ptr(), module, exports_obj)?;
+            }
+            std::mem::forget(library);
+            unsafe {
+                (*env_ptr).close_all_scopes();
+            }
+            return Ok(());
+        }
+        if !v8_modules.is_empty() {
+            v8_compat::clear_pending_v8_modules();
+            return Err(format!(
+                "Expected exactly one V8 node_module registration in '{}', found {}",
+                filename,
+                v8_modules.len()
+            ));
+        }
+    }
 
     if let Some(module) = take_pending_module() {
         return run_register_func(

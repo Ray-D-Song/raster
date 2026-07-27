@@ -14,6 +14,8 @@
 /bundle
 
 *.zip
+a.out
+*.o
 cdk.out
 flamegraph.svg
 out.stacks
@@ -26,6 +28,8 @@ node_modules
 compat/**/compat.log
 compat/**/.next
 compat/**/dist
+compat/**/build/
+/*.log
 
 tests/wpt/revision
 /wpt

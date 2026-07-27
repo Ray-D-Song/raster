@@ -104,6 +104,8 @@ pub unsafe extern "C" fn __cxa_thread_atexit_impl(
 
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
+    #[cfg(feature = "v8-compat")]
+    v8_compat::ensure_shim_linked();
     let now = Instant::now();
 
     MinimalTracer::register()?;
@@ -132,6 +134,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
             Ok(())
         })
         .await;
+        raster_runtime_napi::shutdown_all();
     }
 
     Ok(ExitCode::from(EXIT_CODE.load(Ordering::Relaxed)))

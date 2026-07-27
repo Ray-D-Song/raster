@@ -12,8 +12,10 @@ path = "src/lib.rs"
 
 [features]
 default = []
+v8-compat = ["dep:v8_compat"]
 
 [dependencies]
+v8_compat = { path = "../../v8_compat", optional = true }
 libc = { version = "0.2", default-features = false }
 libloading = { version = "0.8", default-features = false }
 once_cell = { version = "1", features = ["std"], default-features = false }

@@ -49,6 +49,7 @@ vm = ["raster_runtime_modules/vm"]
 webassembly = ["raster_runtime_modules/webassembly"]
 zlib = ["raster_runtime_modules/zlib"]
 napi = ["raster_runtime_modules/napi"]
+v8-compat = ["raster_runtime_modules/v8-compat"]
 compression-c = ["raster_runtime_modules/compression-c"]
 compression-rust = ["raster_runtime_modules/compression-rust"]
 
