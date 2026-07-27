@@ -7,6 +7,7 @@ pub mod bytes;
 pub mod class;
 pub mod clone;
 pub mod ctx;
+pub mod driver_poll;
 pub mod error;
 pub mod error_messages;
 #[cfg(feature = "fs")]

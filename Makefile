@@ -9,7 +9,10 @@ TOOLCHAIN = +$(RUST_VERSION)
 BUILD_ARG = $(TOOLCHAIN) build -r
 BUILD_DIR = ./target/release
 BUNDLE_DIR = bundle
-RASTER_RUNTIME ?= ./target/debug/raster_runtime
+# Ignore CARGO_TARGET_DIR so metadata and builds agree on the artifact path (sandbox may redirect it).
+# RASTER_RUNTIME requires jq; without jq the fallback path is wrong — install jq for compat-napi.
+CARGO ?= env -u CARGO_TARGET_DIR cargo
+RASTER_RUNTIME ?= $(shell $(CARGO) metadata --format-version 1 --no-deps 2>/dev/null | jq -r '.target_directory')/debug/raster_runtime
 
 TS_SOURCES = $(wildcard raster_runtime_core/src/modules/js/*.ts) $(wildcard raster_runtime_core/src/modules/js/@raster_runtime/test/*.ts) $(wildcard raster_runtime_core/src/modules/js/@raster_runtime/*.ts) $(wildcard tests/unit/*.ts)
 STD_JS_FILE = $(BUNDLE_DIR)/js/@raster_runtime/std.js
@@ -158,9 +161,9 @@ compat-better-sqlite3: js
 	node compat/run.mjs better-sqlite3 $(RASTER_RUNTIME)
 
 compat-napi: js
-	cargo build --features napi
+	$(CARGO) build --features napi
 	cd compat/napi-hello && yarn install
-	RASTER_RUNTIME=./target/debug/raster_runtime node compat/run.mjs napi-hello ./target/debug/raster_runtime
+	RASTER_RUNTIME=$(RASTER_RUNTIME) node compat/run.mjs napi-hello $(RASTER_RUNTIME)
 
 flame:
 	cargo flamegraph --profile flame -- index.mjs

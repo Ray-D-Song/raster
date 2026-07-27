@@ -518,6 +518,8 @@ fn create_spawn_loop(
     timer_abort: Rc<Notify>,
     deadline: Instant,
 ) -> Result<()> {
+    // Register before spawning so worker wakeups cannot arrive before the Notify exists.
+    let driver_wake = raster_runtime_utils::driver_poll::driver_notify_for_rt(rt);
     ctx.spawn_exit_simple(async move {
         let mut sleep = pin!(tokio::time::sleep_until(deadline));
 
@@ -527,6 +529,7 @@ fn create_spawn_loop(
             select! {
                 _ = timer_abort.notified() => {}
                 _ = sleep.as_mut() => {}
+                _ = driver_wake.notified() => {}
             }
 
             if !poll_timers(rt, &mut executing_timers, Some(&mut sleep), None)? {
@@ -568,6 +571,8 @@ pub fn poll_timers(
     sleep: Option<&mut Pin<&mut Sleep>>,
     deadline: Option<&mut Instant>,
 ) -> Result<bool> {
+    raster_runtime_utils::driver_poll::poll_native_drivers(rt);
+
     static MIN_SLEEP: Duration = Duration::from_millis(4);
     static FAR_FUTURE: Duration = Duration::from_secs(84200 * 365 * 30);
 

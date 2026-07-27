@@ -49,6 +49,14 @@ pub fn unregister_env(ctx: NonNull<JSContext>) {
 
 /// Release all N-API env roots before the QuickJS runtime is torn down.
 pub fn shutdown_all() {
+    let runtime_ptrs: Vec<*mut qjs::JSRuntime> = {
+        let registry = ENV_REGISTRY.lock().unwrap();
+        registry
+            .values()
+            .map(|EnvPtr(ptr)| unsafe { qjs::JS_GetRuntime((**ptr).ctx_ptr()) })
+            .collect()
+    };
+    crate::async_work::shutdown_all_tsfn();
     let mut registry = ENV_REGISTRY.lock().unwrap();
     for (_, EnvPtr(ptr)) in registry.drain() {
         unsafe {
@@ -56,6 +64,20 @@ pub fn shutdown_all() {
             let _ = Box::from_raw(ptr);
         }
     }
+    for rt in runtime_ptrs {
+        raster_runtime_utils::driver_poll::unregister_driver_notify(rt);
+        crate::gc_hook::unregister_holder_class(rt);
+    }
+}
+
+pub(crate) fn env_ptrs_for_runtime(rt: *mut qjs::JSRuntime) -> Vec<*mut Env> {
+    ENV_REGISTRY
+        .lock()
+        .unwrap()
+        .values()
+        .map(|EnvPtr(ptr)| *ptr)
+        .filter(|ptr| unsafe { qjs::JS_GetRuntime((**ptr).ctx_ptr()) } == rt)
+        .collect()
 }
 
 /// Clear require cache entries for native addons and dispose N-API env state.
@@ -81,7 +103,18 @@ pub fn prepare_shutdown<'js>(ctx: &Ctx<'js>) {
     }
     ctx.run_gc();
     crate::api::clear_function_callbacks();
-    shutdown_all();
+    if let Some(env_ptr) = env_for_ctx(ctx.as_raw().as_ptr()) {
+        let napi_env = unsafe { (*env_ptr).as_napi_env() };
+        crate::async_work::close_all_tsfn_for_env(napi_env);
+    }
+    if let Some(ctx_ptr) = NonNull::new(ctx.as_raw().as_ptr()) {
+        unregister_env(ctx_ptr);
+    }
+    let rt = unsafe { qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+    if env_ptrs_for_runtime(rt).is_empty() {
+        raster_runtime_utils::driver_poll::unregister_driver_notify(rt);
+        crate::gc_hook::unregister_holder_class(rt);
+    }
 }
 
 pub fn env_for_ctx(ctx: *mut JSContext) -> Option<*mut Env> {
@@ -203,7 +236,10 @@ fn dlopen_impl(
     };
     unsafe {
         let rt = qjs::JS_GetRuntime(ctx_ptr.as_ptr());
-        crate::external::register_external_class(rt);
+        if !(*env_ptr).external_class_acquired {
+            crate::external::acquire_external_class_for_env(rt);
+            (*env_ptr).external_class_acquired = true;
+        }
         (*env_ptr).scopes.open();
     }
     let _activation = EnvActivation::enter(env_ptr);
@@ -237,7 +273,7 @@ fn dlopen_impl(
 
     let result = unsafe { register(napi_env, exports_napi) };
     if !result.is_null() {
-        let js_result = unsafe { crate::value::napi_to_value_dup(&mut *env_ptr, result) }
+        let js_result = unsafe { crate::value::napi_to_value_dup(&*env_ptr, result) }
             .ok_or_else(|| "Invalid return value from addon init".to_string())?;
         assign_module_exports(ctx_ptr.as_ptr(), exports_obj, js_result);
     }

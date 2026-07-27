@@ -85,8 +85,8 @@ pub unsafe fn try_buffer_from(ctx: *mut JSContext, uint8array: JSValue) -> JSVal
     result
 }
 
-/// Define a non-enumerable, non-writable, non-configurable property (flags = 0).
-pub unsafe fn define_hidden_usize(
+/// Hidden id property that can be deleted on `napi_remove_wrap` (still non-enumerable).
+pub unsafe fn define_hidden_usize_configurable(
     ctx: *mut JSContext,
     obj: JSValue,
     key: *const std::os::raw::c_char,
@@ -94,9 +94,25 @@ pub unsafe fn define_hidden_usize(
 ) -> bool {
     let id_val = new_int64(id as i64);
     let atom = qjs::JS_NewAtom(ctx, key);
-    let ret = qjs::JS_DefinePropertyValue(ctx, obj, atom, id_val, 0);
+    let ret = qjs::JS_DefinePropertyValue(
+        ctx,
+        obj,
+        atom,
+        id_val,
+        qjs::JS_PROP_CONFIGURABLE as i32,
+    );
     qjs::JS_FreeAtom(ctx, atom);
-    ret >= 0
+    ret > 0
+}
+
+pub unsafe fn delete_hidden_property(
+    ctx: *mut JSContext,
+    obj: JSValue,
+    key: *const std::os::raw::c_char,
+) {
+    let atom = qjs::JS_NewAtom(ctx, key);
+    qjs::JS_DeleteProperty(ctx, obj, atom, 0);
+    qjs::JS_FreeAtom(ctx, atom);
 }
 
 pub unsafe fn read_hidden_usize(

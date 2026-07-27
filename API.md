@@ -434,7 +434,7 @@ CommonJS loader facade (also on the default `Module` export):
 - `Module._resolveFilename`, `Module._nodeModulePaths`, `Module._cache` — exposed for CommonJS ecosystem compatibility (e.g. Next.js require hooks); writable but not a full Node internals implementation
 
 > [!NOTE]
-> Does not implement `Module._load` or complete `require.main` semantics. **N-API** native addon (`.node`) loading is available when built with `--features napi` (see `make compat-napi`); V8 C++ ABI addons are not supported. N-API limitations: `napi_wrap` / `napi_add_finalizer` run at env shutdown (not GC); nested handle scopes can invalidate outer `napi_value` handles; thread-safe functions are main-thread only (`napi_ref`/`napi_unref` TSFN are no-ops); async work blocks the JS thread while `execute` runs on a worker thread. See `compat/README.md`. `require.extensions` and `Module._compile` are supported for CommonJS loading hooks (for example Next.js config transpilation); they do not affect static ESM `import` resolution.
+> Does not implement `Module._load` or complete `require.main` semantics. **N-API** native addon (`.node`) loading is available when built with `--features napi` (see `make compat-napi`); V8 C++ ABI addons are not supported. N-API: `napi_wrap` / `napi_add_finalizer` finalizers run on GC (deferred to safe points); nested handle scopes use a flat arena so outer `napi_value` handles remain valid; thread-safe functions and async work use a per-env driver on the JS thread (`napi_ref`/`napi_unref` TSFN affect event-loop lifetime). See `compat/README.md`. `require.extensions` and `Module._compile` are supported for CommonJS loading hooks (for example Next.js config transpilation); they do not affect static ESM `import` resolution.
 
 ## net
 

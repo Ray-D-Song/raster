@@ -7,75 +7,47 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use rquickjs::qjs::{self, JSContext, JSValue};
 
 use crate::env::Env;
-use crate::types::{napi_env, napi_status, napi_value, NAPI_AUTO_LENGTH};
+use crate::types::{napi_status, napi_value, NAPI_AUTO_LENGTH};
 
 static VALUE_ID: AtomicU64 = AtomicU64::new(1);
 
 #[repr(C)]
 pub struct NapiValue {
     pub id: u64,
-    pub value_index: usize,
-    /// When true, `value_index` refers to the parent handle scope (used after escape).
-    pub in_parent_scope: bool,
+    pub slot: usize,
 }
 
-/// Transfer ownership of `value` into the current handle scope and return a handle.
+/// Transfer ownership of `value` into the handle arena and return a handle.
 pub fn value_to_napi_owned(env: &mut Env, value: JSValue) -> napi_value {
-    value_to_napi_owned_in_scope(env, value, false)
-}
-
-/// Root `value` in the parent handle scope while an escapable scope is open.
-pub fn value_to_napi_owned_in_parent(env: &mut Env, value: JSValue) -> napi_value {
-    value_to_napi_owned_in_scope(env, value, true)
-}
-
-fn value_to_napi_owned_in_scope(env: &mut Env, value: JSValue, in_parent_scope: bool) -> napi_value {
-    let value_index = if in_parent_scope {
-        env.scopes.push_to_parent_handle_scope(value)
-    } else if let Some(esc) = env.scopes.current_escapable_mut() {
-        let idx = esc.values.len();
-        esc.values.push(value);
-        idx
-    } else if let Some(scope) = env.scopes.current_mut() {
-        let idx = scope.values.len();
-        scope.values.push(value);
-        idx
-    } else {
+    if env.scopes.depth() == 0 && env.scopes.escapable_depth() == 0 {
         env.scopes.open();
-        let scope = env.scopes.current_mut().unwrap();
-        let idx = scope.values.len();
-        scope.values.push(value);
-        idx
-    };
-
+    }
+    let slot = env.scopes.push_value(value);
     let boxed = Box::new(NapiValue {
         id: VALUE_ID.fetch_add(1, Ordering::Relaxed),
-        value_index,
-        in_parent_scope,
+        slot,
     });
     let ptr = Box::into_raw(boxed);
-
-    if in_parent_scope {
-        env.scopes.push_handle_to_parent(ptr);
-    } else if let Some(esc) = env.scopes.current_escapable_mut() {
-        esc.handles.push(ptr);
-    } else if let Some(scope) = env.scopes.current_mut() {
-        scope.handles.push(ptr);
-    }
-
+    env.scopes.push_handle(ptr);
     ptr as napi_value
 }
 
-/// Dup a borrowed `value` into the current handle scope.
+/// Dup a borrowed `value` into the handle arena.
 pub fn value_to_napi_borrowed(env: &mut Env, value: JSValue) -> napi_value {
     let ctx = env.ctx_ptr();
     let duped = unsafe { qjs::JS_DupValue(ctx, value) };
     value_to_napi_owned(env, duped)
 }
 
-/// Dup a borrowed value into the current handle scope (alias for clarity at call sites).
-pub fn value_to_napi(env: &mut Env, value: JSValue) -> napi_value {
-    value_to_napi_borrowed(env, value)
+/// Create a handle for an existing arena slot (used after escape).
+pub fn napi_value_for_slot(env: &mut Env, slot: usize) -> napi_value {
+    let boxed = Box::new(NapiValue {
+        id: VALUE_ID.fetch_add(1, Ordering::Relaxed),
+        slot,
+    });
+    let ptr = Box::into_raw(boxed);
+    env.scopes.push_handle(ptr);
+    ptr as napi_value
 }
 
 pub unsafe fn napi_to_value(env: &Env, napi_val: napi_value) -> Option<JSValue> {
@@ -83,24 +55,12 @@ pub unsafe fn napi_to_value(env: &Env, napi_val: napi_value) -> Option<JSValue> 
         return None;
     }
     let nv = unsafe { &*(napi_val as *const NapiValue) };
-    env.scopes
-        .resolve_value(nv.value_index, nv.in_parent_scope)
+    env.scopes.resolve_value(nv.slot)
 }
 
 pub unsafe fn napi_to_value_dup(env: &Env, napi_val: napi_value) -> Option<JSValue> {
     let value = unsafe { napi_to_value(env, napi_val)? };
     Some(unsafe { qjs::JS_DupValue(env.ctx_ptr(), value) })
-}
-
-pub unsafe fn free_napi_value(env: &Env, napi_val: napi_value) {
-    if napi_val.is_null() {
-        return;
-    }
-    let boxed = napi_val as *mut NapiValue;
-    unsafe {
-        let _ = Box::from_raw(boxed);
-    }
-    let _ = env;
 }
 
 pub fn bytes_from_js(

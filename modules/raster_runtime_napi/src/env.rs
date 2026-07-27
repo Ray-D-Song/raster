@@ -8,8 +8,10 @@ use std::ptr;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use libc::pthread_t;
 use rquickjs::qjs::{self, JSContext, JSValue};
 
+use crate::driver::DriverState;
 use crate::error::LastError;
 use crate::finalizers::FinalizerTable;
 use crate::refs::RefTable;
@@ -24,10 +26,12 @@ static ENV_ID: AtomicU64 = AtomicU64::new(1);
 pub struct Env {
     pub id: u64,
     pub ctx: NonNull<JSContext>,
+    pub js_pthread: pthread_t,
     pub scopes: ScopeStack,
     pub refs: RefTable,
     pub wraps: WrapTable,
     pub finalizers: FinalizerTable,
+    pub driver: Option<std::sync::Arc<DriverState>>,
     pub last_error: LastError,
     pub last_error_info: napi_extended_error_info,
     pub last_error_message: Option<CString>,
@@ -35,6 +39,7 @@ pub struct Env {
     pub instance_finalize: Option<(napi_finalize, *mut c_void)>,
     pub cleanup_hooks: Vec<(EnvCleanupHook, *mut c_void)>,
     pub external_memory: i64,
+    pub external_class_acquired: bool,
 }
 
 impl Env {
@@ -42,10 +47,12 @@ impl Env {
         Self {
             id: ENV_ID.fetch_add(1, Ordering::Relaxed),
             ctx,
+            js_pthread: unsafe { libc::pthread_self() },
             scopes: ScopeStack::new(),
             refs: RefTable::new(),
             wraps: WrapTable::new(),
             finalizers: FinalizerTable::new(),
+            driver: None,
             last_error: LastError::default(),
             last_error_info: napi_extended_error_info {
                 error_message: ptr::null(),
@@ -58,7 +65,12 @@ impl Env {
             instance_finalize: None,
             cleanup_hooks: Vec::new(),
             external_memory: 0,
+            external_class_acquired: false,
         }
+    }
+
+    pub fn is_js_thread(&self) -> bool {
+        unsafe { libc::pthread_equal(libc::pthread_self(), self.js_pthread) != 0 }
     }
 
     pub fn ctx_ptr(&self) -> *mut JSContext {
@@ -126,17 +138,12 @@ impl Env {
 
     /// Release all handle-scope roots so GC objects can be collected on shutdown.
     pub fn close_all_scopes(&mut self) {
-        let ctx = self.ctx_ptr();
-        while self.scopes.escapable_depth() > 0 {
-            self.scopes.close_escapable(ctx);
-        }
-        while self.scopes.depth() > 0 {
-            self.scopes.close(ctx);
-        }
+        self.scopes.close_all(self.ctx_ptr());
     }
 
     /// Run cleanup hooks and release all JS roots held by this env.
     pub fn dispose(&mut self) {
+        crate::async_work::close_all_tsfn_for_env(self.as_napi_env());
         let ctx = self.ctx_ptr();
         for (hook, arg) in self.cleanup_hooks.drain(..) {
             unsafe { hook(arg) };
@@ -150,9 +157,19 @@ impl Env {
             self.instance_data.clear();
         }
         self.refs.release_all(ctx);
-        self.wraps.run_all_finalizers(self.as_napi_env());
-        self.finalizers.run_all(self.as_napi_env());
         self.close_all_scopes();
+        let rt = unsafe { qjs::JS_GetRuntime(ctx) };
+        unsafe {
+            qjs::JS_RunGC(rt);
+        }
+        crate::gc_hook::drain_pending_finalizers(self);
+        crate::gc_hook::run_all_remaining(self);
+        crate::external::finalize_surviving_externals(self.as_napi_env());
+        if self.external_class_acquired {
+            crate::external::release_external_class_for_env(rt);
+            self.external_class_acquired = false;
+        }
+        crate::driver::shutdown_driver(self);
         self.wraps.clear();
     }
 }

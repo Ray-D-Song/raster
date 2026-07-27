@@ -54,12 +54,12 @@ Requires a **dynamically linked** Raster binary (`-rdynamic` / `--export-dynamic
 
 Diagnostics land in `compat/napi-hello/compat.log`.
 
-### N-API limitations (Raster shim)
+### N-API support (Raster shim)
 
-- **`napi_wrap` / `napi_add_finalizer`**: finalizers run at env shutdown (`prepare_shutdown`), not when the JS object is GC'd. `napi_create_external` uses a QuickJS class finalizer and does run on GC.
-- **Nested handle scopes**: `napi_value` indices are per innermost escapable or handle scope. Opening a nested ordinary handle scope while holding handles from an outer scope can make those handles unresolvable. Prefer a single scope per callback, or re-fetch values inside the inner scope.
-- **Thread-safe functions**: TSFN callbacks are drained on the main JS thread only. `napi_call_threadsafe_function` from a worker thread is undefined behavior (QuickJS is not thread-safe). `napi_ref_threadsafe_function` / `napi_unref_threadsafe_function` are no-ops.
-- **`napi_queue_async_work`**: `execute` runs on a short-lived worker `std::thread` (the JS thread blocks on `join()` until it returns); `complete` runs on the JS thread afterward. Addons must not call N-API from `execute` except via TSFN.
+- **`napi_wrap` / `napi_add_finalizer`**: finalizers run when the wrapped object is GC'd, deferred to the next N-API safe point (or env shutdown). Weak references (`refcount == 0`) allow collection; dead weak refs return `undefined` from `napi_get_reference_value`.
+- **Handle scopes**: flat value/handle arena with per-scope watermarks; outer-scope `napi_value` handles remain valid across nested scopes. Using handles after their scope closes is undefined (same as Node).
+- **Thread-safe functions**: cross-thread `napi_call_threadsafe_function` enqueues work to the per-env driver; callbacks run on the JS thread. `napi_ref_threadsafe_function` / `napi_unref_threadsafe_function` control whether TSFN refs keep the event loop alive.
+- **`napi_queue_async_work`**: `execute` runs on a tokio blocking thread; `complete` is posted back to the JS thread via the driver. `execute` must not call N-API except via TSFN.
 
 ## Failures and CI
 

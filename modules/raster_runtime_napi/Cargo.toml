@@ -18,8 +18,10 @@ libc = { version = "0.2", default-features = false }
 libloading = { version = "0.8", default-features = false }
 once_cell = { version = "1", features = ["std"], default-features = false }
 parking_lot = { version = "0.12", default-features = false }
-rquickjs = { version = "=0.12.1", features = ["std"], default-features = false }
-tokio = { version = "1", features = ["sync", "rt"], default-features = false }
+raster_runtime_context = { path = "../../libs/raster_runtime_context", default-features = false }
+raster_runtime_utils = { path = "../../libs/raster_runtime_utils", default-features = false }
+rquickjs = { version = "=0.12.1", features = ["std", "futures", "parallel"], default-features = false }
+tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread"], default-features = false }
 tracing = { version = "0.1", default-features = false }
 
 [dev-dependencies]

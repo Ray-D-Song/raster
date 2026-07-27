@@ -112,6 +112,15 @@ async fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
     let vm = Vm::new().await?;
     trace!("Initialized VM in {}ms", now.elapsed().as_millis());
 
+    #[cfg(feature = "napi")]
+    {
+        vm.ctx
+            .with(|ctx| {
+                raster_runtime_napi::register_async_context(ctx.as_raw());
+            })
+            .await;
+    }
+
     start_cli(&vm).await;
 
     vm.idle().await?;

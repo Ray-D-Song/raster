@@ -36,9 +36,36 @@ const cases = {
   },
   "napi-hello": {
     directory: "compat/napi-hello",
-    script: "test.cjs",
-    successMarker: "napi-hello compat OK",
     buildCommand: "yarn build",
+    scripts: [
+      {
+        script: "test.cjs",
+        successMarker: "napi-hello compat OK",
+        maxDurationMs: 2_000,
+        expectCode: 0,
+      },
+      {
+        script: "test-async-work-notimer.cjs",
+        successMarker: "async-work-notimer-ok",
+        maxDurationMs: 1_000,
+        expectCode: 0,
+      },
+      {
+        script: "test-tsfn-unref-fast.cjs",
+        maxDurationMs: 500,
+        expectCode: 0,
+      },
+      {
+        script: "test-tsfn-unref-timer.cjs",
+        successMarker: "timer-tsfn-ok",
+        maxDurationMs: 2_000,
+        expectCode: 0,
+      },
+      {
+        script: "test-tsfn-refd-hold.cjs",
+        expectStillRunning: { checkMs: 400, killAfterMs: 1_500 },
+      },
+    ],
   },
 };
 
@@ -157,97 +184,165 @@ async function runScriptCompat(testCase, directory, raster, logPath, root) {
     }
   }
 
-  // --- Phase 1: Node baseline (validates fixture + test script) ---
-  const nodeCmd = `${process.execPath} ${testCase.script}`;
-  logParts.push(`# Node baseline\n$ ${nodeCmd}`);
-  console.log(`[compat-${name}] Node baseline: ${nodeCmd}`);
+  const scripts = testCase.scripts ?? [
+    {
+      script: testCase.script,
+      successMarker: testCase.successMarker,
+      maxDurationMs: SCRIPT_TIMEOUT_MS,
+      expectCode: 0,
+    },
+  ];
+
+  for (const spec of scripts) {
+    await runCompatScript(spec, directory, raster, logParts, root, logPath);
+  }
+
+  await writeLog(logPath, logParts);
+  console.log(
+    `${name} compatibility passed (${scripts.length} script(s), Node baseline + Raster)`
+  );
+}
+
+async function runCompatScript(spec, directory, raster, logParts, root, logPath) {
+  const {
+    script,
+    successMarker,
+    maxDurationMs = SCRIPT_TIMEOUT_MS,
+    expectCode = 0,
+    mustNotContainStdout,
+    expectStillRunning,
+  } = spec;
+  const label = `${name}/${script}`;
+
+  if (expectStillRunning) {
+    const { checkMs = 400, killAfterMs = 1_500 } = expectStillRunning;
+    for (const [phase, command, args] of [
+      ["Node baseline", process.execPath, [script]],
+      ["Raster run", raster, [script]],
+    ]) {
+      const cmdLine = `${command} ${args.join(" ")}`;
+      logParts.push(`\n# ${phase}: ${script} (still-running)\n$ ${cmdLine}`);
+      console.log(`[compat-${label}] ${phase} (still-running): ${cmdLine}`);
+      const result = await spawnStillRunning(
+        command,
+        args,
+        { cwd: directory, env: { ...process.env } },
+        checkMs,
+        killAfterMs
+      );
+      logParts.push(
+        `still alive at ${checkMs}ms, killed after ${killAfterMs}ms\n\nstdout:\n${result.stdout}\n\nstderr:\n${result.stderr}`
+      );
+      if (!result.stillAliveAtCheck) {
+        throw new Error(
+          `${label} ${phase} exited before ${checkMs}ms. ` +
+            `See ${path.relative(root, logPath)}.`
+        );
+      }
+    }
+    return;
+  }
+
+  const nodeCmd = `${process.execPath} ${script}`;
+  logParts.push(`\n# Node baseline: ${script}\n$ ${nodeCmd}`);
+  console.log(`[compat-${label}] Node baseline: ${nodeCmd}`);
 
   const nodeResult = await spawnCollect(
     process.execPath,
-    [testCase.script],
+    [script],
     { cwd: directory, env: { ...process.env } },
-    NODE_BASELINE_TIMEOUT_MS
+    Math.min(NODE_BASELINE_TIMEOUT_MS, maxDurationMs)
   );
 
-  const nodeExitLabel = nodeResult.timedOut
-    ? `timeout after ${NODE_BASELINE_TIMEOUT_MS}ms`
-    : String(nodeResult.code ?? nodeResult.signal);
-  logParts.push(
-    `exit: ${nodeExitLabel}\n\nstdout:\n${nodeResult.stdout}\n\nstderr:\n${nodeResult.stderr}`
-  );
-  process.stdout.write(nodeResult.stdout);
-  process.stderr.write(nodeResult.stderr);
+  validateCompatRun(label, "Node baseline", nodeResult, {
+    maxDurationMs,
+    expectCode,
+    successMarker,
+    mustNotContainStdout,
+    logPath,
+    root,
+    logParts,
+    rasterNotStarted: true,
+  });
 
-  if (nodeResult.timedOut) {
-    await writeLog(logPath, logParts);
-    throw new Error(
-      `${name} Node baseline timed out after ${NODE_BASELINE_TIMEOUT_MS}ms. ` +
-        `See ${path.relative(root, logPath)}. Raster was not started.`
-    );
-  }
-
-  if (nodeResult.code !== 0) {
-    await writeLog(logPath, logParts);
-    throw new Error(
-      `${name} Node baseline failed (exit ${nodeResult.code ?? nodeResult.signal}). ` +
-        `See ${path.relative(root, logPath)}. Raster was not started.`
-    );
-  }
-
-  if (!nodeResult.stdout.includes(testCase.successMarker)) {
-    await writeLog(logPath, logParts);
-    throw new Error(
-      `${name} Node baseline exited 0 but stdout missing "${testCase.successMarker}". ` +
-        `See ${path.relative(root, logPath)}. Raster was not started.`
-    );
-  }
-
-  // --- Phase 2: Raster run ---
-  const rasterCmd = `${raster} ${testCase.script}`;
-  logParts.push(`\n# Raster run\n$ ${rasterCmd}`);
-  console.log(`[compat-${name}] Raster run: ${rasterCmd}`);
+  const rasterCmd = `${raster} ${script}`;
+  logParts.push(`\n# Raster run: ${script}\n$ ${rasterCmd}`);
+  console.log(`[compat-${label}] Raster run: ${rasterCmd}`);
 
   const rasterResult = await spawnCollect(
     raster,
-    [testCase.script],
+    [script],
     { cwd: directory, env: { ...process.env } },
-    SCRIPT_TIMEOUT_MS
+    maxDurationMs
   );
 
-  const rasterExitLabel = rasterResult.timedOut
-    ? `timeout after ${SCRIPT_TIMEOUT_MS}ms`
-    : String(rasterResult.code ?? rasterResult.signal);
+  validateCompatRun(label, "Raster run", rasterResult, {
+    maxDurationMs,
+    expectCode,
+    successMarker,
+    mustNotContainStdout,
+    logPath,
+    root,
+    logParts,
+    rasterNotStarted: false,
+  });
+}
+
+function validateCompatRun(
+  label,
+  phase,
+  result,
+  {
+    maxDurationMs,
+    expectCode,
+    successMarker,
+    mustNotContainStdout,
+    logPath,
+    root,
+    logParts,
+    rasterNotStarted,
+  }
+) {
+  process.stdout.write(result.stdout);
+  process.stderr.write(result.stderr);
+
+  const exitLabel = result.timedOut
+    ? `timeout after ${maxDurationMs}ms`
+    : String(result.code ?? result.signal);
   logParts.push(
-    `exit: ${rasterExitLabel}\n\nstdout:\n${rasterResult.stdout}\n\nstderr:\n${rasterResult.stderr}`
+    `exit: ${exitLabel}\n\nstdout:\n${result.stdout}\n\nstderr:\n${result.stderr}`
   );
-  await writeLog(logPath, logParts);
-  process.stdout.write(rasterResult.stdout);
-  process.stderr.write(rasterResult.stderr);
 
-  if (rasterResult.timedOut) {
+  if (result.timedOut) {
     throw new Error(
-      `${name} Raster run timed out after ${SCRIPT_TIMEOUT_MS}ms. ` +
-        `See ${path.relative(root, logPath)}.`
+      `${label} ${phase} timed out after ${maxDurationMs}ms. ` +
+        `See ${path.relative(root, logPath)}.` +
+        (rasterNotStarted ? " Raster was not started." : "")
     );
   }
 
-  if (rasterResult.code !== 0) {
+  if (result.code !== expectCode) {
     throw new Error(
-      `${name} Raster run failed (exit ${rasterResult.code ?? rasterResult.signal}). ` +
-        `See ${path.relative(root, logPath)}.`
+      `${label} ${phase} expected exit ${expectCode}, got ${result.code ?? result.signal}. ` +
+        `See ${path.relative(root, logPath)}.` +
+        (rasterNotStarted ? " Raster was not started." : "")
     );
   }
 
-  if (!rasterResult.stdout.includes(testCase.successMarker)) {
+  if (successMarker && !result.stdout.includes(successMarker)) {
     throw new Error(
-      `${name} Raster run exited 0 but stdout missing "${testCase.successMarker}". ` +
-        `See ${path.relative(root, logPath)}.`
+      `${label} ${phase} exited ${expectCode} but stdout missing "${successMarker}". ` +
+        `See ${path.relative(root, logPath)}.` +
+        (rasterNotStarted ? " Raster was not started." : "")
     );
   }
 
-  console.log(
-    `${name} compatibility passed (Node baseline + Raster run)`
-  );
+  if (mustNotContainStdout && result.stdout.includes(mustNotContainStdout)) {
+    throw new Error(
+      `${label} ${phase} stdout must not contain "${mustNotContainStdout}". ` +
+        `See ${path.relative(root, logPath)}.`
+    );
+  }
 }
 
 async function runNextStandalone(directory, raster, logPath, root) {
@@ -584,6 +679,52 @@ async function runNextStandalone(directory, raster, logPath, root) {
       }
     }
   }
+}
+
+/**
+ * Spawn a process and verify it is still running at `checkMs`, then kill it.
+ */
+function spawnStillRunning(command, args, options, checkMs, killAfterMs) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      ...options,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let exited = false;
+    let exitCode = null;
+
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      exited = true;
+      exitCode = code;
+    });
+
+    setTimeout(() => {
+      if (exited) {
+        reject(
+          new Error(
+            `process exited before ${checkMs}ms (exit ${exitCode ?? "signal"})`
+          )
+        );
+        return;
+      }
+      const killDelay = Math.max(0, killAfterMs - checkMs);
+      setTimeout(() => {
+        try {
+          child.kill("SIGTERM");
+        } catch {
+          // ignore
+        }
+        setTimeout(() => {
+          resolve({ stdout, stderr, stillAliveAtCheck: true });
+        }, 100);
+      }, killDelay);
+    }, checkMs);
+  });
 }
 
 /**

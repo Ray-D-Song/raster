@@ -7,11 +7,13 @@
 
 mod api;
 mod async_work;
+mod driver;
 pub mod dlopen;
 mod env;
 mod error;
 mod external;
 mod finalizers;
+mod gc_hook;
 mod js_helpers;
 mod refs;
 mod scopes;
@@ -23,6 +25,11 @@ pub use dlopen::{dlopen_module, prepare_shutdown, shutdown_all};
 pub use env::Env;
 pub use types::*;
 
+pub fn register_async_context(ctx: std::ptr::NonNull<rquickjs::qjs::JSContext>) {
+    let _ = ctx;
+    raster_runtime_utils::driver_poll::set_driver_poll_hook(Some(crate::api::poll_pending_drivers));
+}
+
 pub const NAPI_VERSION: u32 = 9;
 
 #[cfg(test)]
@@ -31,12 +38,12 @@ mod tests {
     use rquickjs::{AsyncContext, AsyncRuntime};
 
     use crate::env::Env;
-    use crate::external::{create_external_object, get_external_pointer, register_external_class};
-    use crate::js_helpers::{define_hidden_usize, new_int32};
+    use crate::external::{acquire_external_class_for_env, create_external_object, get_external_pointer};
+    use crate::js_helpers::{define_hidden_usize_configurable, new_int32};
     use crate::refs::RefTable;
     use crate::scopes::ScopeStack;
     use crate::types::napi_status;
-    use crate::value::{napi_to_value, value_to_napi_owned, value_to_napi_owned_in_parent};
+    use crate::value::{napi_to_value, napi_value_for_slot, value_to_napi_owned};
     use crate::NAPI_VERSION;
 
     #[test]
@@ -53,6 +60,7 @@ mod tests {
     async fn value_bridge_owned_does_not_leak_extra_ref() {
         let rt = AsyncRuntime::new().unwrap();
         let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
         ctx.with(|ctx| {
             let raw = ctx.as_raw();
             let mut env = Env::new(raw);
@@ -70,16 +78,15 @@ mod tests {
     async fn handle_scope_frees_values_on_close() {
         let rt = AsyncRuntime::new().unwrap();
         let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
         ctx.with(|ctx| {
             let raw = ctx.as_raw();
             let mut scopes = ScopeStack::new();
             scopes.open();
             let val = unsafe { qjs::JS_NewObject(raw.as_ptr()) };
-            let idx = scopes.current_mut().unwrap().values.len();
-            scopes.current_mut().unwrap().values.push(val);
-            scopes.close(raw.as_ptr());
+            scopes.push_value(val);
+            scopes.close_handle(raw.as_ptr());
             assert_eq!(scopes.depth(), 0);
-            let _ = idx;
         })
         .await;
     }
@@ -88,11 +95,12 @@ mod tests {
     async fn ref_table_create_and_delete_once() {
         let rt = AsyncRuntime::new().unwrap();
         let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
         ctx.with(|ctx| {
             let raw = ctx.as_raw();
             let mut refs = RefTable::new();
             let s = unsafe { qjs::JS_NewStringLen(raw.as_ptr(), c"x".as_ptr(), 1) };
-            let reference = refs.create(raw.as_ptr(), s, 1);
+            let reference = refs.create(raw.as_ptr(), s, 1, std::ptr::null_mut(), false);
             assert!(!reference.is_null());
             let status = unsafe { refs.delete(raw.as_ptr(), reference) };
             assert_eq!(status, napi_status::napi_ok);
@@ -104,12 +112,16 @@ mod tests {
 
     #[tokio::test]
     async fn external_object_roundtrip() {
+        let _lock = gc_test_lock();
+        crate::gc_hook::reset_for_tests();
+        crate::external::reset_for_tests();
         let rt = AsyncRuntime::new().unwrap();
         let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
         ctx.with(|ctx| {
             let raw = ctx.as_raw();
             let rt_ptr = unsafe { qjs::JS_GetRuntime(raw.as_ptr()) };
-            register_external_class(rt_ptr);
+            acquire_external_class_for_env(rt_ptr);
             let mut env = Env::new(raw);
             env.scopes.open();
             let ptr = 0x1234usize as *mut std::ffi::c_void;
@@ -124,9 +136,104 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn external_finalize_runs_on_dispose() {
+        let _lock = gc_test_lock();
+        crate::gc_hook::reset_for_tests();
+        crate::external::reset_for_tests();
+        use std::os::raw::c_void;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        static FINALIZE_COUNT: AtomicU32 = AtomicU32::new(0);
+
+        unsafe extern "C" fn external_finalize(
+            _env: crate::types::napi_env,
+            _data: *mut c_void,
+            _hint: *mut c_void,
+        ) {
+            FINALIZE_COUNT.fetch_add(1, Ordering::SeqCst);
+        }
+
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
+        ctx.with(|ctx| {
+            FINALIZE_COUNT.store(0, Ordering::SeqCst);
+            let raw = ctx.as_raw();
+            let rt_ptr = unsafe { qjs::JS_GetRuntime(raw.as_ptr()) };
+            acquire_external_class_for_env(rt_ptr);
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let obj = create_external_object(
+                raw.as_ptr(),
+                std::ptr::null_mut(),
+                Some(external_finalize),
+                std::ptr::null_mut(),
+                env.as_napi_env(),
+            );
+            let _handle = value_to_napi_owned(&mut env, obj);
+            env.dispose();
+            assert_eq!(FINALIZE_COUNT.load(Ordering::SeqCst), 1);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn external_finalize_runs_on_dispose_on_global() {
+        let _lock = gc_test_lock();
+        crate::gc_hook::reset_for_tests();
+        crate::external::reset_for_tests();
+        use std::os::raw::c_void;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        static FINALIZE_COUNT: AtomicU32 = AtomicU32::new(0);
+
+        unsafe extern "C" fn external_finalize(
+            _env: crate::types::napi_env,
+            _data: *mut c_void,
+            _hint: *mut c_void,
+        ) {
+            FINALIZE_COUNT.fetch_add(1, Ordering::SeqCst);
+        }
+
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
+        ctx.with(|ctx| {
+            FINALIZE_COUNT.store(0, Ordering::SeqCst);
+            let raw = ctx.as_raw();
+            let rt_ptr = unsafe { qjs::JS_GetRuntime(raw.as_ptr()) };
+            acquire_external_class_for_env(rt_ptr);
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let obj = create_external_object(
+                raw.as_ptr(),
+                std::ptr::null_mut(),
+                Some(external_finalize),
+                std::ptr::null_mut(),
+                env.as_napi_env(),
+            );
+            let global = unsafe { qjs::JS_GetGlobalObject(raw.as_ptr()) };
+            unsafe {
+                qjs::JS_SetPropertyStr(
+                    raw.as_ptr(),
+                    global,
+                    c"__napi_external_on_global".as_ptr(),
+                    obj,
+                );
+                qjs::JS_FreeValue(raw.as_ptr(), global);
+            }
+            env.scopes.close(raw.as_ptr());
+            env.dispose();
+            assert_eq!(FINALIZE_COUNT.load(Ordering::SeqCst), 1);
+        })
+        .await;
+    }
+
+    #[tokio::test]
     async fn promise_resolve_settles() {
         let rt = AsyncRuntime::new().unwrap();
         let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
         ctx.with(|ctx| {
             let raw = ctx.as_raw();
             let mut deferred: crate::types::napi_deferred = std::ptr::null_mut();
@@ -155,11 +262,12 @@ mod tests {
     async fn wrap_marker_not_enumerable() {
         let rt = AsyncRuntime::new().unwrap();
         let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
         ctx.with(|ctx| {
             let raw = ctx.as_raw();
             let obj = unsafe { qjs::JS_NewObject(raw.as_ptr()) };
             assert!(unsafe {
-                define_hidden_usize(raw.as_ptr(), obj, c"__napi_wrap_id".as_ptr(), 42)
+                define_hidden_usize_configurable(raw.as_ptr(), obj, c"__napi_wrap_id".as_ptr(), 42)
             });
 
             let flags = (qjs::JS_GPN_STRING_MASK | qjs::JS_GPN_ENUM_ONLY) as i32;
@@ -186,6 +294,7 @@ mod tests {
     async fn escape_handle_survives_escapable_scope_close() {
         let rt = AsyncRuntime::new().unwrap();
         let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
         ctx.with(|ctx| {
             let raw = ctx.as_raw();
             let mut env = Env::new(raw);
@@ -200,12 +309,1498 @@ mod tests {
                     napi_to_value(&env, inner_handle).unwrap(),
                 )
             };
-            let escaped = value_to_napi_owned_in_parent(&mut env, duped);
+            let escape_slot = env.scopes.escape_into_slot(duped).unwrap();
+            let escaped = napi_value_for_slot(&mut env, escape_slot);
             env.scopes.close_escapable(raw.as_ptr());
             let v = unsafe { napi_to_value(&env, escaped) }.unwrap();
             assert!(unsafe { qjs::JS_IsString(v) });
+            env.scopes.close_handle(raw.as_ptr());
+            env.dispose();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn nested_handle_scope_outer_handle_still_resolves() {
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
+        ctx.with(|ctx| {
+            let raw = ctx.as_raw();
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let outer =
+                unsafe { qjs::JS_NewStringLen(raw.as_ptr(), c"outer".as_ptr(), 5) };
+            let outer_handle = value_to_napi_owned(&mut env, outer);
+            env.scopes.open();
+            let inner =
+                unsafe { qjs::JS_NewStringLen(raw.as_ptr(), c"inner".as_ptr(), 5) };
+            let _inner_handle = value_to_napi_owned(&mut env, inner);
+            let v = unsafe { napi_to_value(&env, outer_handle) }.unwrap();
+            assert!(unsafe { qjs::JS_IsString(v) });
+            env.scopes.close_handle(raw.as_ptr());
+            let v2 = unsafe { napi_to_value(&env, outer_handle) }.unwrap();
+            assert!(unsafe { qjs::JS_IsString(v2) });
+            env.scopes.close_handle(raw.as_ptr());
+            env.dispose();
+        })
+        .await;
+    }
+
+    static GC_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn gc_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        GC_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[tokio::test]
+    async fn wrap_finalize_runs_once_after_gc() {
+        let _lock = gc_test_lock();
+        crate::gc_hook::reset_for_tests();
+        use std::os::raw::c_void;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        static FINALIZE_COUNT: AtomicU32 = AtomicU32::new(0);
+
+        unsafe extern "C" fn finalize_cb(
+            _env: crate::types::napi_env,
+            _data: *mut c_void,
+            _hint: *mut c_void,
+        ) {
+            FINALIZE_COUNT.fetch_add(1, Ordering::SeqCst);
+        }
+
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
+        ctx.with(|ctx| {
+            FINALIZE_COUNT.store(0, Ordering::SeqCst);
+            let raw = ctx.as_raw();
+            let rt_ptr = unsafe { qjs::JS_GetRuntime(raw.as_ptr()) };
+            crate::gc_hook::register_holder_class(rt_ptr);
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let napi_env = env.as_napi_env();
+            let obj = unsafe { qjs::JS_NewObject(raw.as_ptr()) };
+            let handle = crate::value::value_to_napi_borrowed(&mut env, obj);
+            let status = unsafe {
+                crate::wrap::napi_wrap(
+                    napi_env,
+                    handle,
+                    std::ptr::null_mut(),
+                    Some(finalize_cb),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            };
+            assert_eq!(status, napi_status::napi_ok);
+            unsafe { qjs::JS_FreeValue(raw.as_ptr(), obj) };
+            env.scopes.close_handle(raw.as_ptr());
+            env.scopes.open();
+            ctx.run_gc();
+            crate::gc_hook::drain_pending_finalizers(&mut env);
+            assert_eq!(FINALIZE_COUNT.load(Ordering::SeqCst), 1);
+            ctx.run_gc();
+            crate::gc_hook::drain_pending_finalizers(&mut env);
+            assert_eq!(FINALIZE_COUNT.load(Ordering::SeqCst), 1);
+            env.scopes.close_handle(raw.as_ptr());
+            env.dispose();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn remove_wrap_does_not_finalize_again_on_gc() {
+        let _lock = gc_test_lock();
+        crate::gc_hook::reset_for_tests();
+        use std::os::raw::c_void;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        static FINALIZE_COUNT: AtomicU32 = AtomicU32::new(0);
+
+        unsafe extern "C" fn finalize_cb(
+            _env: crate::types::napi_env,
+            _data: *mut c_void,
+            _hint: *mut c_void,
+        ) {
+            FINALIZE_COUNT.fetch_add(1, Ordering::SeqCst);
+        }
+
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
+        ctx.with(|ctx| {
+            FINALIZE_COUNT.store(0, Ordering::SeqCst);
+            let raw = ctx.as_raw();
+            let rt_ptr = unsafe { qjs::JS_GetRuntime(raw.as_ptr()) };
+            crate::gc_hook::register_holder_class(rt_ptr);
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let napi_env = env.as_napi_env();
+            let obj = unsafe { qjs::JS_NewObject(raw.as_ptr()) };
+            let handle = crate::value::value_to_napi_borrowed(&mut env, obj);
+            let status = unsafe {
+                crate::wrap::napi_wrap(
+                    napi_env,
+                    handle,
+                    std::ptr::null_mut(),
+                    Some(finalize_cb),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            };
+            assert_eq!(status, napi_status::napi_ok);
+            let mut native: *mut c_void = std::ptr::null_mut();
+            let status = unsafe {
+                crate::wrap::napi_remove_wrap(napi_env, handle, &mut native)
+            };
+            assert_eq!(status, napi_status::napi_ok);
+            assert_eq!(FINALIZE_COUNT.load(Ordering::SeqCst), 0);
+            unsafe { qjs::JS_FreeValue(raw.as_ptr(), obj) };
+            env.scopes.close_handle(raw.as_ptr());
+            env.scopes.open();
+            ctx.run_gc();
+            crate::gc_hook::drain_pending_finalizers(&mut env);
+            assert_eq!(FINALIZE_COUNT.load(Ordering::SeqCst), 0);
+            env.scopes.close_handle(raw.as_ptr());
+            env.dispose();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn weak_reference_returns_undefined_after_gc() {
+        let _lock = gc_test_lock();
+        crate::gc_hook::reset_for_tests();
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
+        ctx.with(|ctx| {
+            let raw = ctx.as_raw();
+            let rt_ptr = unsafe { qjs::JS_GetRuntime(raw.as_ptr()) };
+            crate::gc_hook::register_holder_class(rt_ptr);
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let napi_env = env.as_napi_env();
+            let obj = unsafe { qjs::JS_NewObject(raw.as_ptr()) };
+            let handle = crate::value::value_to_napi_borrowed(&mut env, obj);
+            let mut weak_ref: crate::types::napi_ref = std::ptr::null_mut();
+            let status = unsafe {
+                crate::refs::napi_create_reference(napi_env, handle, 0, &mut weak_ref)
+            };
+            assert_eq!(status, napi_status::napi_ok);
+            unsafe { qjs::JS_FreeValue(raw.as_ptr(), obj) };
+            env.scopes.close_handle(raw.as_ptr());
+            env.scopes.open();
+            ctx.run_gc();
+            crate::gc_hook::drain_pending_finalizers(&mut env);
+            let mut value: crate::types::napi_value = std::ptr::null_mut();
+            let status =
+                unsafe { crate::refs::napi_get_reference_value(napi_env, weak_ref, &mut value) };
+            assert_eq!(status, napi_status::napi_ok);
+            let js_val = unsafe { napi_to_value(&env, value) }.unwrap();
+            assert!(unsafe { qjs::JS_IsUndefined(js_val) });
+            unsafe { crate::refs::napi_delete_reference(napi_env, weak_ref) };
+            env.scopes.close_handle(raw.as_ptr());
+            env.dispose();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn two_weak_references_on_same_object_stay_alive() {
+        let _lock = gc_test_lock();
+        crate::gc_hook::reset_for_tests();
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
+        ctx.with(|ctx| {
+            let raw = ctx.as_raw();
+            let rt_ptr = unsafe { qjs::JS_GetRuntime(raw.as_ptr()) };
+            crate::gc_hook::register_holder_class(rt_ptr);
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let napi_env = env.as_napi_env();
+            let obj = unsafe { qjs::JS_NewObject(raw.as_ptr()) };
+            let handle = crate::value::value_to_napi_borrowed(&mut env, obj);
+            let mut weak1: crate::types::napi_ref = std::ptr::null_mut();
+            let mut weak2: crate::types::napi_ref = std::ptr::null_mut();
+            assert_eq!(
+                unsafe { crate::refs::napi_create_reference(napi_env, handle, 0, &mut weak1) },
+                napi_status::napi_ok
+            );
+            assert_eq!(
+                unsafe { crate::refs::napi_create_reference(napi_env, handle, 0, &mut weak2) },
+                napi_status::napi_ok
+            );
+            let mut value: crate::types::napi_value = std::ptr::null_mut();
+            assert_eq!(
+                unsafe { crate::refs::napi_get_reference_value(napi_env, weak2, &mut value) },
+                napi_status::napi_ok
+            );
+            let js_val = unsafe { napi_to_value(&env, value) }.unwrap();
+            assert!(unsafe { qjs::JS_IsObject(js_val) });
+            unsafe {
+                crate::refs::napi_delete_reference(napi_env, weak1);
+                crate::refs::napi_delete_reference(napi_env, weak2);
+                qjs::JS_FreeValue(raw.as_ptr(), obj);
+            }
+            env.scopes.close_handle(raw.as_ptr());
+            env.dispose();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn remove_wrap_allows_second_wrap() {
+        let _lock = gc_test_lock();
+        crate::gc_hook::reset_for_tests();
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
+        ctx.with(|ctx| {
+            let raw = ctx.as_raw();
+            let rt_ptr = unsafe { qjs::JS_GetRuntime(raw.as_ptr()) };
+            crate::gc_hook::register_holder_class(rt_ptr);
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let napi_env = env.as_napi_env();
+            let obj = unsafe { qjs::JS_NewObject(raw.as_ptr()) };
+            let handle = crate::value::value_to_napi_borrowed(&mut env, obj);
+            let native1 = 0x11usize as *mut std::ffi::c_void;
+            let native2 = 0x22usize as *mut std::ffi::c_void;
+            assert_eq!(
+                unsafe {
+                    crate::wrap::napi_wrap(
+                        napi_env,
+                        handle,
+                        native1,
+                        None,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    )
+                },
+                napi_status::napi_ok
+            );
+            let mut out: *mut std::ffi::c_void = std::ptr::null_mut();
+            assert_eq!(
+                unsafe { crate::wrap::napi_remove_wrap(napi_env, handle, &mut out) },
+                napi_status::napi_ok
+            );
+            assert_eq!(out, native1);
+            assert_eq!(
+                unsafe {
+                    crate::wrap::napi_wrap(
+                        napi_env,
+                        handle,
+                        native2,
+                        None,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    )
+                },
+                napi_status::napi_ok
+            );
+            let mut unwrapped: *mut std::ffi::c_void = std::ptr::null_mut();
+            assert_eq!(
+                unsafe { crate::wrap::napi_unwrap(napi_env, handle, &mut unwrapped) },
+                napi_status::napi_ok
+            );
+            assert_eq!(unwrapped, native2);
+            unsafe { qjs::JS_FreeValue(raw.as_ptr(), obj) };
+            env.scopes.close_handle(raw.as_ptr());
+            env.dispose();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn wrap_weak_ref_delete_still_allows_finalize() {
+        let _lock = gc_test_lock();
+        crate::gc_hook::reset_for_tests();
+        use std::os::raw::c_void;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        static FINALIZE_COUNT: AtomicU32 = AtomicU32::new(0);
+
+        unsafe extern "C" fn finalize_cb(
+            _env: crate::types::napi_env,
+            _data: *mut c_void,
+            _hint: *mut c_void,
+        ) {
+            FINALIZE_COUNT.fetch_add(1, Ordering::SeqCst);
+        }
+
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
+        ctx.with(|ctx| {
+            FINALIZE_COUNT.store(0, Ordering::SeqCst);
+            let raw = ctx.as_raw();
+            let rt_ptr = unsafe { qjs::JS_GetRuntime(raw.as_ptr()) };
+            crate::gc_hook::register_holder_class(rt_ptr);
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let napi_env = env.as_napi_env();
+            let obj = unsafe { qjs::JS_NewObject(raw.as_ptr()) };
+            let handle = crate::value::value_to_napi_borrowed(&mut env, obj);
+            let mut weak_ref: crate::types::napi_ref = std::ptr::null_mut();
+            let status = unsafe {
+                crate::wrap::napi_wrap(
+                    napi_env,
+                    handle,
+                    std::ptr::null_mut(),
+                    Some(finalize_cb),
+                    std::ptr::null_mut(),
+                    &mut weak_ref,
+                )
+            };
+            assert_eq!(status, napi_status::napi_ok);
+            assert_eq!(
+                unsafe { crate::refs::napi_delete_reference(napi_env, weak_ref) },
+                napi_status::napi_ok
+            );
+            assert_eq!(crate::gc_hook::entry_count(), 1);
+            unsafe { qjs::JS_FreeValue(raw.as_ptr(), obj) };
+            env.scopes.close_handle(raw.as_ptr());
+            env.scopes.open();
+            ctx.run_gc();
+            crate::gc_hook::drain_pending_finalizers(&mut env);
+            assert_eq!(FINALIZE_COUNT.load(Ordering::SeqCst), 1);
+            env.scopes.close_handle(raw.as_ptr());
+            env.dispose();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn wrap_remove_cycle_does_not_leak_gc_entries() {
+        let _lock = gc_test_lock();
+        crate::gc_hook::reset_for_tests();
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
+        ctx.with(|ctx| {
+            let raw = ctx.as_raw();
+            let rt_ptr = unsafe { qjs::JS_GetRuntime(raw.as_ptr()) };
+            crate::gc_hook::register_holder_class(rt_ptr);
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let napi_env = env.as_napi_env();
+            let obj = unsafe { qjs::JS_NewObject(raw.as_ptr()) };
+            let handle = crate::value::value_to_napi_borrowed(&mut env, obj);
+            let native = 0x55usize as *mut std::ffi::c_void;
+            for _ in 0..5 {
+                assert_eq!(
+                    unsafe {
+                        crate::wrap::napi_wrap(
+                            napi_env,
+                            handle,
+                            native,
+                            None,
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                        )
+                    },
+                    napi_status::napi_ok
+                );
+                assert_eq!(crate::gc_hook::entry_count(), 1);
+                let mut out: *mut std::ffi::c_void = std::ptr::null_mut();
+                assert_eq!(
+                    unsafe { crate::wrap::napi_remove_wrap(napi_env, handle, &mut out) },
+                    napi_status::napi_ok
+                );
+                assert_eq!(out, native);
+                assert_eq!(crate::gc_hook::entry_count(), 0);
+            }
+            unsafe { qjs::JS_FreeValue(raw.as_ptr(), obj) };
+            env.scopes.close_handle(raw.as_ptr());
+            env.dispose();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn dual_env_external_class_survives_first_dispose() {
+        let _lock = gc_test_lock();
+        crate::external::reset_for_tests();
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx1 = AsyncContext::full(&rt).await.unwrap();
+        let ctx2 = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx1 = ctx1.clone();
+        let _async_ctx2 = ctx2.clone();
+
+        let rt_key = ctx1
+            .with(|ctx| unsafe { qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) as usize })
+            .await;
+        let rt_ptr = rt_key as *mut qjs::JSRuntime;
+        crate::external::acquire_external_class_for_env(rt_ptr);
+        crate::external::acquire_external_class_for_env(rt_ptr);
+
+        ctx1
+            .with(|ctx| {
+                let raw = ctx.as_raw();
+                let mut env = Env::new(raw);
+                env.scopes.open();
+                let napi_env = env.as_napi_env();
+                let native = 0xDEAD_BEEFusize as *mut std::ffi::c_void;
+                let obj = create_external_object(
+                    raw.as_ptr(),
+                    native,
+                    None,
+                    std::ptr::null_mut(),
+                    napi_env,
+                );
+                assert_eq!(get_external_pointer(obj), Some(native));
+                assert!(crate::external::is_external_object(obj));
+                unsafe { qjs::JS_FreeValue(raw.as_ptr(), obj) };
+                env.scopes.close(raw.as_ptr());
+                env.dispose();
+            })
+            .await;
+
+        ctx2
+            .with(|ctx| {
+                let raw = ctx.as_raw();
+                let mut env = Env::new(raw);
+                env.scopes.open();
+                let napi_env = env.as_napi_env();
+                let native = 0xCAFE_BABEusize as *mut std::ffi::c_void;
+                let obj = create_external_object(
+                    raw.as_ptr(),
+                    native,
+                    None,
+                    std::ptr::null_mut(),
+                    napi_env,
+                );
+                assert_eq!(get_external_pointer(obj), Some(native));
+                assert!(crate::external::is_external_object(obj));
+                unsafe { qjs::JS_FreeValue(raw.as_ptr(), obj) };
+                env.scopes.close(raw.as_ptr());
+                env.dispose();
+            })
+            .await;
+
+        crate::external::reset_for_tests();
+    }
+
+    #[tokio::test]
+    async fn dual_env_global_external_survives_first_dispose() {
+        let _lock = gc_test_lock();
+        crate::external::reset_for_tests();
+        crate::gc_hook::reset_for_tests();
+        use std::os::raw::c_void;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        static FINALIZE_COUNT: AtomicU32 = AtomicU32::new(0);
+
+        unsafe extern "C" fn external_finalize(
+            _env: crate::types::napi_env,
+            _data: *mut c_void,
+            _hint: *mut c_void,
+        ) {
+            FINALIZE_COUNT.fetch_add(1, Ordering::SeqCst);
+        }
+
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx1 = AsyncContext::full(&rt).await.unwrap();
+        let ctx2 = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx1 = ctx1.clone();
+        let _async_ctx2 = ctx2.clone();
+
+        let rt_key = ctx1
+            .with(|ctx| unsafe { qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) as usize })
+            .await;
+        let rt_ptr = rt_key as *mut qjs::JSRuntime;
+        crate::external::acquire_external_class_for_env(rt_ptr);
+        crate::external::acquire_external_class_for_env(rt_ptr);
+
+        ctx1
+            .with(|ctx| {
+                FINALIZE_COUNT.store(0, Ordering::SeqCst);
+                let raw = ctx.as_raw();
+                let mut env = Env::new(raw);
+                env.external_class_acquired = true;
+                env.scopes.open();
+                let obj = create_external_object(
+                    raw.as_ptr(),
+                    0x1111usize as *mut c_void,
+                    Some(external_finalize),
+                    std::ptr::null_mut(),
+                    env.as_napi_env(),
+                );
+                let global = unsafe { qjs::JS_GetGlobalObject(raw.as_ptr()) };
+                unsafe {
+                    qjs::JS_SetPropertyStr(
+                        raw.as_ptr(),
+                        global,
+                        c"__napi_dual_env_external".as_ptr(),
+                        obj,
+                    );
+                    qjs::JS_FreeValue(raw.as_ptr(), global);
+                }
+                env.scopes.close(raw.as_ptr());
+                env.dispose();
+                assert_eq!(FINALIZE_COUNT.load(Ordering::SeqCst), 1);
+            })
+            .await;
+
+        ctx2
+            .with(|ctx| {
+                let raw = ctx.as_raw();
+                let mut env = Env::new(raw);
+                env.external_class_acquired = true;
+                env.scopes.open();
+                let obj = create_external_object(
+                    raw.as_ptr(),
+                    0x2222usize as *mut c_void,
+                    None,
+                    std::ptr::null_mut(),
+                    env.as_napi_env(),
+                );
+                assert!(crate::external::is_external_object(obj));
+                unsafe { qjs::JS_FreeValue(raw.as_ptr(), obj) };
+                env.scopes.close(raw.as_ptr());
+                env.dispose();
+            })
+            .await;
+
+        ctx1
+            .with(|ctx| {
+                let raw = ctx.as_raw();
+                let rt = unsafe { qjs::JS_GetRuntime(raw.as_ptr()) };
+                let global = unsafe { qjs::JS_GetGlobalObject(raw.as_ptr()) };
+                let atom =
+                    unsafe { qjs::JS_NewAtom(raw.as_ptr(), c"__napi_dual_env_external".as_ptr()) };
+                let ext = unsafe { qjs::JS_GetProperty(raw.as_ptr(), global, atom) };
+                unsafe {
+                    qjs::JS_DeleteProperty(raw.as_ptr(), global, atom, 0);
+                    qjs::JS_FreeAtom(raw.as_ptr(), atom);
+                    qjs::JS_FreeValue(raw.as_ptr(), ext);
+                    qjs::JS_FreeValue(raw.as_ptr(), global);
+                    qjs::JS_RunGC(rt);
+                    qjs::JS_RunGC(rt);
+                }
+                assert_eq!(FINALIZE_COUNT.load(Ordering::SeqCst), 1);
+            })
+            .await;
+
+        crate::external::reset_for_tests();
+    }
+
+    #[tokio::test]
+    async fn cancel_unqueued_async_work_returns_generic_failure() {
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
+        ctx.with(|ctx| {
+            let raw = ctx.as_raw();
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let napi_env = env.as_napi_env();
+            let mut work: crate::types::napi_async_work = std::ptr::null_mut();
+            assert_eq!(
+                unsafe {
+                    crate::async_work::napi_create_async_work(
+                        napi_env,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        None,
+                        None,
+                        std::ptr::null_mut(),
+                        &mut work,
+                    )
+                },
+                napi_status::napi_ok
+            );
+            assert_eq!(
+                unsafe { crate::async_work::napi_cancel_async_work(napi_env, work) },
+                napi_status::napi_generic_failure
+            );
+            assert_eq!(
+                unsafe { crate::async_work::napi_delete_async_work(napi_env, work) },
+                napi_status::napi_ok
+            );
             env.scopes.close(raw.as_ptr());
             env.dispose();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn cancel_queued_async_work_completes_exactly_once() {
+        use std::os::raw::c_void;
+        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+        use std::thread;
+        use std::time::Duration;
+
+        static COMPLETE_COUNT: AtomicU32 = AtomicU32::new(0);
+        static EXECUTE_STARTED: AtomicBool = AtomicBool::new(false);
+
+        unsafe extern "C" fn execute_slow(
+            _env: crate::types::napi_env,
+            _data: *mut c_void,
+        ) {
+            EXECUTE_STARTED.store(true, Ordering::SeqCst);
+            thread::sleep(Duration::from_millis(100));
+        }
+
+        unsafe extern "C" fn complete_once(
+            _env: crate::types::napi_env,
+            _status: napi_status,
+            _data: *mut c_void,
+        ) {
+            COMPLETE_COUNT.fetch_add(1, Ordering::SeqCst);
+        }
+
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
+        ctx.with(|ctx| {
+            COMPLETE_COUNT.store(0, Ordering::SeqCst);
+            EXECUTE_STARTED.store(false, Ordering::SeqCst);
+            let raw = ctx.as_raw();
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let napi_env = env.as_napi_env();
+            let driver = crate::driver::ensure_driver(&mut env);
+            let mut work: crate::types::napi_async_work = std::ptr::null_mut();
+            assert_eq!(
+                unsafe {
+                    crate::async_work::napi_create_async_work(
+                        napi_env,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        Some(execute_slow),
+                        Some(complete_once),
+                        std::ptr::null_mut(),
+                        &mut work,
+                    )
+                },
+                napi_status::napi_ok
+            );
+            assert_eq!(
+                unsafe { crate::async_work::napi_queue_async_work(napi_env, work) },
+                napi_status::napi_ok
+            );
+
+            let mut cancelled = false;
+            for _ in 0..1000 {
+                if EXECUTE_STARTED.load(Ordering::SeqCst) {
+                    break;
+                }
+                let status =
+                    unsafe { crate::async_work::napi_cancel_async_work(napi_env, work) };
+                if status == napi_status::napi_ok {
+                    cancelled = true;
+                    break;
+                }
+                thread::yield_now();
+            }
+
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while COMPLETE_COUNT.load(Ordering::SeqCst) == 0 && deadline > std::time::Instant::now()
+            {
+                driver.drain_ready_jobs(&mut env);
+                thread::sleep(Duration::from_millis(1));
+            }
+
+            if cancelled {
+                assert_eq!(COMPLETE_COUNT.load(Ordering::SeqCst), 1);
+                assert_eq!(driver.inflight_async.load(Ordering::SeqCst), 0);
+            }
+
+            assert_eq!(
+                unsafe { crate::async_work::napi_delete_async_work(napi_env, work) },
+                napi_status::napi_ok
+            );
+            env.scopes.close(raw.as_ptr());
+            env.dispose();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn async_complete_dispatch_runs_at_most_once() {
+        use std::os::raw::c_void;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        static COMPLETE_COUNT: AtomicU32 = AtomicU32::new(0);
+
+        unsafe extern "C" fn complete_once(
+            _env: crate::types::napi_env,
+            _status: napi_status,
+            _data: *mut c_void,
+        ) {
+            COMPLETE_COUNT.fetch_add(1, Ordering::SeqCst);
+        }
+
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
+        ctx.with(|ctx| {
+            COMPLETE_COUNT.store(0, Ordering::SeqCst);
+            let raw = ctx.as_raw();
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let napi_env = env.as_napi_env();
+            let driver = crate::driver::ensure_driver(&mut env);
+            let mut work: crate::types::napi_async_work = std::ptr::null_mut();
+            assert_eq!(
+                unsafe {
+                    crate::async_work::napi_create_async_work(
+                        napi_env,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        None,
+                        Some(complete_once),
+                        std::ptr::null_mut(),
+                        &mut work,
+                    )
+                },
+                napi_status::napi_ok
+            );
+            assert_eq!(
+                unsafe { crate::async_work::napi_queue_async_work(napi_env, work) },
+                napi_status::napi_ok
+            );
+            driver.drain_ready_jobs(&mut env);
+            driver.drain_ready_jobs(&mut env);
+            assert_eq!(COMPLETE_COUNT.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                unsafe { crate::async_work::napi_delete_async_work(napi_env, work) },
+                napi_status::napi_ok
+            );
+            env.scopes.close(raw.as_ptr());
+            env.dispose();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn foreign_opaque_is_not_external() {
+        use std::ptr;
+
+        #[repr(C)]
+        struct ForeignOpaque {
+            tag: u32,
+        }
+
+        unsafe extern "C" fn foreign_finalizer(_rt: *mut qjs::JSRuntime, _val: qjs::JSValue) {}
+
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
+        ctx.with(|ctx| {
+            let raw = ctx.as_raw();
+            let rt_ptr = unsafe { qjs::JS_GetRuntime(raw.as_ptr()) };
+            let mut class_id: qjs::JSClassID = 0;
+            unsafe {
+                qjs::JS_NewClassID(rt_ptr, &mut class_id);
+                let def = qjs::JSClassDef {
+                    class_name: c"ForeignTest".as_ptr(),
+                    finalizer: Some(foreign_finalizer),
+                    gc_mark: None,
+                    call: None,
+                    exotic: ptr::null_mut(),
+                };
+                qjs::JS_NewClass(rt_ptr, class_id, &def);
+            }
+            let obj = unsafe { qjs::JS_NewObjectClass(raw.as_ptr(), class_id) };
+            let foreign = Box::new(ForeignOpaque { tag: 0xABCD });
+            unsafe {
+                qjs::JS_SetOpaque(obj, Box::into_raw(foreign) as *mut std::ffi::c_void);
+            }
+            assert!(!crate::external::is_external_object(obj));
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let handle = value_to_napi_owned(&mut env, obj);
+            let mut ty = crate::types::napi_valuetype::napi_undefined;
+            assert_eq!(
+                unsafe { crate::api::napi_typeof(env.as_napi_env(), handle, &mut ty) },
+                napi_status::napi_ok
+            );
+            assert_ne!(ty, crate::types::napi_valuetype::napi_external);
+            env.scopes.close(raw.as_ptr());
+            env.dispose();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn dual_env_holder_survives_first_dispose_remove_wrap() {
+        let _lock = gc_test_lock();
+        crate::gc_hook::reset_for_tests();
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx1 = AsyncContext::full(&rt).await.unwrap();
+        let ctx2 = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx1 = ctx1.clone();
+        let _async_ctx2 = ctx2.clone();
+
+        let rt_key = ctx1
+            .with(|ctx| unsafe { qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) as usize })
+            .await;
+        let rt_ptr = rt_key as *mut qjs::JSRuntime;
+        crate::gc_hook::register_holder_class(rt_ptr);
+
+        ctx1
+            .with(|ctx| {
+                let raw = ctx.as_raw();
+                let mut env = Env::new(raw);
+                env.scopes.open();
+                env.scopes.close(raw.as_ptr());
+                env.dispose();
+            })
+            .await;
+
+        ctx2
+            .with(|ctx| {
+                let raw = ctx.as_raw();
+                let mut env = Env::new(raw);
+                env.scopes.open();
+                let napi_env = env.as_napi_env();
+                let obj = unsafe { qjs::JS_NewObject(raw.as_ptr()) };
+                let handle = crate::value::value_to_napi_borrowed(&mut env, obj);
+                let native1 = 0x11usize as *mut std::ffi::c_void;
+                assert_eq!(
+                    unsafe {
+                        crate::wrap::napi_wrap(
+                            napi_env,
+                            handle,
+                            native1,
+                            None,
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                        )
+                    },
+                    napi_status::napi_ok
+                );
+                let mut out: *mut std::ffi::c_void = std::ptr::null_mut();
+                assert_eq!(
+                    unsafe { crate::wrap::napi_remove_wrap(napi_env, handle, &mut out) },
+                    napi_status::napi_ok
+                );
+                assert_eq!(out, native1);
+                unsafe { qjs::JS_FreeValue(raw.as_ptr(), obj) };
+                env.scopes.close(raw.as_ptr());
+                env.dispose();
+            })
+            .await;
+    }
+
+    fn make_tsfn_js_callback(ctx: *mut qjs::JSContext) -> qjs::JSValue {
+        unsafe {
+            qjs::JS_Eval(
+                ctx,
+                c"(function(){})".as_ptr(),
+                13,
+                c"<tsfn-test>".as_ptr(),
+                qjs::JS_EVAL_TYPE_GLOBAL as i32,
+            )
+        }
+    }
+
+    #[tokio::test]
+    async fn tsfn_abort_from_worker_invokes_call_js_on_js_thread() {
+        use std::os::raw::c_void;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::thread;
+        use std::time::Duration;
+
+        static EXPECTED_JS_PTHREAD: AtomicUsize = AtomicUsize::new(0);
+        static TEARDOWN_PTHREAD: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn tsfn_call_js(
+            env: crate::types::napi_env,
+            _js_callback: crate::types::napi_value,
+            _context: *mut c_void,
+            _data: *mut c_void,
+        ) {
+            if env.is_null() {
+                TEARDOWN_PTHREAD.store(unsafe { libc::pthread_self() as usize }, Ordering::SeqCst);
+            }
+        }
+
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
+        ctx.with(|ctx| {
+            TEARDOWN_PTHREAD.store(0, Ordering::SeqCst);
+            let raw = ctx.as_raw();
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let napi_env = env.as_napi_env();
+            EXPECTED_JS_PTHREAD.store(env.js_pthread as usize, Ordering::SeqCst);
+            let func_val = make_tsfn_js_callback(raw.as_ptr());
+            let func_handle = value_to_napi_owned(&mut env, func_val);
+            let mut tsfn: crate::types::napi_threadsafe_function = std::ptr::null_mut();
+            assert_eq!(
+                unsafe {
+                    crate::async_work::napi_create_threadsafe_function(
+                        napi_env,
+                        func_handle,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        0,
+                        1,
+                        std::ptr::null_mut(),
+                        None,
+                        std::ptr::null_mut(),
+                        Some(tsfn_call_js),
+                        &mut tsfn,
+                    )
+                },
+                napi_status::napi_ok
+            );
+            assert_eq!(
+                unsafe {
+                    crate::async_work::napi_call_threadsafe_function(
+                        tsfn,
+                        0x1234usize as *mut c_void,
+                        crate::types::napi_threadsafe_function_call_mode::napi_tsfn_nonblocking,
+                    )
+                },
+                napi_status::napi_ok
+            );
+
+            let driver = crate::driver::ensure_driver(&mut env);
+            let tsfn_addr = tsfn as usize;
+            let worker = thread::spawn(move || unsafe {
+                crate::async_work::napi_release_threadsafe_function(
+                    tsfn_addr as crate::types::napi_threadsafe_function,
+                    crate::types::napi_threadsafe_function_release_mode::napi_tsfn_abort,
+                )
+            });
+            // Wait for abort to mark the TSFN and post cleanup jobs before draining,
+            // so any already-queued Tsfn delivery job observes `aborted` and tears down.
+            worker.join().unwrap();
+
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while TEARDOWN_PTHREAD.load(Ordering::SeqCst) == 0
+                && deadline > std::time::Instant::now()
+            {
+                driver.drain_ready_jobs(&mut env);
+                thread::sleep(Duration::from_millis(1));
+            }
+
+            assert_eq!(
+                TEARDOWN_PTHREAD.load(Ordering::SeqCst),
+                EXPECTED_JS_PTHREAD.load(Ordering::SeqCst)
+            );
+            env.scopes.close(raw.as_ptr());
+            env.dispose();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn tsfn_admission_rollback_does_not_remove_other_payload() {
+        use std::os::raw::c_void;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        static PAYLOAD_COUNT: AtomicUsize = AtomicUsize::new(0);
+        static LAST_PAYLOAD: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn tsfn_call_js(
+            _env: crate::types::napi_env,
+            _js_callback: crate::types::napi_value,
+            _context: *mut c_void,
+            data: *mut c_void,
+        ) {
+            PAYLOAD_COUNT.fetch_add(1, Ordering::SeqCst);
+            LAST_PAYLOAD.store(data as usize, Ordering::SeqCst);
+        }
+
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
+        ctx.with(|ctx| {
+            PAYLOAD_COUNT.store(0, Ordering::SeqCst);
+            let raw = ctx.as_raw();
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let napi_env = env.as_napi_env();
+            let func_val = make_tsfn_js_callback(raw.as_ptr());
+            let func_handle = value_to_napi_owned(&mut env, func_val);
+            let mut tsfn: crate::types::napi_threadsafe_function = std::ptr::null_mut();
+            assert_eq!(
+                unsafe {
+                    crate::async_work::napi_create_threadsafe_function(
+                        napi_env,
+                        func_handle,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        0,
+                        1,
+                        std::ptr::null_mut(),
+                        None,
+                        std::ptr::null_mut(),
+                        Some(tsfn_call_js),
+                        &mut tsfn,
+                    )
+                },
+                napi_status::napi_ok
+            );
+            let tsfn_arc = crate::async_work::lookup_tsfn_for_test(tsfn).unwrap();
+            let driver = Arc::clone(&tsfn_arc.driver);
+            let barrier = Arc::new(Barrier::new(2));
+
+            let tsfn_fail = tsfn as usize;
+            let driver_fail = Arc::clone(&driver);
+            let barrier_fail = Arc::clone(&barrier);
+            let fail_handle = thread::spawn(move || {
+                barrier_fail.wait();
+                driver_fail.set_fail_posts(true);
+                let status = unsafe {
+                    crate::async_work::napi_call_threadsafe_function(
+                        tsfn_fail as crate::types::napi_threadsafe_function,
+                        0xAAusize as *mut c_void,
+                        crate::types::napi_threadsafe_function_call_mode::napi_tsfn_nonblocking,
+                    )
+                };
+                assert_eq!(status, napi_status::napi_generic_failure);
+                driver_fail.set_fail_posts(false);
+            });
+
+            let tsfn_ok = tsfn as usize;
+            let driver_ok = Arc::clone(&driver);
+            let barrier_ok = Arc::clone(&barrier);
+            let ok_handle = thread::spawn(move || {
+                barrier_ok.wait();
+                driver_ok.set_fail_posts(false);
+                let status = unsafe {
+                    crate::async_work::napi_call_threadsafe_function(
+                        tsfn_ok as crate::types::napi_threadsafe_function,
+                        0xBBusize as *mut c_void,
+                        crate::types::napi_threadsafe_function_call_mode::napi_tsfn_nonblocking,
+                    )
+                };
+                assert_eq!(status, napi_status::napi_ok);
+            });
+
+            fail_handle.join().unwrap();
+            ok_handle.join().unwrap();
+            assert_eq!(tsfn_arc.test_queue_len(), 1);
+
+            let driver = crate::driver::ensure_driver(&mut env);
+            driver.drain_ready_jobs(&mut env);
+            assert_eq!(PAYLOAD_COUNT.load(Ordering::SeqCst), 1);
+            assert_eq!(LAST_PAYLOAD.load(Ordering::SeqCst), 0xBB);
+
+            unsafe {
+                crate::async_work::napi_release_threadsafe_function(
+                    tsfn,
+                    crate::types::napi_threadsafe_function_release_mode::napi_tsfn_release,
+                );
+            }
+            driver.drain_ready_jobs(&mut env);
+            env.scopes.close(raw.as_ptr());
+            env.dispose();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn null_execute_cancel_race_completes_at_most_once() {
+        use std::os::raw::c_void;
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::thread;
+
+        static COMPLETE_COUNT: AtomicU32 = AtomicU32::new(0);
+
+        unsafe extern "C" fn complete_cb(
+            _env: crate::types::napi_env,
+            _status: napi_status,
+            _data: *mut c_void,
+        ) {
+            COMPLETE_COUNT.fetch_add(1, Ordering::SeqCst);
+        }
+
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
+        ctx.with(|ctx| {
+            COMPLETE_COUNT.store(0, Ordering::SeqCst);
+            let raw = ctx.as_raw();
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let napi_env = env.as_napi_env();
+            let driver = crate::driver::ensure_driver(&mut env);
+            let mut work: crate::types::napi_async_work = std::ptr::null_mut();
+            assert_eq!(
+                unsafe {
+                    crate::async_work::napi_create_async_work(
+                        napi_env,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        None,
+                        Some(complete_cb),
+                        std::ptr::null_mut(),
+                        &mut work,
+                    )
+                },
+                napi_status::napi_ok
+            );
+
+            let work_for_cancel = work as usize;
+            let cancel_env = napi_env as usize;
+            let cancel_handle = thread::spawn(move || {
+                for _ in 0..500 {
+                    unsafe {
+                        crate::async_work::napi_cancel_async_work(
+                            cancel_env as crate::types::napi_env,
+                            work_for_cancel as crate::types::napi_async_work,
+                        )
+                    };
+                    thread::yield_now();
+                }
+            });
+            assert_eq!(
+                unsafe { crate::async_work::napi_queue_async_work(napi_env, work) },
+                napi_status::napi_ok
+            );
+            cancel_handle.join().unwrap();
+            driver.drain_ready_jobs(&mut env);
+            driver.drain_ready_jobs(&mut env);
+            assert_eq!(COMPLETE_COUNT.load(Ordering::SeqCst), 1);
+            assert_eq!(driver.inflight_async.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                unsafe { crate::async_work::napi_delete_async_work(napi_env, work) },
+                napi_status::napi_ok
+            );
+            env.scopes.close(raw.as_ptr());
+            env.dispose();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn many_async_works_release_keepalive() {
+        use std::os::raw::c_void;
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::thread;
+        use std::time::Duration;
+
+        static COMPLETE_COUNT: AtomicU32 = AtomicU32::new(0);
+
+        unsafe extern "C" fn execute_fast(
+            _env: crate::types::napi_env,
+            _data: *mut c_void,
+        ) {
+        }
+
+        unsafe extern "C" fn complete_count(
+            _env: crate::types::napi_env,
+            _status: napi_status,
+            _data: *mut c_void,
+        ) {
+            COMPLETE_COUNT.fetch_add(1, Ordering::SeqCst);
+        }
+
+        const WORK_COUNT: u32 = 32;
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
+        ctx.with(|ctx| {
+            COMPLETE_COUNT.store(0, Ordering::SeqCst);
+            let raw = ctx.as_raw();
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let napi_env = env.as_napi_env();
+            let driver = crate::driver::ensure_driver(&mut env);
+            let mut works = Vec::new();
+            for _ in 0..WORK_COUNT {
+                let mut work: crate::types::napi_async_work = std::ptr::null_mut();
+                assert_eq!(
+                    unsafe {
+                        crate::async_work::napi_create_async_work(
+                            napi_env,
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                            Some(execute_fast),
+                            Some(complete_count),
+                            std::ptr::null_mut(),
+                            &mut work,
+                        )
+                    },
+                    napi_status::napi_ok
+                );
+                assert_eq!(
+                    unsafe { crate::async_work::napi_queue_async_work(napi_env, work) },
+                    napi_status::napi_ok
+                );
+                works.push(work);
+            }
+
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while COMPLETE_COUNT.load(Ordering::SeqCst) < WORK_COUNT
+                && deadline > std::time::Instant::now()
+            {
+                driver.drain_ready_jobs(&mut env);
+                thread::sleep(Duration::from_millis(1));
+            }
+            assert_eq!(COMPLETE_COUNT.load(Ordering::SeqCst), WORK_COUNT);
+            assert_eq!(driver.inflight_async.load(Ordering::SeqCst), 0);
+
+            for work in works {
+                assert_eq!(
+                    unsafe { crate::async_work::napi_delete_async_work(napi_env, work) },
+                    napi_status::napi_ok
+                );
+            }
+            env.scopes.close(raw.as_ptr());
+            env.dispose();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn aborted_fallback_drain_uses_teardown() {
+        use std::os::raw::c_void;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static TEARDOWN_COUNT: AtomicUsize = AtomicUsize::new(0);
+        static JS_CALL_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn tsfn_call_js(
+            env: crate::types::napi_env,
+            _js_callback: crate::types::napi_value,
+            _context: *mut c_void,
+            _data: *mut c_void,
+        ) {
+            if env.is_null() {
+                TEARDOWN_COUNT.fetch_add(1, Ordering::SeqCst);
+            } else {
+                JS_CALL_COUNT.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
+        ctx.with(|ctx| {
+            TEARDOWN_COUNT.store(0, Ordering::SeqCst);
+            JS_CALL_COUNT.store(0, Ordering::SeqCst);
+            let raw = ctx.as_raw();
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let napi_env = env.as_napi_env();
+            let func_val = make_tsfn_js_callback(raw.as_ptr());
+            let func_handle = value_to_napi_owned(&mut env, func_val);
+            let mut tsfn: crate::types::napi_threadsafe_function = std::ptr::null_mut();
+            assert_eq!(
+                unsafe {
+                    crate::async_work::napi_create_threadsafe_function(
+                        napi_env,
+                        func_handle,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        0,
+                        1,
+                        std::ptr::null_mut(),
+                        None,
+                        std::ptr::null_mut(),
+                        Some(tsfn_call_js),
+                        &mut tsfn,
+                    )
+                },
+                napi_status::napi_ok
+            );
+            assert_eq!(
+                unsafe {
+                    crate::async_work::napi_call_threadsafe_function(
+                        tsfn,
+                        0x55usize as *mut c_void,
+                        crate::types::napi_threadsafe_function_call_mode::napi_tsfn_nonblocking,
+                    )
+                },
+                napi_status::napi_ok
+            );
+            let tsfn_arc = crate::async_work::lookup_tsfn_for_test(tsfn).unwrap();
+            tsfn_arc.aborted.store(true, Ordering::SeqCst);
+            tsfn_arc.queue_set_closing_for_test();
+
+            crate::async_work::drain_threadsafe_functions(napi_env);
+            assert_eq!(TEARDOWN_COUNT.load(Ordering::SeqCst), 1);
+            assert_eq!(JS_CALL_COUNT.load(Ordering::SeqCst), 0);
+
+            unsafe {
+                crate::async_work::napi_release_threadsafe_function(
+                    tsfn,
+                    crate::types::napi_threadsafe_function_release_mode::napi_tsfn_abort,
+                );
+            }
+            let driver = crate::driver::ensure_driver(&mut env);
+            driver.drain_ready_jobs(&mut env);
+            env.scopes.close(raw.as_ptr());
+            env.dispose();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn multi_ref_abort_then_normal_release_tears_down() {
+        use std::os::raw::c_void;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+        use std::time::Duration;
+
+        static TEARDOWN_COUNT: AtomicUsize = AtomicUsize::new(0);
+        static JS_CALL_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn tsfn_call_js(
+            env: crate::types::napi_env,
+            _js_callback: crate::types::napi_value,
+            _context: *mut c_void,
+            _data: *mut c_void,
+        ) {
+            if env.is_null() {
+                TEARDOWN_COUNT.fetch_add(1, Ordering::SeqCst);
+            } else {
+                JS_CALL_COUNT.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
+        ctx.with(|ctx| {
+            TEARDOWN_COUNT.store(0, Ordering::SeqCst);
+            JS_CALL_COUNT.store(0, Ordering::SeqCst);
+            let raw = ctx.as_raw();
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let napi_env = env.as_napi_env();
+            let func_val = make_tsfn_js_callback(raw.as_ptr());
+            let func_handle = value_to_napi_owned(&mut env, func_val);
+            let mut tsfn: crate::types::napi_threadsafe_function = std::ptr::null_mut();
+            assert_eq!(
+                unsafe {
+                    crate::async_work::napi_create_threadsafe_function(
+                        napi_env,
+                        func_handle,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        0,
+                        2,
+                        std::ptr::null_mut(),
+                        None,
+                        std::ptr::null_mut(),
+                        Some(tsfn_call_js),
+                        &mut tsfn,
+                    )
+                },
+                napi_status::napi_ok
+            );
+            for i in 0..3 {
+                assert_eq!(
+                    unsafe {
+                        crate::async_work::napi_call_threadsafe_function(
+                            tsfn,
+                            (0x100 + i) as *mut c_void,
+                            crate::types::napi_threadsafe_function_call_mode::napi_tsfn_nonblocking,
+                        )
+                    },
+                    napi_status::napi_ok
+                );
+            }
+
+            let barrier = Arc::new(Barrier::new(2));
+            let tsfn_abort = tsfn as usize;
+            let barrier_abort = Arc::clone(&barrier);
+            let abort_handle = thread::spawn(move || {
+                barrier_abort.wait();
+                unsafe {
+                    crate::async_work::napi_release_threadsafe_function(
+                        tsfn_abort as crate::types::napi_threadsafe_function,
+                        crate::types::napi_threadsafe_function_release_mode::napi_tsfn_abort,
+                    )
+                };
+            });
+            let tsfn_normal = tsfn as usize;
+            let barrier_normal = Arc::clone(&barrier);
+            let normal_handle = thread::spawn(move || {
+                barrier_normal.wait();
+                // Slight delay so abort sticky bit is usually set first; sticky aborted
+                // still wins even if this last release posts TsfnRelease first.
+                thread::sleep(Duration::from_millis(1));
+                unsafe {
+                    crate::async_work::napi_release_threadsafe_function(
+                        tsfn_normal as crate::types::napi_threadsafe_function,
+                        crate::types::napi_threadsafe_function_release_mode::napi_tsfn_release,
+                    )
+                };
+            });
+            abort_handle.join().unwrap();
+            normal_handle.join().unwrap();
+
+            let driver = crate::driver::ensure_driver(&mut env);
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while TEARDOWN_COUNT.load(Ordering::SeqCst) < 3
+                && deadline > std::time::Instant::now()
+            {
+                driver.drain_ready_jobs(&mut env);
+                thread::sleep(Duration::from_millis(1));
+            }
+            assert_eq!(TEARDOWN_COUNT.load(Ordering::SeqCst), 3);
+            assert_eq!(JS_CALL_COUNT.load(Ordering::SeqCst), 0);
+            env.scopes.close(raw.as_ptr());
+            env.dispose();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn async_work_rejects_foreign_env() {
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
+        ctx.with(|ctx| {
+            let raw = ctx.as_raw();
+            let mut owner = Env::new(raw);
+            let mut foreign = Env::new(raw);
+            owner.scopes.open();
+            foreign.scopes.open();
+            let owner_env = owner.as_napi_env();
+            let foreign_env = foreign.as_napi_env();
+            let mut work: crate::types::napi_async_work = std::ptr::null_mut();
+            assert_eq!(
+                unsafe {
+                    crate::async_work::napi_create_async_work(
+                        owner_env,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        None,
+                        None,
+                        std::ptr::null_mut(),
+                        &mut work,
+                    )
+                },
+                napi_status::napi_ok
+            );
+            assert_eq!(
+                unsafe { crate::async_work::napi_queue_async_work(foreign_env, work) },
+                napi_status::napi_invalid_arg
+            );
+            assert_eq!(
+                unsafe { crate::async_work::napi_cancel_async_work(foreign_env, work) },
+                napi_status::napi_invalid_arg
+            );
+            assert_eq!(
+                unsafe { crate::async_work::napi_delete_async_work(foreign_env, work) },
+                napi_status::napi_invalid_arg
+            );
+            assert_eq!(
+                unsafe { crate::async_work::napi_delete_async_work(owner_env, work) },
+                napi_status::napi_ok
+            );
+            owner.scopes.close(raw.as_ptr());
+            foreign.scopes.close(raw.as_ptr());
+            owner.dispose();
+            foreign.dispose();
         })
         .await;
     }

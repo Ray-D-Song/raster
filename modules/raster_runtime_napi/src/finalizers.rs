@@ -3,14 +3,11 @@
 
 use std::collections::HashMap;
 use std::os::raw::c_void;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
-use rquickjs::qjs::{self, JSContext, JSValue};
+use rquickjs::qjs::{JSContext, JSValue};
 
-use crate::js_helpers::define_hidden_usize;
+use crate::gc_hook::{self, GcEntryKind};
 use crate::types::{napi_env, napi_finalize};
-
-static NEXT_FINALIZER_ID: AtomicUsize = AtomicUsize::new(1);
 
 pub struct FinalizerEntry {
     pub data: *mut c_void,
@@ -36,9 +33,11 @@ impl FinalizerTable {
         data: *mut c_void,
         finalize: napi_finalize,
         hint: *mut c_void,
+        env: napi_env,
     ) -> bool {
-        let id = NEXT_FINALIZER_ID.fetch_add(1, Ordering::Relaxed);
-        if !unsafe { define_hidden_usize(ctx, obj, c"__napi_finalizer_id".as_ptr(), id) } {
+        let id = gc_hook::register_gc_entry(GcEntryKind::Finalizer, data, finalize, hint, env, None);
+        if !gc_hook::attach_holder(ctx, obj, id) {
+            gc_hook::remove_gc_entry(id);
             return false;
         }
         self.by_id.insert(
@@ -52,11 +51,7 @@ impl FinalizerTable {
         true
     }
 
-    pub fn run_all(&mut self, env: napi_env) {
-        for (_, entry) in self.by_id.drain() {
-            if let Some(f) = entry.finalize {
-                unsafe { f(env, entry.data, entry.hint) };
-            }
-        }
+    pub fn remove_by_id(&mut self, id: usize) -> Option<FinalizerEntry> {
+        self.by_id.remove(&id)
     }
 }

@@ -1,29 +1,115 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::cell::UnsafeCell;
+use std::collections::{HashMap, VecDeque};
 use std::os::raw::c_void;
-use std::ptr;
+use std::sync::{Arc, LazyLock};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 
+use libc::pthread_t;
 use parking_lot::Mutex;
-
 use rquickjs::qjs::{self, JSValue};
 
+use crate::driver::{DriverJob, DriverState, ensure_driver};
 use crate::env::Env;
-use crate::types::*;
+use crate::types::{
+    napi_async_complete_callback, napi_async_execute_callback, napi_async_work, napi_deferred,
+    napi_env, napi_ref, napi_status, napi_threadsafe_function, napi_threadsafe_function_call_js,
+    napi_threadsafe_function_call_mode, napi_threadsafe_function_release_mode,
+};
 
-struct AsyncWork {
-    execute: napi_async_execute_callback,
-    complete: napi_async_complete_callback,
-    data: *mut c_void,
-    env: napi_env,
-    cancelled: bool,
+const TSFN_OPEN: u8 = 0;
+const TSFN_CLOSING: u8 = 1;
+const TSFN_CLOSED: u8 = 2;
+
+const AW_CREATED: u8 = 0;
+const AW_QUEUED: u8 = 1;
+const AW_RUNNING: u8 = 2;
+const AW_CANCELLED: u8 = 3;
+
+pub struct AsyncWorkState {
+    pub env: napi_env,
+    pub execute: napi_async_execute_callback,
+    pub complete: napi_async_complete_callback,
+    pub data: *mut c_void,
+    pub status: AtomicU8,
+    pub completion_posted: AtomicBool,
+}
+
+unsafe impl Send for AsyncWorkState {}
+unsafe impl Sync for AsyncWorkState {}
+
+static ASYNC_WORK_REGISTRY: LazyLock<Mutex<HashMap<usize, Arc<AsyncWorkState>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn async_work_key(work: napi_async_work) -> usize {
+    work as usize
+}
+
+fn lookup_async_work(work: napi_async_work) -> Option<Arc<AsyncWorkState>> {
+    if work.is_null() {
+        return None;
+    }
+    ASYNC_WORK_REGISTRY.lock().get(&async_work_key(work)).cloned()
+}
+
+fn register_async_work(state: Arc<AsyncWorkState>) -> napi_async_work {
+    let key = Arc::as_ptr(&state) as usize;
+    ASYNC_WORK_REGISTRY.lock().insert(key, state);
+    key as napi_async_work
+}
+
+fn unregister_async_work(work: napi_async_work) -> Option<Arc<AsyncWorkState>> {
+    ASYNC_WORK_REGISTRY.lock().remove(&async_work_key(work))
+}
+
+fn post_async_complete(
+    env: &mut Env,
+    driver: &Arc<DriverState>,
+    work: Arc<AsyncWorkState>,
+    status: napi_status,
+) {
+    if !driver.post(env, DriverJob::AsyncComplete { work, status }) {
+        driver.release_async_keepalive();
+    }
+}
+
+fn post_async_complete_job(
+    driver: &Arc<DriverState>,
+    work: Arc<AsyncWorkState>,
+    status: napi_status,
+) -> bool {
+    if driver.post_job(DriverJob::AsyncComplete { work, status }) {
+        return true;
+    }
+    driver.release_async_keepalive();
+    false
+}
+
+fn dispatch_async_completion(
+    env: &mut Env,
+    work: &Arc<AsyncWorkState>,
+    status: napi_status,
+) {
+    if work.completion_posted.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    if let Some(complete) = work.complete {
+        unsafe {
+            complete(work.env, status, work.data);
+        }
+    }
+    if let Some(driver) = env.driver.as_ref() {
+        driver.release_async_keepalive();
+    }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn napi_create_async_work(
     env: napi_env,
-    _async_resource: napi_value,
-    _async_resource_name: napi_value,
+    _async_resource: crate::types::napi_value,
+    _async_resource_name: crate::types::napi_value,
     execute: napi_async_execute_callback,
     complete: napi_async_complete_callback,
     data: *mut c_void,
@@ -32,168 +118,718 @@ pub unsafe extern "C" fn napi_create_async_work(
     if env.is_null() || result.is_null() {
         return napi_status::napi_invalid_arg;
     }
-    let work = Box::new(AsyncWork {
+    let state = Arc::new(AsyncWorkState {
+        env,
         execute,
         complete,
         data,
-        env,
-        cancelled: false,
+        status: AtomicU8::new(AW_CREATED),
+        completion_posted: AtomicBool::new(false),
     });
-    let ptr = Box::into_raw(work);
+    let work = register_async_work(state);
     unsafe {
-        *result = ptr as napi_async_work;
+        *result = work;
     }
     napi_status::napi_ok
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn napi_delete_async_work(
-    _env: napi_env,
+    env: napi_env,
     work: napi_async_work,
 ) -> napi_status {
-    if work.is_null() {
+    if env.is_null() || work.is_null() {
         return napi_status::napi_invalid_arg;
     }
-    unsafe {
-        let _ = Box::from_raw(work as *mut AsyncWork);
+    let Some(state) = lookup_async_work(work) else {
+        return napi_status::napi_invalid_arg;
+    };
+    if state.env != env {
+        return napi_status::napi_invalid_arg;
+    }
+    if unregister_async_work(work).is_none() {
+        return napi_status::napi_invalid_arg;
+    }
+    napi_status::napi_ok
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn napi_queue_async_work(env: napi_env, work: napi_async_work) -> napi_status {
+    if env.is_null() || work.is_null() {
+        return napi_status::napi_invalid_arg;
+    }
+    let Some(work_state) = lookup_async_work(work) else {
+        return napi_status::napi_invalid_arg;
+    };
+    if work_state.env != env {
+        return napi_status::napi_invalid_arg;
+    }
+    if work_state
+        .status
+        .compare_exchange(AW_CREATED, AW_QUEUED, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return napi_status::napi_invalid_arg;
+    }
+    let env_ref = unsafe { Env::from_napi_env(env) };
+    let driver = ensure_driver(env_ref);
+    let execute = work_state.execute;
+    let data_addr = work_state.data as usize;
+    let work_env_addr = work_state.env as usize;
+    let driver_clone = driver.clone();
+    let work_arc = Arc::clone(&work_state);
+
+    driver.acquire_async_keepalive();
+    driver.ensure_loop(env_ref);
+
+    if let Some(exec) = execute {
+        driver.runtime.spawn_blocking(move || {
+            match work_arc.status.compare_exchange(
+                AW_QUEUED,
+                AW_RUNNING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    exec(work_env_addr as napi_env, data_addr as *mut c_void);
+                    let _ = post_async_complete_job(
+                        &driver_clone,
+                        work_arc,
+                        napi_status::napi_ok,
+                    );
+                }
+                Err(AW_CANCELLED) => {
+                    let _ = post_async_complete_job(
+                        &driver_clone,
+                        work_arc,
+                        napi_status::napi_cancelled,
+                    );
+                }
+                Err(_) => {
+                    driver_clone.release_async_keepalive();
+                }
+            }
+        });
+    } else {
+        match work_arc.status.compare_exchange(
+            AW_QUEUED,
+            AW_RUNNING,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => {
+                post_async_complete(env_ref, &driver, work_arc, napi_status::napi_ok);
+            }
+            Err(AW_CANCELLED) => {
+                post_async_complete(env_ref, &driver, work_arc, napi_status::napi_cancelled);
+            }
+            Err(_) => {
+                driver.release_async_keepalive();
+            }
+        }
     }
     napi_status::napi_ok
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn napi_cancel_async_work(
-    _env: napi_env,
+    env: napi_env,
     work: napi_async_work,
 ) -> napi_status {
-    if work.is_null() {
+    if env.is_null() || work.is_null() {
         return napi_status::napi_invalid_arg;
     }
-    let w = unsafe { &mut *(work as *mut AsyncWork) };
-    w.cancelled = true;
-    napi_status::napi_ok
+    let Some(state) = lookup_async_work(work) else {
+        return napi_status::napi_invalid_arg;
+    };
+    if state.env != env {
+        return napi_status::napi_invalid_arg;
+    }
+    loop {
+        match state.status.load(Ordering::Acquire) {
+            AW_CREATED => return napi_status::napi_generic_failure,
+            AW_QUEUED => {
+                if state
+                    .status
+                    .compare_exchange(AW_QUEUED, AW_CANCELLED, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+                {
+                    return napi_status::napi_ok;
+                }
+            }
+            AW_RUNNING => return napi_status::napi_generic_failure,
+            AW_CANCELLED => return napi_status::napi_ok,
+            _ => return napi_status::napi_invalid_arg,
+        }
+    }
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn napi_queue_async_work(_env: napi_env, work: napi_async_work) -> napi_status {
-    if work.is_null() {
-        return napi_status::napi_invalid_arg;
-    }
-    let work_ref = unsafe { &mut *(work as *mut AsyncWork) };
-    let execute = work_ref.execute;
-    let complete = work_ref.complete;
-    let data = work_ref.data;
-    let env = work_ref.env;
-    let cancelled = work_ref.cancelled;
+#[derive(Debug, PartialEq, Eq)]
+enum QueuePushResult {
+    Ok,
+    Full,
+    Closing,
+}
 
-    if !cancelled {
-        if let Some(exec) = execute {
-            let env_ptr = env as usize;
-            let data_ptr = data as usize;
-            let _ = std::thread::spawn(move || {
-                exec(env_ptr as napi_env, data_ptr as *mut c_void);
-            })
-            .join();
+#[derive(Debug, PartialEq, Eq)]
+enum QueueAdmissionResult {
+    Ok,
+    Full,
+    Closing,
+    PostFailed,
+}
+
+impl From<QueuePushResult> for QueueAdmissionResult {
+    fn from(value: QueuePushResult) -> Self {
+        match value {
+            QueuePushResult::Ok => QueueAdmissionResult::Ok,
+            QueuePushResult::Full => QueueAdmissionResult::Full,
+            QueuePushResult::Closing => QueueAdmissionResult::Closing,
+        }
+    }
+}
+
+/// TSFN payload queue: `pthread_mutex` + `pthread_cond` for Node-API queue semantics.
+struct TsfnQueue {
+    mutex: UnsafeCell<libc::pthread_mutex_t>,
+    cond: UnsafeCell<libc::pthread_cond_t>,
+    items: UnsafeCell<VecDeque<usize>>,
+    /// `0` means unlimited queue size.
+    max_size: usize,
+    closed: UnsafeCell<bool>,
+}
+
+unsafe impl Send for TsfnQueue {}
+unsafe impl Sync for TsfnQueue {}
+
+impl TsfnQueue {
+    fn new(max_queue_size: usize) -> Self {
+        let mutex = UnsafeCell::new(unsafe { std::mem::zeroed() });
+        let cond = UnsafeCell::new(unsafe { std::mem::zeroed() });
+        unsafe {
+            libc::pthread_mutex_init(mutex.get(), std::ptr::null());
+            libc::pthread_cond_init(cond.get(), std::ptr::null());
+        }
+        let initial_cap = if max_queue_size == 0 {
+            64
+        } else {
+            max_queue_size
+        };
+        Self {
+            mutex,
+            cond,
+            items: UnsafeCell::new(VecDeque::with_capacity(initial_cap)),
+            max_size: max_queue_size,
+            closed: UnsafeCell::new(false),
         }
     }
 
-    if let Some(comp) = complete {
-        let status = if cancelled {
-            napi_status::napi_cancelled
-        } else {
-            napi_status::napi_ok
-        };
-        comp(env, status, data);
+    unsafe fn lock(&self) -> QueueGuard<'_> {
+        unsafe {
+            libc::pthread_mutex_lock(self.mutex.get());
+        }
+        QueueGuard { queue: self }
     }
 
-    napi_status::napi_ok
+    fn set_closing(&self) {
+        let mut guard = unsafe { self.lock() };
+        guard.set_closing_locked();
+    }
+
+    fn pop_front(&self) -> Option<usize> {
+        let mut guard = unsafe { self.lock() };
+        guard.pop_front_locked()
+    }
+
+    fn drain_all(&self) -> Vec<usize> {
+        let mut guard = unsafe { self.lock() };
+        guard.drain_all_locked()
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        let _guard = unsafe { self.lock() };
+        unsafe { (*self.items.get()).len() }
+    }
+
+    fn admit_and_post(
+        &self,
+        driver: &Arc<DriverState>,
+        tsfn: Arc<ThreadsafeFunction>,
+        item: usize,
+        blocking: bool,
+    ) -> QueueAdmissionResult {
+        let mut guard = unsafe { self.lock() };
+        let push_result = if blocking {
+            guard.push_blocking_locked(item)
+        } else {
+            guard.try_push_locked(item)
+        };
+        if push_result != QueuePushResult::Ok {
+            return push_result.into();
+        }
+        if !driver.post_job(DriverJob::Tsfn {
+            tsfn,
+            done: None,
+        }) {
+            guard.pop_back_locked();
+            return QueueAdmissionResult::PostFailed;
+        }
+        QueueAdmissionResult::Ok
+    }
 }
 
-// Thread-safe functions
-
-struct ThreadsafeFunction {
-    env: napi_env,
-    func_ref: napi_ref,
-    call_js: napi_threadsafe_function_call_js,
-    context: *mut c_void,
-    queue: Mutex<Vec<*mut c_void>>,
-    refs: u32,
+struct QueueGuard<'a> {
+    queue: &'a TsfnQueue,
 }
 
-struct TsfnPtr(*mut ThreadsafeFunction);
-unsafe impl Send for TsfnPtr {}
-unsafe impl Sync for TsfnPtr {}
+impl<'a> QueueGuard<'a> {
+    fn try_push_locked(&mut self, item: usize) -> QueuePushResult {
+        if unsafe { *self.queue.closed.get() } {
+            return QueuePushResult::Closing;
+        }
+        let items = unsafe { &mut *self.queue.items.get() };
+        if self.queue.max_size > 0 && items.len() >= self.queue.max_size {
+            return QueuePushResult::Full;
+        }
+        items.push_back(item);
+        unsafe {
+            libc::pthread_cond_signal(self.queue.cond.get());
+        }
+        QueuePushResult::Ok
+    }
 
-static TSFN_LIST: Mutex<Vec<TsfnPtr>> = Mutex::new(Vec::new());
+    fn push_blocking_locked(&mut self, item: usize) -> QueuePushResult {
+        loop {
+            if unsafe { *self.queue.closed.get() } {
+                return QueuePushResult::Closing;
+            }
+            let items = unsafe { &mut *self.queue.items.get() };
+            if self.queue.max_size == 0 || items.len() < self.queue.max_size {
+                items.push_back(item);
+                unsafe {
+                    libc::pthread_cond_signal(self.queue.cond.get());
+                }
+                return QueuePushResult::Ok;
+            }
+            unsafe {
+                libc::pthread_cond_wait(self.queue.cond.get(), self.queue.mutex.get());
+            }
+        }
+    }
+
+    fn set_closing_locked(&mut self) {
+        unsafe {
+            *self.queue.closed.get() = true;
+            libc::pthread_cond_broadcast(self.queue.cond.get());
+        }
+    }
+
+    fn pop_front_locked(&mut self) -> Option<usize> {
+        let item = unsafe { (*self.queue.items.get()).pop_front() };
+        if item.is_some() {
+            unsafe {
+                libc::pthread_cond_signal(self.queue.cond.get());
+            }
+        }
+        item
+    }
+
+    fn pop_back_locked(&mut self) -> Option<usize> {
+        let item = unsafe { (*self.queue.items.get()).pop_back() };
+        if item.is_some() {
+            unsafe {
+                libc::pthread_cond_signal(self.queue.cond.get());
+            }
+        }
+        item
+    }
+
+    fn drain_all_locked(&mut self) -> Vec<usize> {
+        let drained: Vec<usize> = unsafe {
+            let items = &mut *self.queue.items.get();
+            items.drain(..).collect()
+        };
+        if !drained.is_empty() {
+            unsafe {
+                libc::pthread_cond_broadcast(self.queue.cond.get());
+            }
+        }
+        drained
+    }
+}
+
+impl Drop for QueueGuard<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            libc::pthread_mutex_unlock(self.queue.mutex.get());
+        }
+    }
+}
+
+impl Drop for TsfnQueue {
+    fn drop(&mut self) {
+        unsafe {
+            libc::pthread_mutex_destroy(self.mutex.get());
+            libc::pthread_cond_destroy(self.cond.get());
+        }
+    }
+}
+
+pub struct ThreadsafeFunction {
+    pub handle: usize,
+    pub env: napi_env,
+    pub js_pthread: pthread_t,
+    pub driver: Arc<DriverState>,
+    pub call_js: napi_threadsafe_function_call_js,
+    pub context: *mut c_void,
+    pub func_ref: napi_ref,
+    queue: TsfnQueue,
+    pub refs: AtomicUsize,
+    pub idle_refs: AtomicUsize,
+    pub state: AtomicU8,
+    pub thread_finalize_cb: crate::types::napi_finalize,
+    pub thread_finalize_data: *mut c_void,
+    pub finalize_called: AtomicBool,
+    pub finish_started: AtomicBool,
+    /// When true, queued payloads must be torn down (NULL env/callback), never delivered to JS.
+    pub aborted: AtomicBool,
+}
+
+#[cfg(test)]
+impl ThreadsafeFunction {
+    pub(crate) fn test_queue_len(&self) -> usize {
+        self.queue.len()
+    }
+
+    pub(crate) fn queue_set_closing_for_test(&self) {
+        self.queue.set_closing();
+    }
+}
+
+unsafe impl Send for ThreadsafeFunction {}
+unsafe impl Sync for ThreadsafeFunction {}
+
+static TSFN_REGISTRY: LazyLock<Mutex<HashMap<usize, Arc<ThreadsafeFunction>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+static TSFN_NEXT_HANDLE: AtomicUsize = AtomicUsize::new(1);
 
 pub(crate) fn has_pending_tsfn() -> bool {
-    !TSFN_LIST.lock().is_empty()
+    !TSFN_REGISTRY.lock().is_empty()
+}
+
+fn tsfn_snapshot_all() -> Vec<Arc<ThreadsafeFunction>> {
+    TSFN_REGISTRY.lock().values().cloned().collect()
+}
+
+fn lookup_tsfn(handle: napi_threadsafe_function) -> Option<Arc<ThreadsafeFunction>> {
+    if handle.is_null() {
+        return None;
+    }
+    TSFN_REGISTRY.lock().get(&(handle as usize)).cloned()
+}
+
+#[cfg(test)]
+pub(crate) fn lookup_tsfn_for_test(
+    handle: napi_threadsafe_function,
+) -> Option<Arc<ThreadsafeFunction>> {
+    lookup_tsfn(handle)
+}
+
+fn register_tsfn(tsfn: Arc<ThreadsafeFunction>) -> napi_threadsafe_function {
+    let handle = tsfn.handle;
+    TSFN_REGISTRY.lock().insert(handle, tsfn);
+    handle as napi_threadsafe_function
+}
+
+fn unregister_tsfn(handle: napi_threadsafe_function) {
+    TSFN_REGISTRY.lock().remove(&(handle as usize));
 }
 
 pub(crate) fn drain_threadsafe_functions(env: napi_env) {
-    let list: Vec<*mut ThreadsafeFunction> =
-        TSFN_LIST.lock().iter().map(|TsfnPtr(p)| *p).collect();
-    for ptr in list {
-        let tsfn = unsafe { &mut *ptr };
+    let list = tsfn_snapshot_all();
+    for tsfn in &list {
         if tsfn.env != env {
             continue;
         }
-        let pending: Vec<*mut c_void> = tsfn.queue.lock().drain(..).collect();
+        let pending: Vec<*mut c_void> = tsfn
+            .queue
+            .drain_all()
+            .into_iter()
+            .map(|v| v as *mut c_void)
+            .collect();
         for data in pending {
-            invoke_tsfn_call(tsfn, data);
+            consume_tsfn_payload(tsfn, data);
+        }
+    }
+}
+
+pub(crate) fn close_all_tsfn_for_env(env: napi_env) {
+    let targets: Vec<Arc<ThreadsafeFunction>> = TSFN_REGISTRY
+        .lock()
+        .values()
+        .filter(|tsfn| tsfn.env == env)
+        .cloned()
+        .collect();
+    for tsfn in targets {
+        force_close_tsfn(&tsfn);
+        unregister_tsfn(tsfn.handle as napi_threadsafe_function);
+    }
+}
+
+pub(crate) fn shutdown_all_tsfn() {
+    let list = tsfn_snapshot_all();
+    for tsfn in list {
+        force_close_tsfn(&tsfn);
+        unregister_tsfn(tsfn.handle as napi_threadsafe_function);
+    }
+    TSFN_REGISTRY.lock().clear();
+}
+
+fn tsfn_is_open(tsfn: &ThreadsafeFunction) -> bool {
+    tsfn.state.load(Ordering::Acquire) == TSFN_OPEN
+}
+
+fn tsfn_begin_closing(tsfn: &ThreadsafeFunction) -> bool {
+    tsfn.state
+        .compare_exchange(TSFN_OPEN, TSFN_CLOSING, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+}
+
+fn tsfn_mark_closed(tsfn: &ThreadsafeFunction) {
+    tsfn.state.store(TSFN_CLOSED, Ordering::Release);
+}
+
+fn force_close_tsfn(tsfn: &ThreadsafeFunction) {
+    if tsfn.state.load(Ordering::Acquire) == TSFN_CLOSED {
+        return;
+    }
+    let _ = tsfn_begin_closing(tsfn);
+    tsfn.aborted.store(true, Ordering::Release);
+    tsfn.queue.set_closing();
+    finish_tsfn_release(tsfn);
+    tsfn_mark_closed(tsfn);
+}
+
+pub(crate) unsafe fn process_driver_job(env_ptr: *mut Env, job: DriverJob) {
+    let env = &mut *env_ptr;
+    match job {
+        DriverJob::AsyncComplete { work, status } => {
+            dispatch_async_completion(env, &work, status);
+        }
+        DriverJob::Tsfn { tsfn, done } => {
+            let data = tsfn.queue.pop_front();
+            if let Some(data) = data {
+                consume_tsfn_payload(&tsfn, data as *mut c_void);
+            }
+            if let Some(done) = done {
+                let _ = done.send(());
+            }
+        }
+        DriverJob::TsfnAbort { tsfn } => {
+            abort_pending_payloads(&tsfn);
+        }
+        DriverJob::TsfnRelease { tsfn } => {
+            finish_tsfn_release(&tsfn);
+            unregister_tsfn(tsfn.handle as napi_threadsafe_function);
+        }
+        DriverJob::Wake => {}
+    }
+}
+
+fn invoke_thread_finalize(tsfn: &ThreadsafeFunction) {
+    if tsfn
+        .finalize_called
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+    if let Some(cb) = tsfn.thread_finalize_cb {
+        unsafe {
+            cb(
+                tsfn.env,
+                tsfn.thread_finalize_data,
+                tsfn.context,
+            );
+        }
+    }
+}
+
+fn finish_tsfn_release(tsfn: &ThreadsafeFunction) {
+    if tsfn
+        .finish_started
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+    tsfn.queue.set_closing();
+    for data in tsfn.queue.drain_all() {
+        consume_tsfn_payload(tsfn, data as *mut c_void);
+    }
+    if !tsfn.func_ref.is_null() {
+        unsafe {
+            crate::refs::napi_delete_reference(tsfn.env, tsfn.func_ref);
+        }
+    }
+    invoke_thread_finalize(tsfn);
+    if tsfn
+        .idle_refs
+        .compare_exchange(1, 0, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        tsfn
+            .driver
+            .idle_refs
+            .fetch_sub(1, Ordering::SeqCst);
+    }
+    tsfn.driver.wake_if_quiescent();
+    tsfn_mark_closed(tsfn);
+}
+
+fn abort_pending_payloads(tsfn: &ThreadsafeFunction) {
+    for data in tsfn.queue.drain_all() {
+        consume_tsfn_payload(tsfn, data as *mut c_void);
+    }
+}
+
+fn consume_tsfn_payload(tsfn: &ThreadsafeFunction, data: *mut c_void) {
+    if tsfn.aborted.load(Ordering::Acquire) {
+        invoke_tsfn_teardown(tsfn, data);
+    } else {
+        invoke_tsfn_call(tsfn, data);
+    }
+}
+
+fn invoke_tsfn_teardown(tsfn: &ThreadsafeFunction, data: *mut c_void) {
+    if let Some(call_js) = tsfn.call_js {
+        unsafe {
+            call_js(
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                tsfn.context,
+                data,
+            );
         }
     }
 }
 
 fn invoke_tsfn_call(tsfn: &ThreadsafeFunction, data: *mut c_void) {
-    let Some(call_js) = tsfn.call_js else {
-        return;
-    };
-    let mut func_val: napi_value = ptr::null_mut();
-    let status = unsafe {
-        crate::refs::napi_get_reference_value(tsfn.env, tsfn.func_ref, &mut func_val)
-    };
-    if status != napi_status::napi_ok || func_val.is_null() {
+    let _ = data;
+    if let Some(call_js) = tsfn.call_js {
+        let mut func_val = std::ptr::null_mut();
+        if unsafe {
+            crate::refs::napi_get_reference_value(tsfn.env, tsfn.func_ref, &mut func_val)
+        } != napi_status::napi_ok
+        {
+            return;
+        }
+        unsafe {
+            call_js(tsfn.env, func_val, tsfn.context, data);
+        }
         return;
     }
+    if tsfn.func_ref.is_null() {
+        return;
+    }
+    let mut func_val = std::ptr::null_mut();
+    if unsafe {
+        crate::refs::napi_get_reference_value(tsfn.env, tsfn.func_ref, &mut func_val)
+    } != napi_status::napi_ok
+    {
+        return;
+    }
+    let env_ref = unsafe { Env::from_napi_env(tsfn.env) };
+    let ctx = env_ref.ctx_ptr();
+    let func_js = match unsafe { crate::value::napi_to_value_dup(env_ref, func_val) } {
+        Some(v) => v,
+        None => return,
+    };
     unsafe {
-        call_js(tsfn.env, func_val, tsfn.context, data);
+        let _ = qjs::JS_Call(ctx, func_js, qjs::JS_UNDEFINED, 0, std::ptr::null_mut());
+        qjs::JS_FreeValue(ctx, func_js);
+    }
+}
+
+fn schedule_last_release(tsfn: Arc<ThreadsafeFunction>, on_js_thread: bool) {
+    if on_js_thread {
+        finish_tsfn_release(&tsfn);
+        unregister_tsfn(tsfn.handle as napi_threadsafe_function);
+    } else {
+        let _ = tsfn.driver.post_job(DriverJob::TsfnRelease {
+            tsfn: Arc::clone(&tsfn),
+        });
+    }
+}
+
+fn schedule_tsfn_abort_cleanup(tsfn: &Arc<ThreadsafeFunction>, on_js_thread: bool) {
+    if on_js_thread {
+        abort_pending_payloads(tsfn);
+    } else {
+        let _ = tsfn.driver.post_job(DriverJob::TsfnAbort {
+            tsfn: Arc::clone(tsfn),
+        });
     }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn napi_create_threadsafe_function(
     env: napi_env,
-    func: napi_value,
-    _async_resource: napi_value,
-    _async_resource_name: napi_value,
-    _max_queue_size: usize,
+    func: crate::types::napi_value,
+    async_resource: crate::types::napi_value,
+    async_resource_name: crate::types::napi_value,
+    max_queue_size: usize,
     initial_thread_count: usize,
-    _thread_finalize_data: *mut c_void,
-    _thread_finalize_cb: napi_finalize,
+    thread_finalize_data: *mut c_void,
+    thread_finalize_cb: crate::types::napi_finalize,
     context: *mut c_void,
     call_js_cb: napi_threadsafe_function_call_js,
     result: *mut napi_threadsafe_function,
 ) -> napi_status {
-    if env.is_null() || func.is_null() || result.is_null() {
+    if env.is_null() || result.is_null() {
         return napi_status::napi_invalid_arg;
     }
-    let mut func_ref: napi_ref = ptr::null_mut();
-    let status = unsafe { crate::refs::napi_create_reference(env, func, 1, &mut func_ref) };
-    if status != napi_status::napi_ok {
-        return status;
+    if initial_thread_count == 0 {
+        return napi_status::napi_invalid_arg;
     }
-    let tsfn = Box::new(ThreadsafeFunction {
+    if func.is_null() && call_js_cb.is_none() {
+        return napi_status::napi_invalid_arg;
+    }
+    let env_ref = unsafe { Env::from_napi_env(env) };
+    let driver = ensure_driver(env_ref);
+    let mut func_ref = std::ptr::null_mut();
+    if !func.is_null()
+        && unsafe { crate::refs::napi_create_reference(env, func, 1, &mut func_ref) }
+            != napi_status::napi_ok
+    {
+        return napi_status::napi_generic_failure;
+    }
+    let _ = (async_resource, async_resource_name);
+    let handle = TSFN_NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
+    let tsfn = Arc::new(ThreadsafeFunction {
+        handle,
         env,
-        func_ref,
+        js_pthread: env_ref.js_pthread,
+        driver: driver.clone(),
         call_js: call_js_cb,
         context,
-        queue: Mutex::new(Vec::new()),
-        refs: initial_thread_count.max(1) as u32,
+        func_ref,
+        queue: TsfnQueue::new(max_queue_size),
+        refs: AtomicUsize::new(initial_thread_count),
+        idle_refs: AtomicUsize::new(1),
+        state: AtomicU8::new(TSFN_OPEN),
+        thread_finalize_cb,
+        thread_finalize_data,
+        finalize_called: AtomicBool::new(false),
+        finish_started: AtomicBool::new(false),
+        aborted: AtomicBool::new(false),
     });
-    let ptr = Box::into_raw(tsfn);
-    TSFN_LIST.lock().push(TsfnPtr(ptr));
+    driver.idle_refs.fetch_add(1, Ordering::SeqCst);
+    driver.ensure_loop(env_ref);
+    let handle_out = register_tsfn(tsfn);
     unsafe {
-        *result = ptr as napi_threadsafe_function;
+        *result = handle_out;
     }
     napi_status::napi_ok
 }
@@ -207,12 +843,31 @@ pub unsafe extern "C" fn napi_call_threadsafe_function(
     if func.is_null() {
         return napi_status::napi_invalid_arg;
     }
-    let tsfn = unsafe { &mut *(func as *mut ThreadsafeFunction) };
-    if mode == napi_threadsafe_function_call_mode::napi_tsfn_blocking {
-        invoke_tsfn_call(tsfn, data);
+    let Some(tsfn) = lookup_tsfn(func) else {
+        return napi_status::napi_invalid_arg;
+    };
+    if !tsfn_is_open(&tsfn) {
+        return napi_status::napi_closing;
+    }
+
+    let admission = if mode == napi_threadsafe_function_call_mode::napi_tsfn_blocking {
+        tsfn.queue.admit_and_post(&tsfn.driver, tsfn.clone(), data as usize, true)
     } else {
-        tsfn.queue.lock().push(data);
-        drain_threadsafe_functions(tsfn.env);
+        tsfn.queue.admit_and_post(&tsfn.driver, tsfn.clone(), data as usize, false)
+    };
+    let status = match admission {
+        QueueAdmissionResult::Ok => napi_status::napi_ok,
+        QueueAdmissionResult::Full => napi_status::napi_queue_full,
+        QueueAdmissionResult::Closing => napi_status::napi_closing,
+        QueueAdmissionResult::PostFailed => napi_status::napi_generic_failure,
+    };
+    if status != napi_status::napi_ok {
+        return status;
+    }
+
+    if unsafe { libc::pthread_equal(libc::pthread_self(), tsfn.js_pthread) != 0 } {
+        let env_ref = unsafe { Env::from_napi_env(tsfn.env) };
+        tsfn.driver.ensure_loop(env_ref);
     }
     napi_status::napi_ok
 }
@@ -224,8 +879,13 @@ pub unsafe extern "C" fn napi_acquire_threadsafe_function(
     if func.is_null() {
         return napi_status::napi_invalid_arg;
     }
-    let tsfn = unsafe { &mut *(func as *mut ThreadsafeFunction) };
-    tsfn.refs = tsfn.refs.saturating_add(1);
+    let Some(tsfn) = lookup_tsfn(func) else {
+        return napi_status::napi_invalid_arg;
+    };
+    if !tsfn_is_open(&tsfn) {
+        return napi_status::napi_closing;
+    }
+    tsfn.refs.fetch_add(1, Ordering::Relaxed);
     napi_status::napi_ok
 }
 
@@ -237,36 +897,99 @@ pub unsafe extern "C" fn napi_release_threadsafe_function(
     if func.is_null() {
         return napi_status::napi_invalid_arg;
     }
-    let tsfn = unsafe { &mut *(func as *mut ThreadsafeFunction) };
-    if mode == napi_threadsafe_function_release_mode::napi_tsfn_abort {
-        tsfn.queue.lock().clear();
+    let Some(tsfn) = lookup_tsfn(func) else {
+        return napi_status::napi_invalid_arg;
+    };
+    let on_js_thread =
+        unsafe { libc::pthread_equal(libc::pthread_self(), tsfn.js_pthread) != 0 };
+
+    let abort_mode = mode == napi_threadsafe_function_release_mode::napi_tsfn_abort;
+    if abort_mode {
+        tsfn.aborted.store(true, Ordering::Release);
+        let _ = tsfn_begin_closing(&tsfn);
+        tsfn.queue.set_closing();
+        schedule_tsfn_abort_cleanup(&tsfn, on_js_thread);
     }
-    if tsfn.refs > 0 {
-        tsfn.refs -= 1;
-    }
-    if tsfn.refs == 0 {
-        TSFN_LIST.lock().retain(|TsfnPtr(p)| *p != func as *mut ThreadsafeFunction);
-        unsafe {
-            crate::refs::napi_delete_reference(tsfn.env, tsfn.func_ref);
-            let _ = Box::from_raw(func as *mut ThreadsafeFunction);
+
+    let prev = tsfn.refs.fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| {
+        if v == 0 {
+            None
+        } else {
+            Some(v - 1)
         }
+    });
+    match prev {
+        Err(0) => napi_status::napi_invalid_arg,
+        Ok(1) => {
+            let _ = tsfn_begin_closing(&tsfn);
+            tsfn.queue.set_closing();
+            schedule_last_release(tsfn, on_js_thread);
+            napi_status::napi_ok
+        }
+        Ok(_) => napi_status::napi_ok,
+        Err(_) => napi_status::napi_invalid_arg,
     }
-    napi_status::napi_ok
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn napi_unref_threadsafe_function(
-    _env: napi_env,
-    _func: napi_threadsafe_function,
+    env: napi_env,
+    func: napi_threadsafe_function,
 ) -> napi_status {
+    if env.is_null() || func.is_null() {
+        return napi_status::napi_invalid_arg;
+    }
+    let Some(tsfn) = lookup_tsfn(func) else {
+        return napi_status::napi_invalid_arg;
+    };
+    if unsafe { libc::pthread_equal(libc::pthread_self(), tsfn.js_pthread) == 0 } {
+        return napi_status::napi_generic_failure;
+    }
+    let env_ref = unsafe { Env::from_napi_env(env) };
+    if env_ref.as_napi_env() != tsfn.env {
+        return napi_status::napi_invalid_arg;
+    }
+    if tsfn
+        .idle_refs
+        .compare_exchange(1, 0, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        tsfn
+            .driver
+            .idle_refs
+            .fetch_sub(1, Ordering::SeqCst);
+        tsfn.driver.wake_if_quiescent();
+    }
     napi_status::napi_ok
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn napi_ref_threadsafe_function(
-    _env: napi_env,
-    _func: napi_threadsafe_function,
+    env: napi_env,
+    func: napi_threadsafe_function,
 ) -> napi_status {
+    if env.is_null() || func.is_null() {
+        return napi_status::napi_invalid_arg;
+    }
+    let Some(tsfn) = lookup_tsfn(func) else {
+        return napi_status::napi_invalid_arg;
+    };
+    if unsafe { libc::pthread_equal(libc::pthread_self(), tsfn.js_pthread) == 0 } {
+        return napi_status::napi_generic_failure;
+    }
+    let env_ref = unsafe { Env::from_napi_env(env) };
+    if env_ref.as_napi_env() != tsfn.env {
+        return napi_status::napi_invalid_arg;
+    }
+    if tsfn
+        .idle_refs
+        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        tsfn.driver.idle_refs.fetch_add(1, Ordering::SeqCst);
+        let env_ref = unsafe { Env::from_napi_env(env) };
+        tsfn.driver.ensure_loop(env_ref);
+    }
     napi_status::napi_ok
 }
 
@@ -278,7 +1001,9 @@ pub unsafe extern "C" fn napi_get_threadsafe_function_context(
     if func.is_null() || result.is_null() {
         return napi_status::napi_invalid_arg;
     }
-    let tsfn = unsafe { &*(func as *const ThreadsafeFunction) };
+    let Some(tsfn) = lookup_tsfn(func) else {
+        return napi_status::napi_invalid_arg;
+    };
     unsafe {
         *result = tsfn.context;
     }
@@ -296,7 +1021,7 @@ struct NapiDeferred {
 pub unsafe extern "C" fn napi_create_promise(
     env: napi_env,
     deferred: *mut napi_deferred,
-    promise: *mut napi_value,
+    promise: *mut crate::types::napi_value,
 ) -> napi_status {
     if env.is_null() || deferred.is_null() || promise.is_null() {
         return napi_status::napi_invalid_arg;
@@ -304,7 +1029,11 @@ pub unsafe extern "C" fn napi_create_promise(
     with_env_promise(env, deferred, promise)
 }
 
-fn with_env_promise(env: napi_env, deferred: *mut napi_deferred, promise: *mut napi_value) -> napi_status {
+fn with_env_promise(
+    env: napi_env,
+    deferred: *mut napi_deferred,
+    promise: *mut crate::types::napi_value,
+) -> napi_status {
     let e = unsafe { Env::from_napi_env(env) };
     let ctx = e.ctx_ptr();
     let mut resolving: [JSValue; 2] = [qjs::JS_UNDEFINED, qjs::JS_UNDEFINED];
@@ -327,7 +1056,7 @@ fn with_env_promise(env: napi_env, deferred: *mut napi_deferred, promise: *mut n
 pub unsafe extern "C" fn napi_resolve_deferred(
     env: napi_env,
     deferred: napi_deferred,
-    resolution: napi_value,
+    resolution: crate::types::napi_value,
 ) -> napi_status {
     if env.is_null() || deferred.is_null() {
         return napi_status::napi_invalid_arg;
@@ -373,7 +1102,7 @@ pub unsafe extern "C" fn napi_resolve_deferred(
 pub unsafe extern "C" fn napi_reject_deferred(
     env: napi_env,
     deferred: napi_deferred,
-    rejection: napi_value,
+    rejection: crate::types::napi_value,
 ) -> napi_status {
     if env.is_null() || deferred.is_null() {
         return napi_status::napi_invalid_arg;

@@ -9,13 +9,13 @@ use std::ptr::NonNull;
 use std::sync::OnceLock;
 
 use rquickjs::function::{MutFn, Rest, This};
-use rquickjs::qjs::{self, JSContext, JSValue};
+use rquickjs::qjs::{self, JSValue};
 use rquickjs::{Ctx, Function, Result as JsResult, Value};
 
 use crate::env::Env;
 use crate::types::*;
 use crate::js_helpers::{napi_to_js_typedarray_type, new_float64, new_int32, new_int64, new_uint32, to_uint32, try_buffer_from};
-use crate::value::{bytes_from_js, cstr_from_js, string_from_bytes, string_from_cstr, value_to_napi_borrowed, value_to_napi_owned, value_to_napi_owned_in_parent};
+use crate::value::{bytes_from_js, cstr_from_js, napi_value_for_slot, string_from_bytes, string_from_cstr, value_to_napi_borrowed, value_to_napi_owned};
 use crate::external::{create_external_object, get_external_pointer, is_external_object};
 
 thread_local! {
@@ -29,10 +29,37 @@ where
     F: FnOnce(&mut Env) -> R,
 {
     let env_ref = unsafe { Env::from_napi_env(env) };
-    if crate::async_work::has_pending_tsfn() {
-        crate::async_work::drain_threadsafe_functions(env);
+    drain_driver_jobs(env_ref);
+    if crate::gc_hook::has_pending_finalizers() {
+        crate::gc_hook::drain_pending_finalizers(env_ref);
     }
-    f(env_ref)
+    let result = f(env_ref);
+    drain_driver_jobs(env_ref);
+    if crate::gc_hook::has_pending_finalizers() {
+        crate::gc_hook::drain_pending_finalizers(env_ref);
+    }
+    result
+}
+
+fn drain_driver_jobs(env: &mut Env) {
+    if let Some(driver) = env.driver.clone() {
+        if driver.should_ensure_loop() {
+            driver.ensure_loop(env);
+        }
+        driver.drain_ready_jobs(env);
+    }
+    if crate::async_work::has_pending_tsfn() {
+        crate::async_work::drain_threadsafe_functions(env.as_napi_env());
+    }
+}
+
+/// Called from the event loop (e.g. timer poll) while the runtime lock is held.
+pub fn poll_pending_drivers(rt: *mut rquickjs::qjs::JSRuntime) {
+    let env_ptrs: Vec<*mut Env> = crate::dlopen::env_ptrs_for_runtime(rt);
+    for ptr in env_ptrs {
+        let env = unsafe { &mut *ptr };
+        drain_driver_jobs(env);
+    }
 }
 
 // --- Module registration ---
@@ -131,7 +158,9 @@ pub unsafe extern "C" fn napi_close_handle_scope(
             return napi_status::napi_handle_scope_mismatch;
         }
         let ctx = e.ctx_ptr();
-        e.scopes.close(ctx);
+        if !e.scopes.close_handle(ctx) {
+            return napi_status::napi_handle_scope_mismatch;
+        }
         let _ = scope;
         napi_status::napi_ok
     })
@@ -167,7 +196,9 @@ pub unsafe extern "C" fn napi_close_escapable_handle_scope(
             return napi_status::napi_handle_scope_mismatch;
         }
         let ctx = e.ctx_ptr();
-        e.scopes.close_escapable(ctx);
+        if !e.scopes.close_escapable(ctx) {
+            return napi_status::napi_handle_scope_mismatch;
+        }
         let _ = scope;
         napi_status::napi_ok
     })
@@ -187,23 +218,27 @@ pub unsafe extern "C" fn napi_escape_handle(
         if e.scopes.escapable_depth() == 0 {
             return napi_status::napi_handle_scope_mismatch;
         }
-        if e.scopes.depth() == 0 {
-            e.scopes.open();
-        }
-        let esc = e.scopes.current_escapable_mut().unwrap();
-        if esc.escaped {
+        if e.scopes.escapable_already_escaped() {
             return napi_status::napi_escape_called_twice;
         }
-        esc.escaped = true;
         let nv = unsafe { &*(escapee as *const crate::value::NapiValue) };
-        let js_val = match e.scopes.resolve_value(nv.value_index, nv.in_parent_scope) {
+        let js_val = match e.scopes.resolve_value(nv.slot) {
             Some(v) => v,
             None => return napi_status::napi_invalid_arg,
         };
         let ctx = e.ctx_ptr();
         let duped = unsafe { qjs::JS_DupValue(ctx, js_val) };
+        let escape_slot = match e.scopes.escape_into_slot(duped) {
+            Some(slot) => slot,
+            None => {
+                unsafe {
+                    qjs::JS_FreeValue(ctx, duped);
+                }
+                return napi_status::napi_invalid_arg;
+            }
+        };
         unsafe {
-            *result = value_to_napi_owned_in_parent(e, duped);
+            *result = napi_value_for_slot(e, escape_slot);
         }
         let _ = scope;
         napi_status::napi_ok
@@ -345,10 +380,7 @@ pub unsafe extern "C" fn napi_get_undefined(env: napi_env, result: *mut napi_val
         return napi_status::napi_invalid_arg;
     }
     with_env(env, |e| {
-        let val = unsafe { qjs::JS_UNDEFINED };
-        unsafe {
-            *result = value_to_napi_owned(e, val);
-        }
+        *result = value_to_napi_owned(e, qjs::JS_UNDEFINED);
     });
     napi_status::napi_ok
 }
@@ -359,10 +391,7 @@ pub unsafe extern "C" fn napi_get_null(env: napi_env, result: *mut napi_value) -
         return napi_status::napi_invalid_arg;
     }
     with_env(env, |e| {
-        let val = unsafe { qjs::JS_NULL };
-        unsafe {
-            *result = value_to_napi_owned(e, val);
-        }
+        *result = value_to_napi_owned(e, qjs::JS_NULL);
     });
     napi_status::napi_ok
 }
@@ -392,16 +421,12 @@ pub unsafe extern "C" fn napi_get_boolean(
         return napi_status::napi_invalid_arg;
     }
     with_env(env, |e| {
-        let val = unsafe {
-            if value {
-                qjs::JS_TRUE
-            } else {
-                qjs::JS_FALSE
-            }
+        let val = if value {
+            qjs::JS_TRUE
+        } else {
+            qjs::JS_FALSE
         };
-        unsafe {
-            *result = value_to_napi_owned(e, val);
-        }
+        *result = value_to_napi_owned(e, val);
     });
     napi_status::napi_ok
 }
@@ -418,11 +443,8 @@ pub unsafe extern "C" fn napi_create_double(
         return napi_status::napi_invalid_arg;
     }
     with_env(env, |e| {
-        let ctx = e.ctx_ptr();
         let val = new_float64(value);
-        unsafe {
-            *result = value_to_napi_owned(e, val);
-        }
+        *result = value_to_napi_owned(e, val);
     });
     napi_status::napi_ok
 }
@@ -437,11 +459,8 @@ pub unsafe extern "C" fn napi_create_int32(
         return napi_status::napi_invalid_arg;
     }
     with_env(env, |e| {
-        let ctx = e.ctx_ptr();
         let val = new_int32(value);
-        unsafe {
-            *result = value_to_napi_owned(e, val);
-        }
+        *result = value_to_napi_owned(e, val);
     });
     napi_status::napi_ok
 }
@@ -456,11 +475,8 @@ pub unsafe extern "C" fn napi_create_uint32(
         return napi_status::napi_invalid_arg;
     }
     with_env(env, |e| {
-        let ctx = e.ctx_ptr();
         let val = new_uint32(value);
-        unsafe {
-            *result = value_to_napi_owned(e, val);
-        }
+        *result = value_to_napi_owned(e, val);
     });
     napi_status::napi_ok
 }
@@ -475,11 +491,8 @@ pub unsafe extern "C" fn napi_create_int64(
         return napi_status::napi_invalid_arg;
     }
     with_env(env, |e| {
-        let ctx = e.ctx_ptr();
         let val = new_int64(value);
-        unsafe {
-            *result = value_to_napi_owned(e, val);
-        }
+        *result = value_to_napi_owned(e, val);
     });
     napi_status::napi_ok
 }
@@ -1256,6 +1269,16 @@ pub unsafe extern "C" fn napi_create_function(
                     };
                     let _ = unsafe { Box::from_raw(info) };
 
+                    if let Some(driver) = env.driver.clone() {
+                        driver.drain_ready_jobs(env);
+                    }
+                    if crate::async_work::has_pending_tsfn() {
+                        crate::async_work::drain_threadsafe_functions(env_box);
+                    }
+                    if crate::gc_hook::has_pending_finalizers() {
+                        crate::gc_hook::drain_pending_finalizers(env);
+                    }
+
                     let return_value = if result.is_null() {
                         None
                     } else {
@@ -1341,7 +1364,7 @@ pub unsafe extern "C" fn napi_call_function(
             None => return napi_status::napi_invalid_arg,
         };
         let this_val = if recv.is_null() {
-            unsafe { qjs::JS_UNDEFINED }
+            qjs::JS_UNDEFINED
         } else {
             match crate::value::napi_to_value(e, recv) {
                 Some(v) => v,
@@ -1877,6 +1900,7 @@ pub unsafe extern "C" fn napi_add_finalizer(
             finalize_data,
             finalize_cb,
             finalize_hint,
+            e.as_napi_env(),
         ) {
             return napi_status::napi_generic_failure;
         }
