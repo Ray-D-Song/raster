@@ -62,6 +62,29 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo clippy -p raster_runtime_napi --all-targets -- -D warnings
 
+  mysql-compat:
+    name: mysql-compat
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+          cache: yarn
+      - run: yarn install --frozen-lockfile
+      - run: make js JS_MINIFY=0
+      - run: rustup toolchain install nightly
+      - name: Build raster_runtime
+        run: cargo +nightly build
+      - run: make compat-mysql
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compat-mysql-logs
+          path: compat/mysql2/compat.log
+          if-no-files-found: ignore
+
   compatibility:
     name: ${{ matrix.case }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

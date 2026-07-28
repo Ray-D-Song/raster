@@ -10,6 +10,9 @@ const NODE_BASELINE_TIMEOUT_MS = 30_000;
 const READINESS_TIMEOUT_MS = 30_000;
 const READINESS_REQUEST_TIMEOUT_MS = 2_000;
 const SERVER_STOP_TIMEOUT_MS = 5_000;
+const MYSQL_DOCKER_IMAGE = "mysql:8.4";
+const MYSQL_HEALTH_TIMEOUT_MS = 120_000;
+const MYSQL_DOCKER_HOST = "127.0.0.1";
 
 const [name, rasterPath] = process.argv.slice(2);
 const root = process.cwd();
@@ -33,6 +36,11 @@ const cases = {
     directory: "compat/better-sqlite3",
     script: "test.cjs",
     successMarker: "better-sqlite3 compat OK",
+  },
+  mysql2: {
+    directory: "compat/mysql2",
+    script: "test.cjs",
+    successMarker: "mysql2 compat OK",
   },
   "v8-hello": {
     directory: "compat/v8-hello",
@@ -84,7 +92,7 @@ const cases = {
 const testCase = cases[name];
 if (!testCase || !rasterPath) {
   throw new Error(
-    "Usage: node compat/run.mjs <next|vite-plus|better-sqlite3|v8-hello|napi-hello> <raster-runtime>"
+    "Usage: node compat/run.mjs <next|vite-plus|better-sqlite3|mysql2|v8-hello|napi-hello> <raster-runtime>"
   );
 }
 
@@ -94,7 +102,12 @@ const logPath = path.join(directory, "compat.log");
 
 if (name === "next") {
   await runNextStandalone(directory, raster, logPath, root);
-} else if (name === "better-sqlite3" || name === "napi-hello" || name === "v8-hello") {
+} else if (
+  name === "better-sqlite3" ||
+  name === "mysql2" ||
+  name === "napi-hello" ||
+  name === "v8-hello"
+) {
   await runScriptCompat(testCase, directory, raster, logPath, root);
 } else {
   await runVitePlusBuild(testCase, directory, raster, logPath, root);
@@ -173,53 +186,77 @@ async function runVitePlusBuild(testCase, directory, raster, logPath, root) {
 }
 
 async function runScriptCompat(testCase, directory, raster, logPath, root) {
-  const logParts = [];
+  if (name === "mysql2") {
+    await runMysql2ScriptCompat(testCase, directory, raster, logPath, root);
+    return;
+  }
 
-  if (testCase.buildCommand && process.env.COMPAT_SKIP_BUILD !== "1") {
-    logParts.push(`# Build addon\n$ ${testCase.buildCommand}`);
-    console.log(`[compat-${name}] building addon: ${testCase.buildCommand}`);
-    const buildResult = await spawnCollect(
-      "sh",
-      ["-c", testCase.buildCommand],
-      { cwd: directory, env: { ...process.env } },
-      BUILD_TIMEOUT_MS
-    );
-    logParts.push(
-      `exit: ${buildResult.code ?? buildResult.signal}\n\nstdout:\n${buildResult.stdout}\n\nstderr:\n${buildResult.stderr}`
-    );
-    if (buildResult.code !== 0) {
-      await writeLog(logPath, logParts);
-      throw new Error(
-        `${name} addon build failed (exit ${buildResult.code ?? buildResult.signal}). ` +
-          `See ${path.relative(root, logPath)}.`
+  const logParts = [];
+  const childEnv = { ...process.env };
+
+  try {
+    if (testCase.buildCommand && process.env.COMPAT_SKIP_BUILD !== "1") {
+      logParts.push(`# Build addon\n$ ${testCase.buildCommand}`);
+      console.log(`[compat-${name}] building addon: ${testCase.buildCommand}`);
+      const buildResult = await spawnCollect(
+        "sh",
+        ["-c", testCase.buildCommand],
+        { cwd: directory, env: { ...process.env } },
+        BUILD_TIMEOUT_MS
+      );
+      logParts.push(
+        `exit: ${buildResult.code ?? buildResult.signal}\n\nstdout:\n${buildResult.stdout}\n\nstderr:\n${buildResult.stderr}`
+      );
+      if (buildResult.code !== 0) {
+        throw new Error(
+          `${name} addon build failed (exit ${buildResult.code ?? buildResult.signal}). ` +
+            `See ${path.relative(root, logPath)}.`
+        );
+      }
+    }
+
+    const scripts = testCase.scripts ?? [
+      {
+        script: testCase.script,
+        successMarker: testCase.successMarker,
+        maxDurationMs: SCRIPT_TIMEOUT_MS,
+        expectCode: 0,
+      },
+    ];
+
+    for (const spec of scripts) {
+      await runCompatScript(
+        spec,
+        directory,
+        raster,
+        logParts,
+        root,
+        logPath,
+        childEnv
       );
     }
+
+    const compatMode =
+      process.env.COMPAT_SKIP_NODE_BASELINE === "1"
+        ? "Raster only"
+        : "Node baseline + Raster";
+    console.log(
+      `${name} compatibility passed (${scripts.length} script(s), ${compatMode})`
+    );
+  } finally {
+    await writeLog(logPath, logParts);
   }
-
-  const scripts = testCase.scripts ?? [
-    {
-      script: testCase.script,
-      successMarker: testCase.successMarker,
-      maxDurationMs: SCRIPT_TIMEOUT_MS,
-      expectCode: 0,
-    },
-  ];
-
-  for (const spec of scripts) {
-    await runCompatScript(spec, directory, raster, logParts, root, logPath);
-  }
-
-  await writeLog(logPath, logParts);
-  const compatMode =
-    process.env.COMPAT_SKIP_NODE_BASELINE === "1"
-      ? "Raster only"
-      : "Node baseline + Raster";
-  console.log(
-    `${name} compatibility passed (${scripts.length} script(s), ${compatMode})`
-  );
 }
 
-async function runCompatScript(spec, directory, raster, logParts, root, logPath) {
+async function runCompatScript(
+  spec,
+  directory,
+  raster,
+  logParts,
+  root,
+  logPath,
+  env
+) {
   const {
     script,
     successMarker,
@@ -246,7 +283,7 @@ async function runCompatScript(spec, directory, raster, logParts, root, logPath)
       const result = await spawnStillRunning(
         command,
         args,
-        { cwd: directory, env: { ...process.env } },
+        { cwd: directory, env },
         checkMs,
         killAfterMs
       );
@@ -271,7 +308,7 @@ async function runCompatScript(spec, directory, raster, logParts, root, logPath)
     const nodeResult = await spawnCollect(
       process.execPath,
       [script],
-      { cwd: directory, env: { ...process.env } },
+      { cwd: directory, env },
       Math.min(NODE_BASELINE_TIMEOUT_MS, maxDurationMs)
     );
 
@@ -294,7 +331,7 @@ async function runCompatScript(spec, directory, raster, logParts, root, logPath)
   const rasterResult = await spawnCollect(
     raster,
     [script],
-    { cwd: directory, env: { ...process.env } },
+    { cwd: directory, env },
     maxDurationMs
   );
 
@@ -365,6 +402,266 @@ function validateCompatRun(
         `See ${path.relative(root, logPath)}.`
     );
   }
+}
+
+async function runMysql2ScriptCompat(
+  testCase,
+  directory,
+  raster,
+  logPath,
+  root
+) {
+  const logParts = [];
+  let containerId = null;
+  let cleanupDone = false;
+  let signalExitCode = null;
+
+  const appendContainerDiagnostics = async () => {
+    if (!containerId) {
+      return;
+    }
+    const inspect = await execDocker(["inspect", containerId]);
+    logParts.push(
+      `\n# docker inspect\nstdout:\n${inspect.stdout}\nstderr:\n${inspect.stderr}`
+    );
+    const logs = await execDocker(["logs", containerId]);
+    logParts.push(
+      `\n# docker logs\nstdout:\n${logs.stdout}\nstderr:\n${logs.stderr}`
+    );
+  };
+
+  const stopContainer = async (reason) => {
+    if (!containerId) {
+      return "no container to stop";
+    }
+    const stopResult = await execDocker(["stop", "--time", "5", containerId]);
+    if (stopResult.code !== 0) {
+      return (
+        `warning: docker stop failed (exit ${stopResult.code}, ${reason}): ` +
+        `${stopResult.stderr.trim()}`
+      );
+    }
+    return `stopped (${reason})`;
+  };
+
+  const cleanup = async (reason) => {
+    if (cleanupDone) {
+      return;
+    }
+    cleanupDone = true;
+    let stopMessage;
+    try {
+      stopMessage = await stopContainer(reason);
+    } catch (err) {
+      stopMessage = `warning: docker stop error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+    logParts.push(`\n# Container cleanup\n${stopMessage}`);
+    try {
+      await writeLog(logPath, logParts);
+    } catch {
+      // do not override the original test error
+    }
+  };
+
+  const onSignal = (signal) => {
+    if (signalExitCode !== null) {
+      return;
+    }
+    signalExitCode = signal === "SIGINT" ? 130 : 143;
+    cleanup(signal).finally(() => process.exit(signalExitCode));
+  };
+
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+
+  let testFailed = false;
+  try {
+    logParts.push(`# Docker\nimage: ${MYSQL_DOCKER_IMAGE}`);
+
+    const dockerVersion = await execDocker([
+      "version",
+      "--format",
+      "{{.Server.Version}}",
+    ]);
+    if (dockerVersion.code !== 0 || !dockerVersion.stdout.trim()) {
+      throw new Error(
+        "Docker daemon is not available. Install Docker and ensure the daemon is running." +
+          (dockerVersion.stderr.trim()
+            ? `\n${dockerVersion.stderr.trim()}`
+            : "")
+      );
+    }
+    logParts.push(`docker-server: ${dockerVersion.stdout.trim()}`);
+
+    const runArgs = [
+      "run",
+      "--detach",
+      "--rm",
+      "--env",
+      "MYSQL_ROOT_PASSWORD=compat-root",
+      "--env",
+      "MYSQL_DATABASE=raster_compat",
+      "--env",
+      "MYSQL_USER=raster",
+      "--env",
+      "MYSQL_PASSWORD=raster",
+      "--publish",
+      `${MYSQL_DOCKER_HOST}::3306`,
+      "--health-cmd=mysqladmin ping -h 127.0.0.1 -uroot -pcompat-root --silent",
+      "--health-interval=2s",
+      "--health-timeout=5s",
+      "--health-retries=30",
+      MYSQL_DOCKER_IMAGE,
+    ];
+    logParts.push(`\n# docker run\n$ docker ${runArgs.join(" ")}`);
+
+    const runResult = await execDocker(runArgs);
+    if (runResult.code !== 0) {
+      logParts.push(`exit: ${runResult.code}\nstderr:\n${runResult.stderr}`);
+      throw new Error(
+        `Failed to start MySQL container: ${runResult.stderr.trim() || "unknown error"}`
+      );
+    }
+
+    containerId = runResult.stdout.trim();
+    if (!containerId) {
+      throw new Error("docker run produced no container ID");
+    }
+    logParts.push(`container-id: ${containerId}`);
+
+    const portResult = await execDocker(["port", containerId, "3306/tcp"]);
+    const port = parseDockerPort(portResult.stdout);
+    if (!port) {
+      await appendContainerDiagnostics();
+      throw new Error(
+        `Failed to parse mapped port from: ${portResult.stdout.trim() || portResult.stderr.trim()}`
+      );
+    }
+    logParts.push(`host: ${MYSQL_DOCKER_HOST}\nport: ${port}`);
+
+    await waitForMysqlHealthy(
+      containerId,
+      logParts,
+      appendContainerDiagnostics
+    );
+
+    const testEnv = {
+      ...process.env,
+      MYSQL_HOST: MYSQL_DOCKER_HOST,
+      MYSQL_PORT: port,
+      MYSQL_DATABASE: "raster_compat",
+      MYSQL_USER: "raster",
+      MYSQL_PASSWORD: "raster",
+    };
+    logParts.push(
+      `\n# Database config\nhost: ${MYSQL_DOCKER_HOST}\nport: ${port}\ndatabase: raster_compat\nuser: raster`
+    );
+
+    const scripts = testCase.scripts ?? [
+      {
+        script: testCase.script,
+        successMarker: testCase.successMarker,
+        maxDurationMs: SCRIPT_TIMEOUT_MS,
+        expectCode: 0,
+      },
+    ];
+
+    for (const spec of scripts) {
+      await runCompatScript(
+        spec,
+        directory,
+        raster,
+        logParts,
+        root,
+        logPath,
+        testEnv
+      );
+    }
+
+    const compatMode =
+      process.env.COMPAT_SKIP_NODE_BASELINE === "1"
+        ? "Raster only"
+        : "Node baseline + Raster";
+    console.log(
+      `${name} compatibility passed (${scripts.length} script(s), ${compatMode})`
+    );
+  } catch (err) {
+    testFailed = true;
+    try {
+      await appendContainerDiagnostics();
+    } catch {
+      // ignore diagnostic failures
+    }
+    throw err;
+  } finally {
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+    if (signalExitCode === null) {
+      await cleanup(testFailed ? "error" : "complete");
+    }
+  }
+}
+
+function execDocker(args, timeoutMs = 60_000) {
+  return spawnCollect("docker", args, { env: { ...process.env } }, timeoutMs);
+}
+
+function parseDockerPort(output) {
+  const line = output.trim().split("\n")[0]?.trim();
+  if (!line) {
+    return null;
+  }
+  const match = /^127\.0\.0\.1:(\d+)$/.exec(line);
+  return match ? match[1] : null;
+}
+
+async function waitForMysqlHealthy(containerId, logParts, appendDiagnostics) {
+  const deadline = Date.now() + MYSQL_HEALTH_TIMEOUT_MS;
+  let lastStatus = null;
+
+  while (Date.now() < deadline) {
+    const stateResult = await execDocker([
+      "inspect",
+      "--format={{.State.Status}}",
+      containerId,
+    ]);
+    if (stateResult.code !== 0) {
+      await appendDiagnostics();
+      throw new Error("MySQL container no longer exists");
+    }
+
+    const stateStatus = stateResult.stdout.trim();
+    if (stateStatus === "exited") {
+      await appendDiagnostics();
+      throw new Error("MySQL container exited before becoming healthy");
+    }
+
+    const healthResult = await execDocker([
+      "inspect",
+      "--format={{.State.Health.Status}}",
+      containerId,
+    ]);
+    const status = healthResult.stdout.trim();
+    if (status && status !== lastStatus) {
+      logParts.push(`health: ${status}`);
+      lastStatus = status;
+    }
+
+    if (status === "healthy") {
+      return;
+    }
+    if (status === "unhealthy") {
+      await appendDiagnostics();
+      throw new Error("MySQL container became unhealthy");
+    }
+
+    await sleep(1_000);
+  }
+
+  await appendDiagnostics();
+  throw new Error(
+    `MySQL container health check timed out after ${MYSQL_HEALTH_TIMEOUT_MS / 1000}s`
+  );
 }
 
 async function runNextStandalone(directory, raster, logPath, root) {
