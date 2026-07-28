@@ -12,6 +12,7 @@ const READINESS_REQUEST_TIMEOUT_MS = 2_000;
 const SERVER_STOP_TIMEOUT_MS = 5_000;
 const MYSQL_DOCKER_IMAGE = "mysql:8.4";
 const MYSQL_HEALTH_TIMEOUT_MS = 120_000;
+const MYSQL_DOCKER_RUN_TIMEOUT_MS = 180_000;
 const MYSQL_DOCKER_HOST = "127.0.0.1";
 
 const [name, rasterPath] = process.argv.slice(2);
@@ -420,47 +421,62 @@ async function runMysql2ScriptCompat(
     if (!containerId) {
       return;
     }
-    const inspect = await execDocker(["inspect", containerId]);
+    const [stateStatus, exitCode, health, ports] = await Promise.all([
+      execDocker(["inspect", "--format={{.State.Status}}", containerId]),
+      execDocker(["inspect", "--format={{.State.ExitCode}}", containerId]),
+      execDocker(["inspect", "--format={{.State.Health.Status}}", containerId]),
+      execDocker(["port", containerId, "3306/tcp"]),
+    ]);
     logParts.push(
-      `\n# docker inspect\nstdout:\n${inspect.stdout}\nstderr:\n${inspect.stderr}`
+      "\n# container diagnostics\n" +
+        `state: ${redactSecrets(stateStatus.stdout.trim())}\n` +
+        `exit-code: ${redactSecrets(exitCode.stdout.trim())}\n` +
+        `health: ${redactSecrets(health.stdout.trim())}\n` +
+        `port: ${redactSecrets(ports.stdout.trim())}`
     );
     const logs = await execDocker(["logs", containerId]);
     logParts.push(
-      `\n# docker logs\nstdout:\n${logs.stdout}\nstderr:\n${logs.stderr}`
+      `\n# docker logs\nstdout:\n${redactSecrets(logs.stdout)}\nstderr:\n${redactSecrets(logs.stderr)}`
     );
   };
 
   const stopContainer = async (reason) => {
     if (!containerId) {
-      return "no container to stop";
+      return { ok: true, message: "no container to stop" };
     }
     const stopResult = await execDocker(["stop", "--time", "5", containerId]);
     if (stopResult.code !== 0) {
-      return (
-        `warning: docker stop failed (exit ${stopResult.code}, ${reason}): ` +
-        `${stopResult.stderr.trim()}`
-      );
+      return {
+        ok: false,
+        message:
+          `docker stop failed (exit ${stopResult.code}, ${reason}): ` +
+          `${redactSecrets(stopResult.stderr.trim())}`,
+      };
     }
-    return `stopped (${reason})`;
+    return { ok: true, message: `stopped (${reason})` };
   };
 
   const cleanup = async (reason) => {
     if (cleanupDone) {
-      return;
+      return { ok: true, message: "already cleaned up" };
     }
     cleanupDone = true;
-    let stopMessage;
+    let stopResult;
     try {
-      stopMessage = await stopContainer(reason);
+      stopResult = await stopContainer(reason);
     } catch (err) {
-      stopMessage = `warning: docker stop error: ${err instanceof Error ? err.message : String(err)}`;
+      stopResult = {
+        ok: false,
+        message: `docker stop error: ${err instanceof Error ? err.message : String(err)}`,
+      };
     }
-    logParts.push(`\n# Container cleanup\n${stopMessage}`);
+    logParts.push(`\n# Container cleanup\n${stopResult.message}`);
     try {
       await writeLog(logPath, logParts);
     } catch {
       // do not override the original test error
     }
+    return stopResult;
   };
 
   const onSignal = (signal) => {
@@ -513,13 +529,26 @@ async function runMysql2ScriptCompat(
       "--health-retries=30",
       MYSQL_DOCKER_IMAGE,
     ];
-    logParts.push(`\n# docker run\n$ docker ${runArgs.join(" ")}`);
+    logParts.push(
+      `\n# docker run\n$ docker ${redactSecrets(runArgs.join(" "))}`
+    );
 
-    const runResult = await execDocker(runArgs);
-    if (runResult.code !== 0) {
-      logParts.push(`exit: ${runResult.code}\nstderr:\n${runResult.stderr}`);
+    const runResult = await execDocker(runArgs, MYSQL_DOCKER_RUN_TIMEOUT_MS);
+    if (runResult.timedOut) {
+      logParts.push(
+        `exit: timeout after ${MYSQL_DOCKER_RUN_TIMEOUT_MS / 1000}s`
+      );
       throw new Error(
-        `Failed to start MySQL container: ${runResult.stderr.trim() || "unknown error"}`
+        `Timed out starting MySQL container after ${MYSQL_DOCKER_RUN_TIMEOUT_MS / 1000}s ` +
+          "(image pull or container start may be slow)"
+      );
+    }
+    if (runResult.code !== 0) {
+      logParts.push(
+        `exit: ${runResult.code}\nstderr:\n${redactSecrets(runResult.stderr)}`
+      );
+      throw new Error(
+        `Failed to start MySQL container: ${redactSecrets(runResult.stderr.trim()) || "unknown error"}`
       );
     }
 
@@ -534,7 +563,7 @@ async function runMysql2ScriptCompat(
     if (!port) {
       await appendContainerDiagnostics();
       throw new Error(
-        `Failed to parse mapped port from: ${portResult.stdout.trim() || portResult.stderr.trim()}`
+        `Failed to parse mapped port from: ${redactSecrets(portResult.stdout.trim() || portResult.stderr.trim())}`
       );
     }
     logParts.push(`host: ${MYSQL_DOCKER_HOST}\nport: ${port}`);
@@ -597,9 +626,23 @@ async function runMysql2ScriptCompat(
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
     if (signalExitCode === null) {
-      await cleanup(testFailed ? "error" : "complete");
+      const cleanupResult = await cleanup(testFailed ? "error" : "complete");
+      if (!testFailed && !cleanupResult.ok) {
+        throw new Error(
+          `MySQL container cleanup failed: ${cleanupResult.message}`
+        );
+      }
     }
   }
+}
+
+function redactSecrets(text) {
+  if (!text) {
+    return "";
+  }
+  return String(text)
+    .replace(/([A-Za-z_]*PASSWORD=)[^\s"']*/gi, "$1***")
+    .replace(/(^|\s)-p\S+/gm, "$1-p***");
 }
 
 function execDocker(args, timeoutMs = 60_000) {
