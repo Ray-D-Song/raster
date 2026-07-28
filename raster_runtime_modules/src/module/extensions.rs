@@ -214,8 +214,18 @@ fn default_node_handler<'js>(ctx: Ctx<'js>, module: Object<'js>, filename: Strin
     let exports: Object = module.get("exports")?;
     let exports_val = exports.clone().into_value().as_raw();
 
-    raster_runtime_napi::dlopen::process_dlopen(ctx_ptr, exports_val, &filename, 0)
-        .map_err(|e| Exception::throw_message(&ctx, &e))?;
+    let new_exports =
+        raster_runtime_napi::dlopen::process_dlopen(ctx_ptr, exports_val, &filename, 0)
+            .map_err(|e| Exception::throw_message(&ctx, &e))?;
+    unsafe {
+        let module_val = module.clone().into_value().as_raw();
+        rquickjs::qjs::JS_SetPropertyStr(
+            ctx_ptr.as_ptr(),
+            module_val,
+            c"exports".as_ptr(),
+            new_exports,
+        );
+    }
 
     Ok(())
 }
@@ -237,12 +247,7 @@ fn default_node_handler_unsupported<'js>(
 
 pub fn init_extensions_table<'js>(
     ctx: &Ctx<'js>,
-) -> Result<(
-    Object<'js>,
-    Function<'js>,
-    Function<'js>,
-    Function<'js>,
-)> {
+) -> Result<(Object<'js>, Function<'js>, Function<'js>, Function<'js>)> {
     let extensions: Object = ctx.eval("Object.create(null)")?;
     let js_handler = Function::new(ctx.clone(), default_js_handler)?;
     let json_handler = Function::new(ctx.clone(), default_json_handler)?;

@@ -211,13 +211,7 @@ pub fn attach_holder(ctx: *mut JSContext, target: JSValue, entry_id: usize) -> b
     let key = holder_property_name(entry_id);
     let atom = unsafe { qjs::JS_NewAtom(ctx, key.as_ptr()) };
     let ret = unsafe {
-        qjs::JS_DefinePropertyValue(
-            ctx,
-            target,
-            atom,
-            holder,
-            qjs::JS_PROP_CONFIGURABLE as i32,
-        )
+        qjs::JS_DefinePropertyValue(ctx, target, atom, holder, qjs::JS_PROP_CONFIGURABLE as i32)
     };
     unsafe {
         qjs::JS_FreeAtom(ctx, atom);
@@ -246,13 +240,9 @@ pub fn drain_pending_finalizers(env: &mut Env) {
     let pending = {
         let mut state = GC_STATE.lock();
         let all_pending = std::mem::take(&mut state.pending);
-        let (pending, other): (Vec<usize>, Vec<usize>) =
-            all_pending.into_iter().partition(|id| {
-                state
-                    .entries
-                    .get(id)
-                    .is_some_and(|e| e.env == env_key)
-            });
+        let (pending, other): (Vec<usize>, Vec<usize>) = all_pending
+            .into_iter()
+            .partition(|id| state.entries.get(id).is_some_and(|e| e.env == env_key));
         if !other.is_empty() {
             state.pending.extend(other);
         }
@@ -265,11 +255,11 @@ pub fn drain_pending_finalizers(env: &mut Env) {
         match entry.kind {
             GcEntryKind::Wrap => {
                 env.wraps.remove_by_id(entry_id);
-            }
+            },
             GcEntryKind::Finalizer => {
                 env.finalizers.remove_by_id(entry_id);
-            }
-            GcEntryKind::External | GcEntryKind::WeakRef => {}
+            },
+            GcEntryKind::External | GcEntryKind::WeakRef => {},
         }
         if let Some(f) = entry.finalize {
             unsafe {
@@ -300,11 +290,11 @@ pub fn run_all_remaining(env: &mut Env) {
         match entry.kind {
             GcEntryKind::Wrap => {
                 env.wraps.remove_by_id(entry_id);
-            }
+            },
             GcEntryKind::Finalizer => {
                 env.finalizers.remove_by_id(entry_id);
-            }
-            GcEntryKind::External | GcEntryKind::WeakRef => {}
+            },
+            GcEntryKind::External | GcEntryKind::WeakRef => {},
         }
         if let Some(f) = entry.finalize {
             unsafe {
@@ -316,10 +306,7 @@ pub fn run_all_remaining(env: &mut Env) {
             };
         }
     }
-    GC_STATE
-        .lock()
-        .pending
-        .retain(|id| !processed.contains(id));
+    GC_STATE.lock().pending.retain(|id| !processed.contains(id));
 }
 
 #[cfg(test)]

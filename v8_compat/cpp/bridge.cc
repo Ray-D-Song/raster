@@ -46,6 +46,10 @@ extern "C" RasterV8IsolateState* raster_v8_create_isolate(void) {
 }
 
 extern "C" void raster_v8_destroy_isolate(RasterV8IsolateState* isolate) {
+  if (g_current_isolate == isolate) {
+    g_current_isolate = nullptr;
+  }
+  raster_v8::dispose_isolate_persistents(raster_v8::iso_impl(isolate));
   delete raster_v8::iso_impl(isolate);
 }
 
@@ -54,6 +58,9 @@ extern "C" RasterV8ContextState* raster_v8_create_context(void) {
 }
 
 extern "C" void raster_v8_destroy_context(RasterV8ContextState* ctx) {
+  if (g_current_ctx == ctx) {
+    g_current_ctx = nullptr;
+  }
   delete raster_v8::ctx_impl(ctx);
 }
 

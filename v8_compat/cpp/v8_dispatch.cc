@@ -57,8 +57,8 @@ static shim::ObjectLayout* layout_for_root(RasterV8ContextState* ctx, uint64_t r
   slot->object.tagged_map = shim::TaggedPointer(&slot->object);
   slot->tagged_value = shim::TaggedPointer(&slot->object);
   slot->owns_root = false;
-  register_handle_repr(reinterpret_cast<uintptr_t>(&slot->object), root_id);
-  register_handle_repr(static_cast<uintptr_t>(slot->object.tagged_map.value), root_id);
+  register_handle_repr(ctx, reinterpret_cast<uintptr_t>(&slot->object), root_id);
+  register_handle_repr(ctx, static_cast<uintptr_t>(slot->object.tagged_map.value), root_id);
   return &slot->object;
 }
 
@@ -159,6 +159,7 @@ RasterV8Status dispatch_v8_callback(uint32_t function_id,
   *out_result_root = root_id_from_return_value(
       ctx, implicit_args[RASTER_V8_FUNCTION_CALLBACK_K_RETURN_VALUE_INDEX]);
   raster_v8_close_handle_scope(ctx);
+  raster_v8_dispatch_pending_weak_callbacks();
   g_callback_handle_stack.pop_back();
   if (g_callback_handle_stack.empty()) {
     g_callback_handle_frame = {};

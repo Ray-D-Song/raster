@@ -5,6 +5,8 @@ use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use rquickjs::qjs::{self, JSValue};
 
+use crate::owned_js_value::OwnedJsValue;
+
 static NEXT_ROOT_ID: AtomicU64 = AtomicU64::new(1);
 static IMMORTAL_ROOTS: Lazy<Mutex<HashSet<u64>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
@@ -25,10 +27,25 @@ impl RootTable {
         }
     }
 
-    pub fn insert(&self, ctx: *mut qjs::JSContext, value: JSValue) -> u64 {
+    pub fn insert_owned(&self, value: OwnedJsValue) -> u64 {
+        let id = NEXT_ROOT_ID.fetch_add(1, Ordering::Relaxed);
+        let raw = value.into_raw();
+        self.entries.lock().insert(id, raw);
+        id
+    }
+
+    /// Roots an existing JSValue reference (DupValue).
+    pub fn insert_borrowed(&self, ctx: *mut qjs::JSContext, value: JSValue) -> u64 {
         let id = NEXT_ROOT_ID.fetch_add(1, Ordering::Relaxed);
         let dup = unsafe { qjs::JS_DupValue(ctx, value) };
         self.entries.lock().insert(id, dup);
+        id
+    }
+
+    pub fn insert_immortal_tag(&self, value: JSValue) -> u64 {
+        let id = NEXT_ROOT_ID.fetch_add(1, Ordering::Relaxed);
+        self.entries.lock().insert(id, value);
+        mark_immortal_root(id);
         id
     }
 
@@ -55,6 +72,13 @@ impl RootTable {
         }
     }
 
+    pub fn detach_root(&self, id: u64) -> Option<JSValue> {
+        if IMMORTAL_ROOTS.lock().contains(&id) {
+            return None;
+        }
+        self.entries.lock().remove(&id)
+    }
+
     pub fn find_id_by_ptr(&self, ptr: usize) -> Option<u64> {
         let entries = self.entries.lock();
         for (&id, &value) in entries.iter() {
@@ -68,8 +92,12 @@ impl RootTable {
     }
 
     pub fn clear(&self, ctx: *mut qjs::JSContext) {
+        let immortals = IMMORTAL_ROOTS.lock().clone();
         let mut entries = self.entries.lock();
-        for (_, value) in entries.drain() {
+        for (id, value) in entries.drain() {
+            if immortals.contains(&id) {
+                continue;
+            }
             unsafe { qjs::JS_FreeValue(ctx, value) };
         }
         IMMORTAL_ROOTS.lock().clear();

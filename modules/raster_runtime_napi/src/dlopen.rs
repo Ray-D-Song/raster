@@ -4,7 +4,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
-use std::ptr::{self, NonNull};
+use std::ptr::NonNull;
 use std::sync::Mutex;
 
 use libloading::Library;
@@ -22,8 +22,7 @@ struct EnvPtr(*mut Env);
 unsafe impl Send for EnvPtr {}
 unsafe impl Sync for EnvPtr {}
 
-static ENV_REGISTRY: Lazy<Mutex<HashMap<usize, EnvPtr>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+static ENV_REGISTRY: Lazy<Mutex<HashMap<usize, EnvPtr>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 thread_local! {
     static CURRENT_ENV: RefCell<Option<*mut Env>> = const { RefCell::new(None) };
@@ -103,7 +102,10 @@ pub fn prepare_shutdown<'js>(ctx: &Ctx<'js>) {
         )
         .unwrap_or(0);
     if remaining > 0 {
-        tracing::debug!("napi prepare_shutdown: cleared {} require cache entries", remaining);
+        tracing::debug!(
+            "napi prepare_shutdown: cleared {} require cache entries",
+            remaining
+        );
     }
     crate::api::clear_function_callbacks();
     if let Some(env_ptr) = env_for_ctx(ctx.as_raw().as_ptr()) {
@@ -112,7 +114,7 @@ pub fn prepare_shutdown<'js>(ctx: &Ctx<'js>) {
     }
     #[cfg(feature = "v8-compat")]
     {
-        v8_compat::prepare_shutdown(ctx.as_raw().as_ptr());
+        unsafe { v8_compat::shutdown_context(ctx.as_raw().as_ptr()) };
     }
     if let Some(ctx_ptr) = NonNull::new(ctx.as_raw().as_ptr()) {
         unregister_env(ctx_ptr);
@@ -125,8 +127,8 @@ pub fn prepare_shutdown<'js>(ctx: &Ctx<'js>) {
         }
     }
     #[cfg(feature = "v8-compat")]
-    {
-        v8_compat::shutdown_runtime(rt);
+    if env_ptrs_for_runtime(rt).is_empty() {
+        unsafe { v8_compat::shutdown_runtime(rt) };
     }
     if env_ptrs_for_runtime(rt).is_empty() {
         raster_runtime_utils::driver_poll::unregister_driver_notify(rt);
@@ -135,7 +137,11 @@ pub fn prepare_shutdown<'js>(ctx: &Ctx<'js>) {
 }
 
 pub fn env_for_ctx(ctx: *mut JSContext) -> Option<*mut Env> {
-    ENV_REGISTRY.lock().unwrap().get(&(ctx as usize)).map(|EnvPtr(p)| *p)
+    ENV_REGISTRY
+        .lock()
+        .unwrap()
+        .get(&(ctx as usize))
+        .map(|EnvPtr(p)| *p)
 }
 
 pub fn current_env() -> Option<&'static mut Env> {
@@ -182,10 +188,7 @@ impl Drop for EnvActivation {
 }
 
 /// Load a native addon and populate `module.exports`.
-pub fn dlopen_module(
-    ctx_ptr: NonNull<JSContext>,
-    exports_obj: JSValue,
-) -> Result<JSValue, String> {
+pub fn dlopen_module(ctx_ptr: NonNull<JSContext>, exports_obj: JSValue) -> Result<JSValue, String> {
     let filename = resolve_addon_path(exports_obj, ctx_ptr)?;
     debug!("dlopen: loading {}", filename);
 
@@ -200,8 +203,7 @@ pub fn dlopen_module(
 
     #[cfg(not(target_env = "musl"))]
     {
-        dlopen_impl(ctx_ptr, exports_obj, &filename)?;
-        Ok(exports_obj)
+        dlopen_impl(ctx_ptr, exports_obj, &filename)
     }
 }
 
@@ -210,10 +212,7 @@ fn resolve_addon_path(exports_obj: JSValue, ctx_ptr: NonNull<JSContext>) -> Resu
     Err("dlopen path resolution requires module context".to_string())
 }
 
-pub fn dlopen_file(
-    ctx_ptr: NonNull<JSContext>,
-    filename: &str,
-) -> Result<JSValue, String> {
+pub fn dlopen_file(ctx_ptr: NonNull<JSContext>, filename: &str) -> Result<JSValue, String> {
     debug!("dlopen_file: {}", filename);
 
     #[cfg(target_env = "musl")]
@@ -231,8 +230,7 @@ pub fn dlopen_file(
             let ctx = ctx_ptr.as_ptr();
             qjs::JS_NewObject(ctx)
         };
-        dlopen_impl(ctx_ptr, exports, filename)?;
-        Ok(exports)
+        dlopen_impl(ctx_ptr, exports, filename)
     }
 }
 
@@ -241,7 +239,7 @@ fn dlopen_impl(
     ctx_ptr: NonNull<JSContext>,
     exports_obj: JSValue,
     filename: &str,
-) -> Result<(), String> {
+) -> Result<JSValue, String> {
     if !Path::new(filename).exists() {
         return Err(format!("Cannot load addon '{}': file not found", filename));
     }
@@ -252,11 +250,7 @@ fn dlopen_impl(
         register_env(ctx_ptr, Box::new(Env::new(ctx_ptr)))
     };
     unsafe {
-        let rt = qjs::JS_GetRuntime(ctx_ptr.as_ptr());
-        if !(*env_ptr).external_class_acquired {
-            crate::external::acquire_external_class_for_env(rt);
-            (*env_ptr).external_class_acquired = true;
-        }
+        (*env_ptr).ensure_external_class();
         (*env_ptr).scopes.open();
     }
     let _activation = EnvActivation::enter(env_ptr);
@@ -266,14 +260,15 @@ fn dlopen_impl(
 
     #[cfg(feature = "v8-compat")]
     let _v8_guard = {
-        static V8_BRIDGE_INIT: std::sync::Once = std::sync::Once::new();
-        V8_BRIDGE_INIT.call_once(|| {
-            v8_compat::bind_bridge(ctx_ptr.as_ptr());
-        });
+        v8_compat::bind_bridge(ctx_ptr.as_ptr());
         let rt = unsafe { qjs::JS_GetRuntime(ctx_ptr.as_ptr()) };
         let isolate = v8_compat::ensure_isolate_for_runtime(rt);
         let context_state = v8_compat::ensure_context_for_ctx(ctx_ptr.as_ptr());
-        Some(v8_compat::push_native_load(ctx_ptr.as_ptr(), isolate, context_state))
+        Some(v8_compat::push_native_load(
+            ctx_ptr.as_ptr(),
+            isolate,
+            context_state,
+        ))
     };
 
     #[cfg(not(feature = "v8-compat"))]
@@ -284,17 +279,20 @@ fn dlopen_impl(
 
     #[cfg(feature = "v8-compat")]
     {
-        let v8_modules = v8_compat::drain_pending_v8_modules();
+        let pending_start = _v8_guard
+            .as_ref()
+            .map(|g| g.pending_modules_start())
+            .unwrap_or(0);
+        let v8_modules = v8_compat::drain_pending_v8_modules_since(pending_start);
         if v8_modules.len() == 1 {
             let module = v8_modules[0] as *mut v8_compat::NodeModule;
-            unsafe {
-                v8_compat::run_v8_module_init(ctx_ptr.as_ptr(), module, exports_obj)?;
-            }
+            let actual_exports =
+                unsafe { v8_compat::run_v8_module_init(ctx_ptr.as_ptr(), module, exports_obj)? };
             std::mem::forget(library);
             unsafe {
                 (*env_ptr).close_all_scopes();
             }
-            return Ok(());
+            return Ok(actual_exports);
         }
         if !v8_modules.is_empty() {
             v8_compat::clear_pending_v8_modules();
@@ -328,17 +326,18 @@ fn dlopen_impl(
     };
 
     let result = unsafe { register(napi_env, exports_napi) };
-    if !result.is_null() {
-        let js_result = unsafe { crate::value::napi_to_value_dup(&*env_ptr, result) }
-            .ok_or_else(|| "Invalid return value from addon init".to_string())?;
-        assign_module_exports(ctx_ptr.as_ptr(), exports_obj, js_result);
-    }
+    let final_exports = if !result.is_null() {
+        unsafe { crate::value::napi_to_value_dup(&*env_ptr, result) }
+            .ok_or_else(|| "Invalid return value from addon init".to_string())?
+    } else {
+        unsafe { qjs::JS_DupValue(ctx_ptr.as_ptr(), exports_obj) }
+    };
 
     std::mem::forget(library);
     unsafe {
         (*env_ptr).close_all_scopes();
     }
-    Ok(())
+    Ok(final_exports)
 }
 
 fn run_register_func(
@@ -347,60 +346,24 @@ fn run_register_func(
     exports: napi_value,
     ctx_ptr: NonNull<JSContext>,
     exports_obj: JSValue,
-) -> Result<(), String> {
+) -> Result<JSValue, String> {
     let result = unsafe { register(napi_env, exports) };
     if !result.is_null() {
         let env = unsafe { Env::from_napi_env(napi_env) };
         if let Some(js_result) = unsafe { crate::value::napi_to_value_dup(env, result) } {
-            assign_module_exports(ctx_ptr.as_ptr(), exports_obj, js_result);
+            return Ok(js_result);
         }
     }
-    Ok(())
-}
-
-/// Node replaces `module.exports` when the init function returns a distinct object.
-fn assign_module_exports(ctx: *mut qjs::JSContext, exports_obj: JSValue, js_result: JSValue) {
-    unsafe {
-        if qjs::JS_IsStrictEqual(ctx, js_result, exports_obj) {
-            qjs::JS_FreeValue(ctx, js_result);
-            return;
-        }
-
-        let flags = (qjs::JS_GPN_STRING_MASK | qjs::JS_GPN_ENUM_ONLY) as i32;
-        let mut keys: *mut qjs::JSPropertyEnum = ptr::null_mut();
-        let mut len: u32 = 0;
-
-        if qjs::JS_GetOwnPropertyNames(ctx, &mut keys, &mut len, exports_obj, flags) >= 0 {
-            for i in 0..len {
-                let atom = (*keys.add(i as usize)).atom;
-                qjs::JS_DeleteProperty(ctx, exports_obj, atom, 0);
-            }
-            qjs::JS_FreePropertyEnum(ctx, keys, len);
-        }
-
-        keys = ptr::null_mut();
-        len = 0;
-        if qjs::JS_GetOwnPropertyNames(ctx, &mut keys, &mut len, js_result, flags) < 0 {
-            qjs::JS_FreeValue(ctx, js_result);
-            return;
-        }
-
-        for i in 0..len {
-            let atom = (*keys.add(i as usize)).atom;
-            let val = qjs::JS_GetProperty(ctx, js_result, atom);
-            qjs::JS_SetProperty(ctx, exports_obj, atom, val);
-        }
-        qjs::JS_FreePropertyEnum(ctx, keys, len);
-        qjs::JS_FreeValue(ctx, js_result);
-    }
+    Ok(unsafe { qjs::JS_DupValue(ctx_ptr.as_ptr(), exports_obj) })
 }
 
 /// Rust entry for `process.dlopen(module, filename[, flags])`.
+/// Returns the final `module.exports` value (caller must install it on the module).
 pub fn process_dlopen(
     ctx_ptr: NonNull<JSContext>,
     module_exports: JSValue,
     filename: &str,
     _flags: u32,
-) -> Result<(), String> {
+) -> Result<JSValue, String> {
     dlopen_impl(ctx_ptr, module_exports, filename)
 }

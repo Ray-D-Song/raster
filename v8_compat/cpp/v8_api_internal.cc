@@ -8,15 +8,6 @@
 
 namespace {
 
-struct PersistentSlot {
-  uint64_t root_id = 0;
-  bool is_weak = false;
-};
-
-std::unordered_map<uintptr_t*, PersistentSlot> g_persistents;
-std::unordered_map<uintptr_t, uint64_t> g_layout_to_root;
-std::unordered_map<uintptr_t, uint32_t> g_layout_to_function_id;
-
 raster_v8::shim::ObjectLayout* layout_for_globalize_address(uintptr_t address) {
   if (raster_v8::g_last_materialized_layout != nullptr) {
     return raster_v8::g_last_materialized_layout;
@@ -33,6 +24,14 @@ raster_v8::shim::ObjectLayout* layout_for_globalize_address(uintptr_t address) {
   return nullptr;
 }
 
+raster_v8::IsolateImpl* current_iso_impl() {
+  auto* isolate = raster_v8_current_isolate();
+  if (!isolate) {
+    return nullptr;
+  }
+  return raster_v8::iso_impl(isolate);
+}
+
 }  // namespace
 
 namespace v8 {
@@ -41,7 +40,8 @@ namespace api_internal {
 uintptr_t* GlobalizeReference(internal::Isolate* i_isolate, uintptr_t address) {
   (void)i_isolate;
   const RasterV8BridgeV1* b = raster_v8_bridge();
-  if (!b || !b->root_dup) {
+  auto* isolate = current_iso_impl();
+  if (!b || !isolate) {
     return nullptr;
   }
   auto* layout = layout_for_globalize_address(address);
@@ -49,20 +49,17 @@ uintptr_t* GlobalizeReference(internal::Isolate* i_isolate, uintptr_t address) {
     return nullptr;
   }
   uint64_t root_id = layout->contents.root_id;
-  uint64_t dup = 0;
-  if (b->root_dup(root_id, &dup) != RASTER_V8_OK) {
+  if (root_id == 0) {
     return nullptr;
   }
-  layout->contents.root_id = dup;
-  g_layout_to_root[reinterpret_cast<uintptr_t>(layout)] = dup;
   auto* persistent = new raster_v8::shim::ObjectLayout(
-      const_cast<raster_v8::shim::Map*>(&raster_v8::shim::Map::object_map()), dup);
+      const_cast<raster_v8::shim::Map*>(&raster_v8::shim::Map::object_map()), root_id);
   persistent->function_id = layout->function_id;
   if (persistent->function_id != 0) {
-    g_layout_to_function_id[reinterpret_cast<uintptr_t>(persistent)] = persistent->function_id;
+    isolate->layout_to_function_id[reinterpret_cast<uintptr_t>(persistent)] = persistent->function_id;
   }
   auto* cell = new uintptr_t(reinterpret_cast<uintptr_t>(persistent));
-  g_persistents[cell] = PersistentSlot{dup, false};
+  isolate->persistents[cell] = raster_v8::PersistentSlot{root_id, false};
   raster_v8::g_last_materialized_layout = nullptr;
   return cell;
 }
@@ -72,13 +69,17 @@ void DisposeGlobal(uintptr_t* location) {
     return;
   }
   const RasterV8BridgeV1* b = raster_v8_bridge();
-  auto it = g_persistents.find(location);
-  if (it != g_persistents.end()) {
+  auto* isolate = current_iso_impl();
+  if (!isolate) {
+    return;
+  }
+  auto it = isolate->persistents.find(location);
+  if (it != isolate->persistents.end()) {
     if (b && b->root_drop && it->second.root_id != 0) {
       b->root_drop(it->second.root_id);
     }
     delete reinterpret_cast<raster_v8::shim::ObjectLayout*>(*location);
-    g_persistents.erase(it);
+    isolate->persistents.erase(it);
   }
   delete location;
 }
@@ -92,20 +93,31 @@ void MakeWeak(uintptr_t* location,
     return;
   }
   const RasterV8BridgeV1* b = raster_v8_bridge();
-  auto it = g_persistents.find(location);
-  if (it == g_persistents.end() || !b) {
+  auto* isolate = current_iso_impl();
+  if (!isolate) {
     return;
+  }
+  auto it = isolate->persistents.find(location);
+  if (it == isolate->persistents.end() || !b) {
+    return;
+  }
+  void* object_ptr = nullptr;
+  if (it->second.root_id != 0) {
+    raster_v8_object_ptr_for_root(raster_v8::bridge_ctx(), it->second.root_id, &object_ptr);
   }
   if (b->register_weak_callback) {
     b->register_weak_callback(
         raster_v8::bridge_ctx(),
         it->second.root_id,
         parameter,
-        reinterpret_cast<void (*)(const void*, int)>(callback));
+        reinterpret_cast<void*>(callback));
   }
-  if (b->root_drop) {
+  if (b->root_make_weak) {
+    b->root_make_weak(it->second.root_id);
+  } else if (b->root_drop) {
     b->root_drop(it->second.root_id);
   }
+  it->second.weak_object_ptr = reinterpret_cast<uintptr_t>(object_ptr);
   it->second.is_weak = true;
   it->second.root_id = 0;
 }
@@ -115,8 +127,27 @@ void* ClearWeak(internal::Address* location) {
     return nullptr;
   }
   auto* slot = reinterpret_cast<uintptr_t*>(location);
-  auto it = g_persistents.find(slot);
-  if (it != g_persistents.end()) {
+  auto* isolate = current_iso_impl();
+  if (!isolate) {
+    return nullptr;
+  }
+  auto it = isolate->persistents.find(slot);
+  if (it == isolate->persistents.end()) {
+    return nullptr;
+  }
+  if (it->second.is_weak) {
+    if (it->second.weak_object_ptr != 0) {
+      void* object_ptr = reinterpret_cast<void*>(it->second.weak_object_ptr);
+      raster_v8_unregister_weak_for_object_ptr(raster_v8::bridge_ctx(), object_ptr);
+      uint64_t new_root = 0;
+      if (raster_v8_root_restrong_from_object_ptr(raster_v8::bridge_ctx(), object_ptr, &new_root) ==
+          RASTER_V8_OK) {
+        it->second.root_id = new_root;
+        auto* layout = reinterpret_cast<raster_v8::shim::ObjectLayout*>(*slot);
+        layout->contents.root_id = new_root;
+      }
+      it->second.weak_object_ptr = 0;
+    }
     it->second.is_weak = false;
   }
   return nullptr;
@@ -125,18 +156,30 @@ void* ClearWeak(internal::Address* location) {
 }  // namespace api_internal
 }  // namespace v8
 
+extern "C" void raster_v8_dispose_all_persistents(void) {
+  auto* isolate = current_iso_impl();
+  if (!isolate) {
+    return;
+  }
+  raster_v8::dispose_isolate_persistents(isolate);
+}
+
 extern "C" RasterV8Status raster_v8_root_id_for_persistent_layout(void* layout,
                                                                  uint64_t* out_root_id) {
   if (!layout || !out_root_id) {
     return RASTER_V8_ERROR;
   }
+  auto* isolate = current_iso_impl();
+  if (!isolate) {
+    return RASTER_V8_ERROR;
+  }
   auto addr = reinterpret_cast<uintptr_t>(layout);
-  if (auto it = g_layout_to_root.find(addr); it != g_layout_to_root.end()) {
+  if (auto it = isolate->layout_to_root.find(addr); it != isolate->layout_to_root.end()) {
     *out_root_id = it->second;
     return RASTER_V8_OK;
   }
   auto* object_layout = reinterpret_cast<raster_v8::shim::ObjectLayout*>(layout);
-  for (const auto& [cell, slot] : g_persistents) {
+  for (const auto& [cell, slot] : isolate->persistents) {
     if (slot.root_id == 0) {
       continue;
     }
@@ -153,22 +196,34 @@ extern "C" void raster_v8_register_layout_root(void* layout, uint64_t root_id) {
   if (!layout || root_id == 0) {
     return;
   }
-  g_layout_to_root[reinterpret_cast<uintptr_t>(layout)] = root_id;
+  auto* isolate = current_iso_impl();
+  if (!isolate) {
+    return;
+  }
+  isolate->layout_to_root[reinterpret_cast<uintptr_t>(layout)] = root_id;
 }
 
 extern "C" void raster_v8_register_layout_function_id(void* layout, uint32_t function_id) {
   if (!layout || function_id == 0) {
     return;
   }
-  g_layout_to_function_id[reinterpret_cast<uintptr_t>(layout)] = function_id;
+  auto* isolate = current_iso_impl();
+  if (!isolate) {
+    return;
+  }
+  isolate->layout_to_function_id[reinterpret_cast<uintptr_t>(layout)] = function_id;
 }
 
 extern "C" RasterV8Status raster_v8_function_id_for_layout(void* layout, uint32_t* out_function_id) {
   if (!layout || !out_function_id) {
     return RASTER_V8_ERROR;
   }
-  auto it = g_layout_to_function_id.find(reinterpret_cast<uintptr_t>(layout));
-  if (it == g_layout_to_function_id.end()) {
+  auto* isolate = current_iso_impl();
+  if (!isolate) {
+    return RASTER_V8_ERROR;
+  }
+  auto it = isolate->layout_to_function_id.find(reinterpret_cast<uintptr_t>(layout));
+  if (it == isolate->layout_to_function_id.end()) {
     return RASTER_V8_ERROR;
   }
   *out_function_id = it->second;

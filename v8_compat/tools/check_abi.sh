@@ -5,7 +5,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 TOOLS="$ROOT/v8_compat/tools"
 GEN_HDR="$ROOT/v8_compat/cpp/include/abi_137_generated.h"
-LAYOUT_HDR="$ROOT/v8_compat/cpp/include/v8_abi_layout.h"
 
 node_include() {
   if [[ -n "${RASTER_NODE24_INCLUDE:-}" ]]; then
@@ -39,9 +38,6 @@ build_probe() {
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-build_probe "$TOOLS/layout_probe.cc" "$TMP/layout_probe"
-LAYOUT_OUT="$("$TMP/layout_probe")"
-
 expect_layout() {
   local name="$1"
   local want="$2"
@@ -53,9 +49,19 @@ expect_layout() {
   fi
 }
 
+build_probe "$TOOLS/layout_probe.cc" "$TMP/layout_probe"
+LAYOUT_OUT="$("$TMP/layout_probe")"
+
 expect_layout kIsolateHandleScopeDataOffset 560
 expect_layout kIsolateRootsOffset 640
 expect_layout kHandleScopeDataSize 24
+
+HANDLE_SCOPE_SIZE="$(echo "$LAYOUT_OUT" | sed -n 's/^sizeof(HandleScope)=//p')"
+ESCAPABLE_SIZE="$(echo "$LAYOUT_OUT" | sed -n 's/^sizeof(EscapableHandleScope)=//p')"
+if [[ -z "$HANDLE_SCOPE_SIZE" || -z "$ESCAPABLE_SIZE" || "$ESCAPABLE_SIZE" -lt "$HANDLE_SCOPE_SIZE" ]]; then
+  echo "ABI drift: EscapableHandleScope=$ESCAPABLE_SIZE HandleScope=$HANDLE_SCOPE_SIZE" >&2
+  exit 1
+fi
 
 build_probe "$TOOLS/abi-generator.cc" "$TMP/abi-generator"
 ABI_JSON="$("$TMP/abi-generator")"

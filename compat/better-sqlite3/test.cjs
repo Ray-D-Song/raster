@@ -78,4 +78,9 @@ assert(
 fileDb.close();
 fs.unlinkSync(dbPath);
 
+// Exit without explicit close: environment cleanup hooks should release native handles.
+const implicit = new Database(":memory:");
+implicit.exec("CREATE TABLE implicit_kv (k TEXT PRIMARY KEY, v TEXT NOT NULL)");
+implicit.prepare("INSERT INTO implicit_kv (k, v) VALUES (?, ?)").run("k", "v");
+
 console.log("better-sqlite3 compat OK");

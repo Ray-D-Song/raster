@@ -100,6 +100,17 @@ impl Env {
         }
     }
 
+    pub fn ensure_external_class(&mut self) -> rquickjs::qjs::JSClassID {
+        let rt = unsafe { qjs::JS_GetRuntime(self.ctx_ptr()) };
+        if self.external_class_acquired {
+            return crate::external::class_id_for_runtime(rt)
+                .expect("external class missing after acquire");
+        }
+        let class_id = crate::external::acquire_external_class_for_env(rt);
+        self.external_class_acquired = true;
+        class_id
+    }
+
     pub fn set_pending_exception(&mut self, value: JSValue) {
         let ctx = self.ctx_ptr();
         unsafe {
@@ -149,7 +160,10 @@ impl Env {
             unsafe { hook(arg) };
         }
         if let Some((finalize, hint)) = self.instance_finalize.take() {
-            let data = self.instance_data.remove(&0).unwrap_or(std::ptr::null_mut());
+            let data = self
+                .instance_data
+                .remove(&0)
+                .unwrap_or(std::ptr::null_mut());
             if let Some(cb) = finalize {
                 unsafe { cb(self.as_napi_env(), data, hint) };
             }

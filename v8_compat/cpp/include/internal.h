@@ -6,6 +6,7 @@
 #include "v8_abi_layout.h"
 
 #include <node.h>
+#include <unordered_map>
 #include <v8-internal.h>
 #include <vector>
 
@@ -52,6 +53,12 @@ struct OddballValue {
   shim::ObjectLayout layout;
 };
 
+struct PersistentSlot {
+  uint64_t root_id = 0;
+  bool is_weak = false;
+  uintptr_t weak_object_ptr = 0;
+};
+
 // Layout-compatible fake v8::Isolate for Node 24 / ABI 137.
 struct IsolateImpl {
   void* hook0 = nullptr;
@@ -67,6 +74,9 @@ struct IsolateImpl {
   OddballValue true_value;
   OddballValue false_value;
   OddballValue empty_string;
+  std::unordered_map<uintptr_t*, PersistentSlot> persistents;
+  std::unordered_map<uintptr_t, uint64_t> layout_to_root;
+  std::unordered_map<uintptr_t, uint32_t> layout_to_function_id;
 };
 
 static_assert(offsetof(IsolateImpl, handle_scope_data) == abi137::kIsolateHandleScopeDataOffset);
@@ -80,6 +90,7 @@ struct HandleArena {
 
 struct HandleScopeFrame {
   size_t watermark = 0;
+  uintptr_t escape_slot = 0;
 };
 
 struct ContextImpl {
@@ -87,6 +98,7 @@ struct ContextImpl {
   std::vector<HandleScopeFrame> scopes;
   uint64_t context_root_id = 0;
   uint64_t oddball_roots[abi137::kRootSlotCount] {};
+  std::unordered_map<uintptr_t, uint64_t> repr_to_root;
 };
 
 std::vector<node::node_module*>& pending_v8_modules();
@@ -104,12 +116,14 @@ void rewind_handle_arena(RasterV8ContextState* ctx, size_t watermark);
 uintptr_t local_from_root(RasterV8ContextState* ctx, uint64_t root_id, const shim::Map* map);
 uint64_t root_from_local(uintptr_t tagged);
 
-void register_handle_repr(uintptr_t repr, uint64_t root_id);
+void register_handle_repr(RasterV8ContextState* ctx, uintptr_t repr, uint64_t root_id);
+void unregister_handle_repr(RasterV8ContextState* ctx, uintptr_t repr);
 uint64_t resolve_root_from_repr(RasterV8ContextState* ctx, uintptr_t repr);
 
 void init_isolate_roots(IsolateImpl* isolate);
 int oddball_root_index(IsolateImpl* isolate, const shim::ObjectLayout* layout);
 HandleScopeData* handle_scope_data(IsolateImpl* isolate);
+void dispose_isolate_persistents(IsolateImpl* isolate);
 
 RasterV8Status dispatch_v8_callback(uint32_t function_id,
                                     uint64_t receiver_root,

@@ -10,6 +10,11 @@ void AddEnvironmentCleanupHook(v8::Isolate* isolate, void (*fun)(void*), void* a
                                  reinterpret_cast<void (*)(void*)>(fun), arg);
 }
 
+void RemoveEnvironmentCleanupHook(v8::Isolate* isolate, void (*fun)(void*), void* arg) {
+  raster_v8_remove_env_cleanup_hook(reinterpret_cast<RasterV8IsolateState*>(isolate),
+                                    reinterpret_cast<void (*)(void*)>(fun), arg);
+}
+
 namespace Buffer {
 
 bool HasInstance(v8::Local<v8::Value> val) {
@@ -33,15 +38,19 @@ v8::MaybeLocal<v8::Object> New(v8::Isolate* isolate,
                                  size_t length,
                                  void (*callback)(char*, void*),
                                  void* hint) {
-  (void)callback;
-  (void)hint;
   auto* ctx = raster_v8::bridge_ctx();
   if (!ctx) {
     return v8::MaybeLocal<v8::Object>();
   }
   uint64_t root = 0;
-  if (raster_v8_buffer_new_copy(ctx, reinterpret_cast<const uint8_t*>(data), length, &root) !=
-      RASTER_V8_OK) {
+  if (callback != nullptr) {
+    auto* external_cb = reinterpret_cast<void (*)(uint8_t*, void*)>(callback);
+    if (raster_v8_buffer_new_external(ctx, reinterpret_cast<uint8_t*>(data), length, external_cb,
+                                      hint, &root) != RASTER_V8_OK) {
+      return v8::MaybeLocal<v8::Object>();
+    }
+  } else if (raster_v8_buffer_new_copy(ctx, reinterpret_cast<const uint8_t*>(data), length,
+                                        &root) != RASTER_V8_OK) {
     return v8::MaybeLocal<v8::Object>();
   }
   return raster_v8::local_from_root<v8::Object>(isolate, root, &raster_v8::shim::Map::object_map());

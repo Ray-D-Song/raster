@@ -14,6 +14,8 @@ Run `make compat-next`, `make compat-vite-plus`, `make compat-better-sqlite3`, `
 
 **Local `make compat`:** V8 fixtures pin **Node 24.3.0** for ABI 137 (`nvm use 24.3.0`). **Next** and **vite-plus** install steps expect **Node 22.18.0** (CI default) or **≥24.11.0** per upstream engine fields; with only 24.3.0 active, `yarn install` in `compat/vite-plus` may fail on engine checks. **vite-plus** build under Raster still requires `node:readline` (not yet implemented) — see Vite+ row above.
 
+**V8 C++ shim platform support:** Linux (x64, arm64) and macOS (Apple Silicon and Intel) are tested in CI. **Windows is not supported** for `v8-compat` — the C++ shim is Unix-only (`build.rs` links a static archive; no `rstr.dll` proxy path). Use WSL or a Linux/macOS host for V8-native addons (`better-sqlite3`, `v8-hello`).
+
 ABI constants for the V8 shim are pinned to **Node 24.3.0 / NODE_MODULE_VERSION 137** (not `refs/node`, which tracks a newer Node). Run `make check-v8-abi` locally after header changes; CI runs the same check on pull requests.
 
 ## Next (standalone runtime)
@@ -57,6 +59,12 @@ Diagnostics land in `compat/better-sqlite3/compat.log` (Node baseline and Raster
 2. **Node baseline** (30s): `node test.cjs` — must exit `0` and print `v8-hello compat OK`.
 3. **Raster run** (60s): build Raster with `cargo build --features v8-compat`, then run `$RASTER_RUNTIME test.cjs` — same marker.
 
+`test.cjs` exercises:
+
+- `node::Buffer::Copy` / `Data` / `Length`
+- External `Buffer::New` with finalizer callback
+- `Persistent::SetWeak` + `ClearWeak` (weak callback must not run after clear)
+
 Diagnostics land in `compat/v8-hello/compat.log`.
 
 ## napi-hello (N-API addon)
@@ -78,6 +86,6 @@ Diagnostics land in `compat/napi-hello/compat.log`.
 
 ## Failures and CI
 
-Failures are compatibility results. The workflow is non-blocking (`continue-on-error: true`) until a CI baseline is recorded, then should become a required check.
+Failures block merges. The workflow runs `better-sqlite3` and `v8-hello` on Ubuntu and macOS with Node 24.3.0.
 
 When a child exits `0` but produces no expected artifact (or HTTP checks fail), `compat/run.mjs` fails with an explicit diagnosis (see `compat/*/compat.log`). On CI failure, `compat.log` and `.next` / `dist` are uploaded as artifacts.

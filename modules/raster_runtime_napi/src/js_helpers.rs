@@ -47,12 +47,7 @@ pub unsafe fn value_to_atom(ctx: *mut JSContext, val: JSValue) -> qjs::JSAtom {
     qjs::JS_ValueToAtom(ctx, val)
 }
 
-pub unsafe fn set_property(
-    ctx: *mut JSContext,
-    obj: JSValue,
-    key: JSValue,
-    val: JSValue,
-) -> i32 {
+pub unsafe fn set_property(ctx: *mut JSContext, obj: JSValue, key: JSValue, val: JSValue) -> i32 {
     let atom = value_to_atom(ctx, key);
     let ret = qjs::JS_SetProperty(ctx, obj, atom, val);
     qjs::JS_FreeAtom(ctx, atom);
@@ -94,13 +89,7 @@ pub unsafe fn define_hidden_usize_configurable(
 ) -> bool {
     let id_val = new_int64(id as i64);
     let atom = qjs::JS_NewAtom(ctx, key);
-    let ret = qjs::JS_DefinePropertyValue(
-        ctx,
-        obj,
-        atom,
-        id_val,
-        qjs::JS_PROP_CONFIGURABLE as i32,
-    );
+    let ret = qjs::JS_DefinePropertyValue(ctx, obj, atom, id_val, qjs::JS_PROP_CONFIGURABLE as i32);
     qjs::JS_FreeAtom(ctx, atom);
     ret > 0
 }
@@ -134,7 +123,9 @@ pub unsafe fn read_hidden_usize(
     Some(id as usize)
 }
 
-pub fn napi_to_js_typedarray_type(type_: crate::types::napi_typedarray_type) -> qjs::JSTypedArrayEnum {
+pub fn napi_to_js_typedarray_type(
+    type_: crate::types::napi_typedarray_type,
+) -> qjs::JSTypedArrayEnum {
     use crate::types::napi_typedarray_type::*;
     match type_ {
         napi_int8_array => qjs::JSTypedArrayEnum_JS_TYPED_ARRAY_INT8,

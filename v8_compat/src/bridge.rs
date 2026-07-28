@@ -1,10 +1,8 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::ffi::CString;
 use std::mem;
 use std::os::raw::{c_char, c_int, c_void};
 use std::panic::{catch_unwind, AssertUnwindSafe, UnwindSafe};
-use std::ptr;
 use std::sync::OnceLock;
 
 use rquickjs::qjs::{self, JSContext, JSValue};
@@ -36,21 +34,17 @@ pub struct RasterV8IsolateState {
 
 type RootDupFn = unsafe extern "C" fn(u64, *mut u64) -> RasterV8Status;
 type RootDropFn = unsafe extern "C" fn(u64) -> RasterV8Status;
+type RootMakeWeakFn = unsafe extern "C" fn(u64) -> RasterV8Status;
 type RootFromJsFn =
     unsafe extern "C" fn(*mut RasterV8ContextState, u64, *mut u64) -> RasterV8Status;
-type RootToJsFn =
-    unsafe extern "C" fn(*mut RasterV8ContextState, u64, *mut u64) -> RasterV8Status;
-type ThrowTypeErrorFn = unsafe extern "C" fn(*mut RasterV8ContextState, *const c_char) -> RasterV8Status;
+type RootToJsFn = unsafe extern "C" fn(*mut RasterV8ContextState, u64, *mut u64) -> RasterV8Status;
+type ThrowTypeErrorFn =
+    unsafe extern "C" fn(*mut RasterV8ContextState, *const c_char) -> RasterV8Status;
 type FatalFn = unsafe extern "C" fn(*const c_char, *const c_char);
 type StringNewUtf8Fn =
     unsafe extern "C" fn(*mut RasterV8ContextState, *const c_char, i32, *mut u64) -> RasterV8Status;
 type ObjectNewFn = unsafe extern "C" fn(*mut RasterV8ContextState, *mut u64) -> RasterV8Status;
-type ObjectSetFn = unsafe extern "C" fn(
-    *mut RasterV8ContextState,
-    u64,
-    u64,
-    u64,
-) -> RasterV8Status;
+type ObjectSetFn = unsafe extern "C" fn(*mut RasterV8ContextState, u64, u64, u64) -> RasterV8Status;
 type FunctionTemplateNewFn = unsafe extern "C" fn(
     *mut RasterV8ContextState,
     u32,
@@ -76,7 +70,8 @@ type RunModuleInitFn = unsafe extern "C" fn(
     u64,
     *mut u64,
 ) -> RasterV8Status;
-type ObjectGetFn = unsafe extern "C" fn(*mut RasterV8ContextState, u64, u64, *mut u64) -> RasterV8Status;
+type ObjectGetFn =
+    unsafe extern "C" fn(*mut RasterV8ContextState, u64, u64, *mut u64) -> RasterV8Status;
 type ObjectGetIndexFn =
     unsafe extern "C" fn(*mut RasterV8ContextState, u64, u32, *mut u64) -> RasterV8Status;
 type ObjectSetIndexFn =
@@ -96,7 +91,8 @@ type ObjectGetPrototypeFn =
 type ArrayNewFn = unsafe extern "C" fn(*mut RasterV8ContextState, i32, *mut u64) -> RasterV8Status;
 type NumberNewFn = unsafe extern "C" fn(*mut RasterV8ContextState, f64, *mut u64) -> RasterV8Status;
 type BigIntNewFn = unsafe extern "C" fn(*mut RasterV8ContextState, i64, *mut u64) -> RasterV8Status;
-type IntegerNewFn = unsafe extern "C" fn(*mut RasterV8ContextState, i32, *mut u64) -> RasterV8Status;
+type IntegerNewFn =
+    unsafe extern "C" fn(*mut RasterV8ContextState, i32, *mut u64) -> RasterV8Status;
 type StringNewLatin1Fn =
     unsafe extern "C" fn(*mut RasterV8ContextState, *const u8, i32, *mut u64) -> RasterV8Status;
 type StringToUtf8Fn = unsafe extern "C" fn(
@@ -105,7 +101,8 @@ type StringToUtf8Fn = unsafe extern "C" fn(
     *mut *mut c_char,
     *mut usize,
 ) -> RasterV8Status;
-type StringFreeUtf8Fn = unsafe extern "C" fn(*mut RasterV8ContextState, *mut c_char) -> RasterV8Status;
+type StringFreeUtf8Fn =
+    unsafe extern "C" fn(*mut RasterV8ContextState, *mut c_char) -> RasterV8Status;
 type FunctionCallFn = unsafe extern "C" fn(
     *mut RasterV8ContextState,
     u64,
@@ -117,10 +114,17 @@ type FunctionCallFn = unsafe extern "C" fn(
 type ThrowValueFn = unsafe extern "C" fn(*mut RasterV8ContextState, u64) -> RasterV8Status;
 type NewExceptionFn =
     unsafe extern "C" fn(*mut RasterV8ContextState, u64, i32, *mut u64) -> RasterV8Status;
-type ExternalNewFn = unsafe extern "C" fn(*mut RasterV8ContextState, *mut std::ffi::c_void, *mut u64)
-    -> RasterV8Status;
-type InternalFieldSetFn =
-    unsafe extern "C" fn(*mut RasterV8ContextState, u64, i32, *mut std::ffi::c_void) -> RasterV8Status;
+type ExternalNewFn = unsafe extern "C" fn(
+    *mut RasterV8ContextState,
+    *mut std::ffi::c_void,
+    *mut u64,
+) -> RasterV8Status;
+type InternalFieldSetFn = unsafe extern "C" fn(
+    *mut RasterV8ContextState,
+    u64,
+    i32,
+    *mut std::ffi::c_void,
+) -> RasterV8Status;
 type InternalFieldGetFn = unsafe extern "C" fn(
     *mut RasterV8ContextState,
     u64,
@@ -134,7 +138,7 @@ type RegisterWeakCallbackFn = unsafe extern "C" fn(
     *mut RasterV8ContextState,
     u64,
     *mut std::ffi::c_void,
-    Option<unsafe extern "C" fn(*const std::ffi::c_void, i32)>,
+    *mut std::ffi::c_void,
 ) -> RasterV8Status;
 type GetContextRootFn = unsafe extern "C" fn(*mut RasterV8ContextState, *mut u64) -> RasterV8Status;
 
@@ -144,6 +148,7 @@ pub struct RasterV8BridgeV1 {
     pub node_module_version: u32,
     pub root_dup: Option<RootDupFn>,
     pub root_drop: Option<RootDropFn>,
+    pub root_make_weak: Option<RootMakeWeakFn>,
     pub root_from_js: Option<RootFromJsFn>,
     pub root_to_js: Option<RootToJsFn>,
     pub throw_type_error: Option<ThrowTypeErrorFn>,
@@ -187,25 +192,118 @@ unsafe impl<T> Sync for SendPtr<T> {}
 pub struct BridgeState {
     pub roots: RootTable,
     ctx: SendPtr<JSContext>,
+    weak_holds: HashMap<usize, JSValue>,
+    function_roots: HashMap<u32, u64>,
+    root_function_ids: HashMap<u64, u32>,
 }
 
 impl BridgeState {
     pub(crate) fn ctx_ptr(&self) -> *mut JSContext {
         self.ctx.0
     }
+
+    pub(crate) fn new(roots: RootTable, ctx: *mut JSContext) -> Self {
+        Self {
+            roots,
+            ctx: SendPtr(ctx),
+            weak_holds: HashMap::new(),
+            function_roots: HashMap::new(),
+            root_function_ids: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn insert_weak_hold(&mut self, key: usize, value: JSValue) {
+        self.weak_holds.insert(key, value);
+    }
+
+    pub(crate) fn take_weak_hold(&mut self, key: usize) -> Option<JSValue> {
+        self.weak_holds.remove(&key)
+    }
+
+    pub(crate) fn weak_hold_keys(&self) -> Vec<usize> {
+        self.weak_holds.keys().copied().collect()
+    }
+
+    pub(crate) fn drain_weak_holds(&mut self, ctx: *mut JSContext) {
+        crate::js_ops::process_weak_holds_for_ctx(self);
+        crate::js_ops::dispatch_pending_weak_callbacks_for_ctx(ctx);
+        for (_, value) in self.weak_holds.drain() {
+            unsafe { qjs::JS_FreeValue(ctx, value) };
+        }
+    }
 }
 
 thread_local! {
-    static BRIDGE_STATE: RefCell<Option<BridgeState>> = const { RefCell::new(None) };
+    static BRIDGE_STATES: RefCell<HashMap<usize, BridgeState>> = RefCell::new(HashMap::new());
+    static ACTIVE_BRIDGE_CTX: RefCell<Option<usize>> = const { RefCell::new(None) };
+}
+
+fn ctx_key(ctx: *mut JSContext) -> usize {
+    ctx as usize
+}
+
+pub fn set_active_bridge_context(ctx: *mut JSContext) {
+    ACTIVE_BRIDGE_CTX.with(|cell| *cell.borrow_mut() = Some(ctx_key(ctx)));
+}
+
+pub fn clear_active_bridge_context() {
+    ACTIVE_BRIDGE_CTX.with(|cell| *cell.borrow_mut() = None);
+}
+
+fn active_ctx_key() -> usize {
+    ACTIVE_BRIDGE_CTX.with(|cell| {
+        if let Some(key) = *cell.borrow() {
+            return key;
+        }
+        BRIDGE_STATES.with(|states| {
+            states
+                .borrow()
+                .keys()
+                .next()
+                .copied()
+                .expect("active bridge context not set")
+        })
+    })
+}
+
+pub(crate) fn with_state_ref_for_ctx<F, R>(ctx: *mut JSContext, f: F) -> R
+where
+    F: FnOnce(&BridgeState) -> R,
+{
+    let key = ctx_key(ctx);
+    BRIDGE_STATES.with(|cell| {
+        let guard = cell.borrow();
+        let state = guard
+            .get(&key)
+            .expect("v8 bridge not initialized for context");
+        f(state)
+    })
+}
+
+pub(crate) fn with_state_for_ctx<F, R>(ctx: *mut JSContext, f: F) -> R
+where
+    F: FnOnce(&mut BridgeState) -> R,
+{
+    let key = ctx_key(ctx);
+    BRIDGE_STATES.with(|cell| {
+        let mut guard = cell.borrow_mut();
+        let state = guard
+            .get_mut(&key)
+            .expect("v8 bridge not initialized for context");
+        f(state)
+    })
 }
 
 pub(crate) fn with_state<F, R>(f: F) -> R
 where
     F: FnOnce(&mut BridgeState) -> R,
 {
-    BRIDGE_STATE.with(|cell| {
+    let key = active_ctx_key();
+    BRIDGE_STATES.with(|cell| {
         let mut guard = cell.borrow_mut();
-        let state = guard.as_mut().expect("v8 bridge not initialized");
+        let state = guard
+            .get_mut(&key)
+            .expect("v8 bridge not initialized for context");
         f(state)
     })
 }
@@ -214,9 +312,12 @@ pub(crate) fn with_state_ref<F, R>(f: F) -> R
 where
     F: FnOnce(&BridgeState) -> R,
 {
-    BRIDGE_STATE.with(|cell| {
+    let key = active_ctx_key();
+    BRIDGE_STATES.with(|cell| {
         let guard = cell.borrow();
-        let state = guard.as_ref().expect("v8 bridge not initialized");
+        let state = guard
+            .get(&key)
+            .expect("v8 bridge not initialized for context");
         f(state)
     })
 }
@@ -241,9 +342,9 @@ pub(crate) fn resolve_constructor_root(
             return Some((func_root, func));
         }
     }
-    let function_id = ROOT_FUNCTION_IDS.with(|handles| handles.borrow().get(&func_root).copied());
+    let function_id = state.root_function_ids.get(&func_root).copied();
     if let Some(function_id) = function_id {
-        let cached_root = FUNCTION_ROOTS.with(|handles| handles.borrow().get(&function_id).copied());
+        let cached_root = state.function_roots.get(&function_id).copied();
         if let Some(root) = cached_root {
             if let Some(func) = state.roots.get(root) {
                 if unsafe { rquickjs::qjs::JS_IsConstructor(ctx, func) } {
@@ -255,12 +356,16 @@ pub(crate) fn resolve_constructor_root(
     None
 }
 
-pub(crate) fn function_root_for_id(function_id: u32) -> Option<u64> {
-    FUNCTION_ROOTS.with(|handles| handles.borrow().get(&function_id).copied())
+pub(crate) fn function_root_for_id(state: &BridgeState, function_id: u32) -> Option<u64> {
+    state
+        .function_roots
+        .get(&function_id)
+        .copied()
+        .filter(|&root| state.roots.get(root).is_some())
 }
 
-pub(crate) fn function_id_for_root(root: u64) -> Option<u32> {
-    ROOT_FUNCTION_IDS.with(|handles| handles.borrow().get(&root).copied())
+pub(crate) fn function_id_for_root(state: &BridgeState, root: u64) -> Option<u32> {
+    state.root_function_ids.get(&root).copied()
 }
 
 #[no_mangle]
@@ -272,7 +377,7 @@ pub unsafe extern "C" fn raster_v8_function_id_for_root(
     if out_function_id.is_null() {
         return RasterV8Status::Error;
     }
-    if let Some(function_id) = function_id_for_root(root_id) {
+    if let Some(function_id) = with_state_ref(|state| function_id_for_root(state, root_id)) {
         *out_function_id = function_id;
         RasterV8Status::Ok
     } else {
@@ -289,7 +394,7 @@ pub unsafe extern "C" fn raster_v8_function_root_for_id(
     if out_root_id.is_null() {
         return RasterV8Status::Error;
     }
-    if let Some(root) = function_root_for_id(function_id) {
+    if let Some(root) = with_state_ref(|state| function_root_for_id(state, function_id)) {
         *out_root_id = root;
         RasterV8Status::Ok
     } else {
@@ -302,23 +407,16 @@ unsafe extern "C" fn root_dup(id: u64, out: *mut u64) -> RasterV8Status {
         if out.is_null() {
             return RasterV8Status::Error;
         }
-        with_state(|state| {
-            match state.roots.dup(state.ctx_ptr(), id) {
-                Some(new_id) => {
-                    ROOT_FUNCTION_IDS.with(|handles| {
-                        let mut map = handles.borrow_mut();
-                        if let Some(function_id) = map.remove(&id) {
-                            map.insert(new_id, function_id);
-                            FUNCTION_ROOTS.with(|fr| {
-                                fr.borrow_mut().insert(function_id, new_id);
-                            });
-                        }
-                    });
-                    *out = new_id;
-                    RasterV8Status::Ok
+        with_state(|state| match state.roots.dup(state.ctx_ptr(), id) {
+            Some(new_id) => {
+                if let Some(&function_id) = state.root_function_ids.get(&id) {
+                    state.root_function_ids.insert(new_id, function_id);
+                    state.function_roots.insert(function_id, new_id);
                 }
-                None => RasterV8Status::Error,
-            }
+                *out = new_id;
+                RasterV8Status::Ok
+            },
+            None => RasterV8Status::Error,
         })
     }))
 }
@@ -326,9 +424,18 @@ unsafe extern "C" fn root_dup(id: u64, out: *mut u64) -> RasterV8Status {
 unsafe extern "C" fn root_drop(id: u64) -> RasterV8Status {
     catch_panic(AssertUnwindSafe(|| {
         with_state(|state| {
+            if let Some(function_id) = state.root_function_ids.remove(&id) {
+                state.function_roots.remove(&function_id);
+            }
             state.roots.drop_root(state.ctx_ptr(), id);
             RasterV8Status::Ok
         })
+    }))
+}
+
+unsafe extern "C" fn root_make_weak(id: u64) -> RasterV8Status {
+    catch_panic(AssertUnwindSafe(|| {
+        with_state(|state| crate::js_ops::root_make_weak(state, id))
     }))
 }
 
@@ -353,7 +460,9 @@ unsafe extern "C" fn string_new_utf8(
                 bytes.as_ptr() as *const c_char,
                 bytes.len() as u64,
             );
-            *out = state.roots.insert(state.ctx_ptr(), js);
+            *out = state.roots.insert_owned(unsafe {
+                crate::owned_js_value::OwnedJsValue::new(state.ctx_ptr(), js)
+            });
             RasterV8Status::Ok
         })
     }))
@@ -366,7 +475,9 @@ unsafe extern "C" fn object_new(_ctx: *mut RasterV8ContextState, out: *mut u64) 
         }
         with_state(|state| {
             let obj = crate::js_ops::new_v8_object(state.ctx_ptr());
-            *out = state.roots.insert(state.ctx_ptr(), obj);
+            *out = state.roots.insert_owned(unsafe {
+                crate::owned_js_value::OwnedJsValue::new(state.ctx_ptr(), obj)
+            });
             RasterV8Status::Ok
         })
     }))
@@ -393,7 +504,12 @@ unsafe extern "C" fn object_set(
             if atom == 0 {
                 return RasterV8Status::Error;
             }
-            let rc = qjs::JS_SetProperty(state.ctx_ptr(), obj, atom, qjs::JS_DupValue(state.ctx_ptr(), val));
+            let rc = qjs::JS_SetProperty(
+                state.ctx_ptr(),
+                obj,
+                atom,
+                qjs::JS_DupValue(state.ctx_ptr(), val),
+            );
             qjs::JS_FreeAtom(state.ctx_ptr(), atom);
             if rc < 0 {
                 return RasterV8Status::Exception;
@@ -412,14 +528,20 @@ unsafe extern "C" fn throw_type_error(
             let msg = if message.is_null() {
                 "V8 ABI error"
             } else {
-                std::ffi::CStr::from_ptr(message).to_str().unwrap_or("V8 ABI error")
+                std::ffi::CStr::from_ptr(message)
+                    .to_str()
+                    .unwrap_or("V8 ABI error")
             };
             let err = qjs::JS_NewError(state.ctx_ptr());
             qjs::JS_SetPropertyStr(
                 state.ctx_ptr(),
                 err,
                 c"message".as_ptr(),
-                qjs::JS_NewStringLen(state.ctx_ptr(), msg.as_ptr() as *const c_char, msg.len() as u64),
+                qjs::JS_NewStringLen(
+                    state.ctx_ptr(),
+                    msg.as_ptr() as *const c_char,
+                    msg.len() as u64,
+                ),
             );
             qjs::JS_Throw(state.ctx_ptr(), err);
             RasterV8Status::Exception
@@ -436,7 +558,9 @@ unsafe extern "C" fn fatal(api: *const c_char, message: *const c_char) {
     let message = if message.is_null() {
         "fatal ABI violation"
     } else {
-        std::ffi::CStr::from_ptr(message).to_str().unwrap_or("fatal ABI violation")
+        std::ffi::CStr::from_ptr(message)
+            .to_str()
+            .unwrap_or("fatal ABI violation")
     };
     panic!("V8 ABI fatal in {api}: {message}");
 }
@@ -455,14 +579,9 @@ unsafe extern "C" fn unsupported_template_new(
     RasterV8Status::Unsupported
 }
 
-thread_local! {
-    static FUNCTION_ROOTS: RefCell<HashMap<u32, u64>> = RefCell::new(HashMap::new());
-    static ROOT_FUNCTION_IDS: RefCell<HashMap<u64, u32>> = RefCell::new(HashMap::new());
-}
-
 unsafe fn make_v8_constructor_from_id(
     ctx: *mut JSContext,
-    state: &BridgeState,
+    state: &mut BridgeState,
     function_id: u32,
 ) -> (JSValue, u64) {
     let func = qjs::JS_NewCFunction2(
@@ -474,9 +593,9 @@ unsafe fn make_v8_constructor_from_id(
         function_id as i32,
     );
     qjs::JS_SetConstructorBit(ctx, func, true);
-    let root = state.roots.insert(ctx, func);
-    FUNCTION_ROOTS.with(|handles| handles.borrow_mut().insert(function_id, root));
-    ROOT_FUNCTION_IDS.with(|handles| handles.borrow_mut().insert(root, function_id));
+    let root = state.roots.insert_borrowed(ctx, func);
+    state.function_roots.insert(function_id, root);
+    state.root_function_ids.insert(root, function_id);
     (func, root)
 }
 
@@ -492,7 +611,7 @@ unsafe extern "C" fn v8_js_method_magic(
 
 unsafe fn make_v8_method_from_id(
     ctx: *mut JSContext,
-    state: &BridgeState,
+    state: &mut BridgeState,
     function_id: u32,
 ) -> (JSValue, u64) {
     let func = qjs::JS_NewCFunction2(
@@ -503,9 +622,9 @@ unsafe fn make_v8_method_from_id(
         qjs::JSCFunctionEnum_JS_CFUNC_generic_magic,
         function_id as i32,
     );
-    let root = state.roots.insert(ctx, func);
-    FUNCTION_ROOTS.with(|handles| handles.borrow_mut().insert(function_id, root));
-    ROOT_FUNCTION_IDS.with(|handles| handles.borrow_mut().insert(root, function_id));
+    let root = state.roots.insert_borrowed(ctx, func);
+    state.function_roots.insert(function_id, root);
+    state.root_function_ids.insert(root, function_id);
     (func, root)
 }
 
@@ -534,12 +653,10 @@ unsafe extern "C" fn v8_accessor_getter(
         raster_v8_set_current_context(context_state as *mut RasterV8ContextState);
         raster_v8_set_current_isolate(isolate as *mut RasterV8IsolateState);
     }
+    set_active_bridge_context(ctx);
     let accessor_id = magic as u32;
-    let receiver_root = BRIDGE_STATE.with(|cell| {
-        let guard = cell.borrow();
-        let state = guard.as_ref().expect("v8 bridge not initialized");
-        state.roots.insert(ctx, qjs::JS_DupValue(ctx, this_val))
-    });
+    let receiver_root =
+        with_state_ref_for_ctx(ctx, |state| state.roots.insert_borrowed(ctx, this_val));
     let embedder = crate::js_ops::embedder_ptr_for_object(ctx, this_val, receiver_root, 0);
     let _embedder_scope = crate::js_ops::EmbedderScopeGuard::enter();
     if embedder != 0 {
@@ -554,26 +671,20 @@ unsafe extern "C" fn v8_accessor_getter(
             &mut result_root,
         )
     };
-    BRIDGE_STATE.with(|cell| {
-        let guard = cell.borrow();
-        let state = guard.as_ref().expect("v8 bridge not initialized");
+    with_state_ref_for_ctx(ctx, |state| {
         state.roots.drop_root(ctx, receiver_root);
     });
     if status != RasterV8Status::Ok || result_root == 0 {
         return qjs::JS_UNDEFINED;
     }
-    let result = BRIDGE_STATE.with(|cell| {
-        let guard = cell.borrow();
-        let state = guard.as_ref().expect("v8 bridge not initialized");
+    let result = with_state_ref_for_ctx(ctx, |state| {
         state
             .roots
             .get(result_root)
             .map(|v| unsafe { qjs::JS_DupValue(ctx, v) })
             .unwrap_or(qjs::JS_UNDEFINED)
     });
-    BRIDGE_STATE.with(|cell| {
-        let guard = cell.borrow();
-        let state = guard.as_ref().expect("v8 bridge not initialized");
+    with_state_ref_for_ctx(ctx, |state| {
         state.roots.drop_root(ctx, result_root);
     });
     result
@@ -581,7 +692,7 @@ unsafe extern "C" fn v8_accessor_getter(
 
 unsafe fn install_function_prototype(
     ctx: *mut JSContext,
-    state: &BridgeState,
+    state: &mut BridgeState,
     template_id: u32,
     func: JSValue,
 ) {
@@ -644,7 +755,7 @@ unsafe fn install_function_prototype(
             }
         }
     }
-    let proto_root = state.roots.insert(ctx, unsafe { qjs::JS_DupValue(ctx, proto) });
+    let proto_root = state.roots.insert_borrowed(ctx, proto);
     unsafe {
         raster_v8_set_function_template_prototype_root(template_id, proto_root);
     }
@@ -662,17 +773,13 @@ unsafe extern "C" fn function_template_get_function(
         }
         with_state(|state| {
             let ctx = state.ctx_ptr();
-            let cached_root = FUNCTION_ROOTS.with(|handles| {
-                handles
-                    .borrow()
-                    .get(&function_id)
-                    .copied()
-                    .filter(|&root| state.roots.get(root).is_some())
-            });
+            let cached_root = state
+                .function_roots
+                .get(&function_id)
+                .copied()
+                .filter(|&root| state.roots.get(root).is_some());
             let root = if let Some(root) = cached_root {
-                ROOT_FUNCTION_IDS.with(|handles| {
-                    handles.borrow_mut().insert(root, function_id);
-                });
+                state.root_function_ids.insert(root, function_id);
                 root
             } else {
                 let (func, root) = make_v8_constructor_from_id(ctx, state, function_id);
@@ -756,26 +863,23 @@ unsafe fn v8_js_trampoline_inner(
         raster_v8_set_current_context(context_state as *mut RasterV8ContextState);
         raster_v8_set_current_isolate(isolate as *mut RasterV8IsolateState);
     }
+    set_active_bridge_context(ctx);
 
     let function_id = magic as u32;
     // QuickJS passes `undefined` for ordinary calls on JS_CFUNC_constructor_or_func_magic.
     // For C function constructors it passes new_target (= the ctor function) as `this`.
-    let is_construct = use_constructor_semantics
-        && unsafe { !qjs::JS_IsUndefined(this_val) };
+    let is_construct = use_constructor_semantics && unsafe { !qjs::JS_IsUndefined(this_val) };
 
     let (receiver_root, new_target_root, instance_val) = if is_construct {
         let template_id = unsafe { raster_v8_function_template_id(function_id) };
         let field_count = unsafe { raster_v8_instance_internal_field_count(template_id) };
-        let ctor_is_new_target =
-            unsafe { qjs::JS_IsFunction(ctx, this_val) };
+        let ctor_is_new_target = unsafe { qjs::JS_IsFunction(ctx, this_val) };
         let proto = if ctor_is_new_target {
-            let installed = BRIDGE_STATE.with(|cell| {
-                let guard = cell.borrow();
-                let state = guard.as_ref().expect("v8 bridge not initialized");
+            let installed = with_state_ref_for_ctx(ctx, |state| {
                 let proto_root = unsafe { raster_v8_function_template_prototype_root(template_id) };
                 proto_root
                     .ne(&0)
-                    .then(|| proto_root)
+                    .then_some(proto_root)
                     .and_then(|proto_root| state.roots.get(proto_root))
                     .map(|v| unsafe { qjs::JS_DupValue(ctx, v) })
             });
@@ -783,12 +887,13 @@ unsafe fn v8_js_trampoline_inner(
                 qjs::JS_GetPropertyStr(ctx, this_val, c"prototype".as_ptr())
             })
         } else {
-            BRIDGE_STATE.with(|cell| {
-                let guard = cell.borrow();
-                let state = guard.as_ref().expect("v8 bridge not initialized");
+            with_state_ref_for_ctx(ctx, |state| {
                 let proto_root = unsafe { raster_v8_function_template_prototype_root(template_id) };
                 if proto_root != 0 {
-                    state.roots.get(proto_root).map(|v| unsafe { qjs::JS_DupValue(ctx, v) })
+                    state
+                        .roots
+                        .get(proto_root)
+                        .map(|v| unsafe { qjs::JS_DupValue(ctx, v) })
                 } else {
                     None
                 }
@@ -797,24 +902,20 @@ unsafe fn v8_js_trampoline_inner(
         };
         let instance = unsafe {
             if ctor_is_new_target {
-                let obj = if qjs::JS_IsUndefined(proto) {
+                if qjs::JS_IsUndefined(proto) {
                     new_v8_object(ctx)
                 } else {
                     let obj = qjs::JS_NewObject(ctx);
                     qjs::JS_SetPrototype(ctx, obj, proto);
                     qjs::JS_FreeValue(ctx, proto);
                     obj
-                };
-                obj
+                }
             } else {
                 qjs::JS_DupValue(ctx, this_val)
             }
         };
-        let receiver_root = BRIDGE_STATE.with(|cell| {
-            let guard = cell.borrow();
-            let state = guard.as_ref().expect("v8 bridge not initialized");
-            state.roots.insert(ctx, qjs::JS_DupValue(ctx, instance))
-        });
+        let receiver_root =
+            with_state_ref_for_ctx(ctx, |state| state.roots.insert_borrowed(ctx, instance));
         if field_count > 0 {
             unsafe {
                 raster_v8_object_reserve_internal_fields(
@@ -824,40 +925,33 @@ unsafe fn v8_js_trampoline_inner(
                 );
             }
         }
-        let new_target_root = BRIDGE_STATE.with(|cell| {
-            let guard = cell.borrow();
-            let state = guard.as_ref().expect("v8 bridge not initialized");
+        let new_target_root = with_state_ref_for_ctx(ctx, |state| {
             if ctor_is_new_target {
-                state.roots.insert(ctx, qjs::JS_DupValue(ctx, this_val))
+                state.roots.insert_borrowed(ctx, this_val)
             } else {
-                function_root_for_id(function_id)
+                function_root_for_id(state, function_id)
                     .and_then(|root| state.roots.get(root))
-                    .map(|func| state.roots.insert(ctx, qjs::JS_DupValue(ctx, func)))
+                    .map(|func| state.roots.insert_borrowed(ctx, func))
                     .unwrap_or(0)
             }
         });
         (receiver_root, new_target_root, Some(instance))
     } else {
-        let receiver_root = BRIDGE_STATE.with(|cell| {
-            let guard = cell.borrow();
-            let state = guard.as_ref().expect("v8 bridge not initialized");
-            state.roots.insert(ctx, qjs::JS_DupValue(ctx, this_val))
-        });
+        let receiver_root =
+            with_state_ref_for_ctx(ctx, |state| state.roots.insert_borrowed(ctx, this_val));
         (receiver_root, 0, None)
     };
 
     let mut arg_roots = Vec::with_capacity(argc.max(0) as usize);
     if !argv.is_null() && argc > 0 {
         let slice = std::slice::from_raw_parts(argv, argc as usize);
-        BRIDGE_STATE.with(|cell| {
-            let guard = cell.borrow();
-            let state = guard.as_ref().expect("v8 bridge not initialized");
+        with_state_ref_for_ctx(ctx, |state| {
             for &arg in slice {
-                arg_roots.push(state.roots.insert(ctx, qjs::JS_DupValue(ctx, arg)));
+                arg_roots.push(state.roots.insert_borrowed(ctx, arg));
             }
         });
     }
-    let embedder_patch = None;
+    let embedder_patch = None::<usize>;
     let _embedder_scope = crate::js_ops::EmbedderScopeGuard::enter();
     let mut result_root = 0u64;
     let status = unsafe {
@@ -870,13 +964,9 @@ unsafe fn v8_js_trampoline_inner(
             &mut result_root,
         )
     };
-    if let Some(saved) = embedder_patch {
-        unsafe { crate::js_ops::restore_js_object_embedder_slot(this_val, saved) };
-    }
+    let _ = embedder_patch;
     if status == RasterV8Status::Exception || unsafe { qjs::JS_HasException(ctx) } {
-        BRIDGE_STATE.with(|cell| {
-            let guard = cell.borrow();
-            let state = guard.as_ref().expect("v8 bridge not initialized");
+        with_state_ref_for_ctx(ctx, |state| {
             state.roots.drop_root(ctx, receiver_root);
             if new_target_root != 0 {
                 state.roots.drop_root(ctx, new_target_root);
@@ -894,9 +984,7 @@ unsafe fn v8_js_trampoline_inner(
         return qjs::JS_UNDEFINED;
     }
     if let Some(instance) = instance_val {
-        BRIDGE_STATE.with(|cell| {
-            let guard = cell.borrow();
-            let state = guard.as_ref().expect("v8 bridge not initialized");
+        with_state_ref_for_ctx(ctx, |state| {
             state.roots.drop_root(ctx, receiver_root);
             if new_target_root != 0 {
                 state.roots.drop_root(ctx, new_target_root);
@@ -906,18 +994,14 @@ unsafe fn v8_js_trampoline_inner(
             }
         });
         if result_root != 0 && result_root != receiver_root {
-            BRIDGE_STATE.with(|cell| {
-                let guard = cell.borrow();
-                let state = guard.as_ref().expect("v8 bridge not initialized");
+            with_state_ref_for_ctx(ctx, |state| {
                 state.roots.drop_root(ctx, result_root);
             });
         }
         return instance;
     }
     if result_root != 0 && result_root != receiver_root {
-        BRIDGE_STATE.with(|cell| {
-            let guard = cell.borrow();
-            let state = guard.as_ref().expect("v8 bridge not initialized");
+        with_state_ref_for_ctx(ctx, |state| {
             state.roots.drop_root(ctx, receiver_root);
             if new_target_root != 0 {
                 state.roots.drop_root(ctx, new_target_root);
@@ -926,35 +1010,27 @@ unsafe fn v8_js_trampoline_inner(
                 state.roots.drop_root(ctx, id);
             }
         });
-        let result = BRIDGE_STATE.with(|cell| {
-            let guard = cell.borrow();
-            let state = guard.as_ref().expect("v8 bridge not initialized");
+        let result = with_state_ref_for_ctx(ctx, |state| {
             state
                 .roots
                 .get(result_root)
                 .map(|v| unsafe { qjs::JS_DupValue(ctx, v) })
                 .unwrap_or(qjs::JS_UNDEFINED)
         });
-        BRIDGE_STATE.with(|cell| {
-            let guard = cell.borrow();
-            let state = guard.as_ref().expect("v8 bridge not initialized");
+        with_state_ref_for_ctx(ctx, |state| {
             state.roots.drop_root(ctx, result_root);
         });
         return result;
     }
     if result_root != 0 && result_root == receiver_root {
-        let result = BRIDGE_STATE.with(|cell| {
-            let guard = cell.borrow();
-            let state = guard.as_ref().expect("v8 bridge not initialized");
+        let result = with_state_ref_for_ctx(ctx, |state| {
             state
                 .roots
                 .get(receiver_root)
                 .map(|v| unsafe { qjs::JS_DupValue(ctx, v) })
                 .unwrap_or(qjs::JS_UNDEFINED)
         });
-        BRIDGE_STATE.with(|cell| {
-            let guard = cell.borrow();
-            let state = guard.as_ref().expect("v8 bridge not initialized");
+        with_state_ref_for_ctx(ctx, |state| {
             state.roots.drop_root(ctx, receiver_root);
             if new_target_root != 0 {
                 state.roots.drop_root(ctx, new_target_root);
@@ -965,9 +1041,7 @@ unsafe fn v8_js_trampoline_inner(
         });
         return result;
     }
-    BRIDGE_STATE.with(|cell| {
-        let guard = cell.borrow();
-        let state = guard.as_ref().expect("v8 bridge not initialized");
+    with_state_ref_for_ctx(ctx, |state| {
         state.roots.drop_root(ctx, receiver_root);
         if new_target_root != 0 {
             state.roots.drop_root(ctx, new_target_root);
@@ -977,18 +1051,14 @@ unsafe fn v8_js_trampoline_inner(
         }
     });
     if result_root != 0 {
-        let result = BRIDGE_STATE.with(|cell| {
-            let guard = cell.borrow();
-            let state = guard.as_ref().expect("v8 bridge not initialized");
+        let result = with_state_ref_for_ctx(ctx, |state| {
             state
                 .roots
                 .get(result_root)
                 .map(|v| unsafe { qjs::JS_DupValue(ctx, v) })
                 .unwrap_or(qjs::JS_UNDEFINED)
         });
-        BRIDGE_STATE.with(|cell| {
-            let guard = cell.borrow();
-            let state = guard.as_ref().expect("v8 bridge not initialized");
+        with_state_ref_for_ctx(ctx, |state| {
             state.roots.drop_root(ctx, result_root);
         });
         return result;
@@ -1063,19 +1133,21 @@ pub fn ensure_shim_linked() {
 
 pub fn bind_bridge(ctx: *mut JSContext) {
     ensure_shim_linked();
-    BRIDGE_STATE.with(|cell| {
-        *cell.borrow_mut() = Some(BridgeState {
-            roots: RootTable::new(),
-            ctx: SendPtr(ctx),
-        });
+    let key = ctx_key(ctx);
+    BRIDGE_STATES.with(|cell| {
+        cell.borrow_mut()
+            .entry(key)
+            .or_insert_with(|| BridgeState::new(RootTable::new(), ctx));
     });
+    set_active_bridge_context(ctx);
 
     let bridge = BRIDGE_VTABLE.get_or_init(|| RasterV8BridgeV1 {
         version: 1,
         node_module_version: NODE_MODULE_VERSION as u32,
         root_dup: Some(root_dup),
         root_drop: Some(root_drop),
-        root_from_js: None,
+        root_make_weak: Some(root_make_weak),
+        root_from_js: Some(crate::js_ops::root_from_js_value),
         root_to_js: None,
         throw_type_error: Some(throw_type_error),
         fatal: Some(fatal),
@@ -1117,34 +1189,64 @@ pub fn bind_bridge(ctx: *mut JSContext) {
     }
 }
 
-/// Release rooted JS values before the QuickJS runtime is torn down.
-pub fn prepare_shutdown(ctx: *mut JSContext) {
-    FUNCTION_ROOTS.with(|handles| {
-        let ids: Vec<u64> = handles.borrow().values().copied().collect();
-        BRIDGE_STATE.with(|cell| {
-            if let Some(state) = cell.borrow_mut().as_mut() {
-                for id in ids {
-                    state.roots.drop_root(state.ctx_ptr(), id);
-                }
-            }
-        });
-        handles.borrow_mut().clear();
+/// Release rooted JS values and bridge state for a single QuickJS context.
+///
+/// # Safety
+///
+/// `ctx` must be a valid `JSContext` pointer associated with the V8 compat
+/// bridge on the current thread, and must only be torn down once.
+pub(crate) unsafe fn shutdown_bridge_for_context(ctx: *mut JSContext) {
+    let key = ctx_key(ctx);
+    let has_bridge = BRIDGE_STATES.with(|cell| cell.borrow().contains_key(&key));
+    if !has_bridge {
+        return;
+    }
+    let rt = unsafe { qjs::JS_GetRuntime(ctx) };
+    let _rt_key = rt as usize;
+    if let Some(context_state) = crate::module_loader::context_state_ptr_for_ctx(ctx) {
+        crate::runtime_state::run_cleanup_hooks(context_state);
+    }
+
+    with_state_for_ctx(ctx, |state| {
+        for id in state.function_roots.values().copied() {
+            state.roots.drop_root(state.ctx_ptr(), id);
+        }
+        state.function_roots.clear();
+        state.root_function_ids.clear();
+        state.drain_weak_holds(ctx);
     });
     crate::js_ops::prepare_shutdown(ctx);
-    BRIDGE_STATE.with(|cell| {
-        if let Some(mut state) = cell.borrow_mut().take() {
+    BRIDGE_STATES.with(|cell| {
+        if let Some(state) = cell.borrow_mut().remove(&key) {
             state.roots.clear(ctx);
         }
     });
+    ACTIVE_BRIDGE_CTX.with(|cell| {
+        if *cell.borrow() == Some(key) {
+            *cell.borrow_mut() = None;
+        }
+    });
+}
+
+/// Backward-compatible alias for per-context bridge teardown.
+///
+/// # Safety
+///
+/// Same as [`shutdown_bridge_for_context`].
+pub unsafe fn prepare_shutdown(ctx: *mut JSContext) {
+    unsafe { shutdown_bridge_for_context(ctx) };
 }
 
 pub fn with_bridge_roots<F, R>(f: F) -> R
 where
     F: FnOnce(*mut JSContext, &RootTable) -> R,
 {
-    BRIDGE_STATE.with(|cell| {
+    let key = active_ctx_key();
+    BRIDGE_STATES.with(|cell| {
         let guard = cell.borrow();
-        let state = guard.as_ref().expect("v8 bridge not initialized");
+        let state = guard
+            .get(&key)
+            .expect("v8 bridge not initialized for context");
         f(state.ctx_ptr(), &state.roots)
     })
 }

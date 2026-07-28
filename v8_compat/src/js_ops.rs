@@ -7,15 +7,15 @@ use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use rquickjs::qjs::{self, JSContext, JSValue, JS_MKVAL, JS_TAG_INT};
 
-use crate::bridge::{with_state, RasterV8Status};
+use crate::bridge::{with_state, with_state_for_ctx, RasterV8Status};
 
 fn new_int32(_ctx: *mut JSContext, val: i32) -> JSValue {
-    unsafe { JS_MKVAL(JS_TAG_INT, val) }
+    JS_MKVAL(JS_TAG_INT, val)
 }
 
 thread_local! {
     static EMBEDDER_SCOPE_DEPTH: Cell<u32> = const { Cell::new(0) };
-    static EMBEDDER_FIELD0_STACK: RefCell<Vec<usize>> = RefCell::new(Vec::new());
+    static EMBEDDER_FIELD0_STACK: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
 }
 
 pub(crate) fn clear_embedder_field0_stack() {
@@ -75,21 +75,72 @@ impl Drop for EmbedderScopeGuard {
 static V8_OBJECT_CLASS: Lazy<Mutex<HashMap<usize, qjs::JSClassID>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-static INTERNAL_FIELDS: Lazy<Mutex<HashMap<usize, Vec<usize>>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+use crate::context_tables::{self, WeakPass, WeakPhase, WeakSlot};
 
-static INTERNAL_FIELDS_BY_ROOT: Lazy<Mutex<HashMap<u64, Vec<usize>>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+extern "C" {
+    fn raster_v8_invoke_weak_callback_first_pass(
+        callback: *mut c_void,
+        parameter: *mut c_void,
+        out_second_pass: *mut *mut c_void,
+    ) -> i32;
+    fn raster_v8_invoke_weak_callback_second_pass(callback: *mut c_void, parameter: *mut c_void);
+}
 
-static OBJECT_FIELD_COUNTS: Lazy<Mutex<HashMap<usize, usize>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+pub(crate) fn dispatch_pending_weak_callbacks_for_ctx(ctx: *mut JSContext) {
+    loop {
+        let pending = context_tables::take_pending_weak_callbacks(ctx);
+        if pending.is_empty() {
+            break;
+        }
+        let mut deferred_second = Vec::new();
+        for item in pending {
+            match item.pass {
+                WeakPass::Second => unsafe {
+                    raster_v8_invoke_weak_callback_second_pass(
+                        item.callback as *mut c_void,
+                        item.parameter as *mut c_void,
+                    );
+                },
+                WeakPass::First => {
+                    let mut second_pass: *mut c_void = std::ptr::null_mut();
+                    let needs_second = unsafe {
+                        raster_v8_invoke_weak_callback_first_pass(
+                            item.callback as *mut c_void,
+                            item.parameter as *mut c_void,
+                            &mut second_pass,
+                        )
+                    } != 0;
+                    if needs_second && !second_pass.is_null() {
+                        deferred_second.push(context_tables::PendingWeak {
+                            callback: second_pass as usize,
+                            parameter: item.parameter,
+                            object_key: item.object_key,
+                            pass: WeakPass::Second,
+                        });
+                    }
+                },
+            }
+        }
+        for item in deferred_second {
+            unsafe {
+                raster_v8_invoke_weak_callback_second_pass(
+                    item.callback as *mut c_void,
+                    item.parameter as *mut c_void,
+                );
+            }
+        }
+    }
+}
 
-static WEAK_CALLBACKS: Lazy<Mutex<HashMap<usize, WeakSlot>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+pub fn dispatch_pending_weak_callbacks() {
+    with_state(|state| {
+        dispatch_pending_weak_callbacks_for_ctx(state.ctx_ptr());
+    });
+}
 
-#[repr(C)]
-pub struct WeakSlot {
-    pub callback: Option<unsafe extern "C" fn(*const c_void, c_int)>,
-    pub parameter: usize,
+#[no_mangle]
+pub extern "C" fn raster_v8_dispatch_pending_weak_callbacks() {
+    dispatch_pending_weak_callbacks();
 }
 
 fn object_ptr_key(obj: JSValue) -> Option<usize> {
@@ -99,22 +150,25 @@ fn object_ptr_key(obj: JSValue) -> Option<usize> {
     Some(unsafe { qjs::JS_VALUE_GET_PTR(obj) as usize })
 }
 
-#[cfg(target_pointer_width = "64")]
-const V8_EMBEDDER_SLOT_OFFSET: usize = 32;
-#[cfg(not(target_pointer_width = "64"))]
-const V8_EMBEDDER_SLOT_OFFSET: usize = 16;
-
-fn internal_field_ptr_for_object(obj: JSValue, index: usize) -> Option<usize> {
+fn internal_field_ptr_for_object(
+    tables: &context_tables::ContextJsTables,
+    obj: JSValue,
+    index: usize,
+) -> Option<usize> {
     let key = object_ptr_key(obj)?;
-    INTERNAL_FIELDS
-        .lock()
+    tables
+        .internal_fields
         .get(&key)
         .and_then(|fields| fields.get(index).copied())
 }
 
-fn internal_field_ptr_for_root(root_id: u64, index: usize) -> Option<usize> {
-    INTERNAL_FIELDS_BY_ROOT
-        .lock()
+fn internal_field_ptr_for_root(
+    tables: &context_tables::ContextJsTables,
+    root_id: u64,
+    index: usize,
+) -> Option<usize> {
+    tables
+        .internal_fields_by_root
         .get(&root_id)
         .and_then(|fields| fields.get(index).copied())
 }
@@ -125,91 +179,44 @@ pub(crate) fn embedder_ptr_for_object(
     root_id: u64,
     index: usize,
 ) -> usize {
-    if let Some(ptr) = internal_field_ptr_for_object(obj, index) {
-        return ptr;
-    }
-    if let Some(ptr) = internal_field_ptr_for_root(root_id, index) {
-        return ptr;
-    }
-    if index == 0 && unsafe { qjs::JS_IsObject(obj) } {
-        let class_id = ensure_v8_object_class(ctx);
-        let opaque = unsafe { qjs::JS_GetOpaque(obj, class_id) as usize };
-        if opaque != 0 {
-            return opaque;
+    context_tables::with_context_tables(ctx, |tables| {
+        if let Some(ptr) = internal_field_ptr_for_object(tables, obj, index) {
+            return ptr;
         }
-        let base = unsafe { qjs::JS_VALUE_GET_PTR(obj) as *mut u8 };
-        let slot = unsafe { *(base.add(V8_EMBEDDER_SLOT_OFFSET) as *const usize) };
-        if slot != 0 {
-            return slot;
+        if let Some(ptr) = internal_field_ptr_for_root(tables, root_id, index) {
+            return ptr;
         }
-    }
-    0
-}
-
-fn object_is_raster_v8_class(ctx: *mut JSContext, obj: JSValue) -> bool {
-    let class_id = ensure_v8_object_class(ctx);
-    unsafe { qjs::JS_GetClassID(obj) == class_id }
-}
-
-pub(crate) unsafe fn patch_js_object_embedder_slot_for_root(
-    ctx: *mut JSContext,
-    obj: JSValue,
-    root_id: u64,
-    index: usize,
-) -> Option<usize> {
-    if unsafe { !qjs::JS_IsObject(obj) } || !object_is_raster_v8_class(ctx, obj) {
-        return None;
-    }
-    let class_id = ensure_v8_object_class(ctx);
-    let mut embedder = unsafe { qjs::JS_GetOpaque(obj, class_id) as usize };
-    if embedder == 0 {
-        embedder = internal_field_ptr_for_root(root_id, index)
-            .or_else(|| internal_field_ptr_for_object(obj, index))
-            .unwrap_or(0);
-    }
-    if embedder == 0 {
-        return None;
-    }
-    let base = unsafe { qjs::JS_VALUE_GET_PTR(obj) as *mut u8 };
-    let slot = unsafe {
-        base.add(V8_EMBEDDER_SLOT_OFFSET) as *mut usize
-    };
-    let saved = unsafe { *slot };
-    unsafe { *slot = embedder };
-    Some(saved)
-}
-
-pub(crate) unsafe fn patch_js_object_embedder_slot(
-    ctx: *mut JSContext,
-    obj: JSValue,
-    index: usize,
-) -> Option<usize> {
-    if unsafe { !qjs::JS_IsObject(obj) } || !object_is_raster_v8_class(ctx, obj) {
-        return None;
-    }
-    let embedder = internal_field_ptr_for_object(obj, index)?;
-    let base = unsafe { qjs::JS_VALUE_GET_PTR(obj) as *mut u8 };
-    let slot = unsafe {
-        base.add(V8_EMBEDDER_SLOT_OFFSET) as *mut usize
-    };
-    let saved = unsafe { *slot };
-    unsafe { *slot = embedder };
-    Some(saved)
-}
-
-pub(crate) unsafe fn restore_js_object_embedder_slot(obj: JSValue, saved: usize) {
-    if unsafe { !qjs::JS_IsObject(obj) } {
-        return;
-    }
-    let base = unsafe { qjs::JS_VALUE_GET_PTR(obj) as *mut u8 };
-    let slot = unsafe {
-        base.add(V8_EMBEDDER_SLOT_OFFSET) as *mut usize
-    };
-    unsafe { *slot = saved };
+        if index == 0 && unsafe { qjs::JS_IsObject(obj) } {
+            let class_id = ensure_v8_object_class(ctx);
+            let opaque = unsafe { qjs::JS_GetOpaque(obj, class_id) as usize };
+            if opaque != 0 {
+                return opaque;
+            }
+        }
+        0
+    })
 }
 
 fn root_id_for_ptr(state: &crate::bridge::BridgeState, ptr: usize) -> Option<u64> {
     state.roots.find_id_by_ptr(ptr)
+}
+
+pub unsafe extern "C" fn root_from_js_value(
+    _ctx: *mut crate::bridge::RasterV8ContextState,
+    js_value_tag: u64,
+    out: *mut u64,
+) -> RasterV8Status {
+    if out.is_null() || js_value_tag == 0 {
+        return RasterV8Status::Error;
+    }
+    with_state(|state| {
+        let ptr = js_value_tag as usize;
+        if let Some(id) = root_id_for_ptr(state, ptr) {
+            *out = id;
+            return RasterV8Status::Ok;
+        }
+        root_restrong_from_object_ptr(_ctx, ptr as *mut c_void, out)
+    })
 }
 
 pub unsafe extern "C" fn root_id_for_js_object(
@@ -228,6 +235,106 @@ pub unsafe extern "C" fn root_id_for_js_object(
         *out = id;
         RasterV8Status::Ok
     })
+}
+
+pub unsafe extern "C" fn object_ptr_for_root(
+    _ctx: *mut crate::bridge::RasterV8ContextState,
+    root: u64,
+    out: *mut *mut c_void,
+) -> RasterV8Status {
+    if out.is_null() {
+        return RasterV8Status::Error;
+    }
+    with_state(|state| {
+        let Some(obj) = state.roots.get(root) else {
+            return RasterV8Status::Error;
+        };
+        let Some(key) = object_ptr_key(obj) else {
+            return RasterV8Status::Error;
+        };
+        *out = key as *mut c_void;
+        RasterV8Status::Ok
+    })
+}
+
+pub unsafe extern "C" fn root_restrong_from_object_ptr(
+    _ctx: *mut crate::bridge::RasterV8ContextState,
+    object_ptr: *mut c_void,
+    out: *mut u64,
+) -> RasterV8Status {
+    if out.is_null() || object_ptr.is_null() {
+        return RasterV8Status::Error;
+    }
+    with_state(|state| {
+        let ctx = state.ctx_ptr();
+        let ptr = object_ptr as usize;
+        if let Some(id) = root_id_for_ptr(state, ptr) {
+            *out = id;
+            return RasterV8Status::Ok;
+        }
+        if let Some(value) = state.take_weak_hold(ptr) {
+            *out = state
+                .roots
+                .insert_owned(unsafe { crate::owned_js_value::OwnedJsValue::new(ctx, value) });
+            return RasterV8Status::Ok;
+        }
+        let tagged = qjs::JS_MKPTR(qjs::JS_TAG_OBJECT, object_ptr);
+        if !qjs::JS_IsObject(tagged) {
+            return RasterV8Status::Error;
+        }
+        let dup = qjs::JS_DupValue(ctx, tagged);
+        if qjs::JS_IsException(dup) {
+            return RasterV8Status::Exception;
+        }
+        *out = state
+            .roots
+            .insert_owned(unsafe { crate::owned_js_value::OwnedJsValue::new(ctx, dup) });
+        RasterV8Status::Ok
+    })
+}
+
+pub fn root_make_weak(state: &mut crate::bridge::BridgeState, id: u64) -> RasterV8Status {
+    let ctx = state.ctx_ptr();
+    let Some(value) = state.roots.detach_root(id) else {
+        return RasterV8Status::Error;
+    };
+    let Some(key) = object_ptr_key(value) else {
+        unsafe { qjs::JS_FreeValue(ctx, value) };
+        return RasterV8Status::Ok;
+    };
+    state.insert_weak_hold(key, value);
+    RasterV8Status::Ok
+}
+
+pub(crate) fn process_weak_holds_for_ctx(state: &mut crate::bridge::BridgeState) {
+    let ctx = state.ctx_ptr();
+    let keys = state.weak_hold_keys();
+    for key in keys {
+        if root_id_for_ptr(state, key).is_some() {
+            continue;
+        }
+        let has_weak = context_tables::with_context_tables(ctx, |tables| {
+            tables.weak_callbacks.contains_key(&key)
+        });
+        if !has_weak {
+            continue;
+        }
+        if let Some(value) = state.take_weak_hold(key) {
+            unsafe { qjs::JS_FreeValue(ctx, value) };
+        }
+    }
+}
+
+pub unsafe extern "C" fn unregister_weak_for_object_ptr(
+    _ctx: *mut crate::bridge::RasterV8ContextState,
+    object_ptr: *mut c_void,
+) {
+    if object_ptr.is_null() {
+        return;
+    }
+    with_state(|state| {
+        context_tables::unregister_weak_callback(state.ctx_ptr(), object_ptr as usize);
+    });
 }
 
 pub(crate) fn ensure_v8_object_class(ctx: *mut JSContext) -> qjs::JSClassID {
@@ -253,15 +360,9 @@ pub(crate) fn ensure_v8_object_class(ctx: *mut JSContext) -> qjs::JSClassID {
     class_id
 }
 
-unsafe extern "C" fn v8_object_finalizer(_rt: *mut qjs::JSRuntime, val: JSValue) {
+unsafe extern "C" fn v8_object_finalizer(rt: *mut qjs::JSRuntime, val: JSValue) {
     if let Some(key) = object_ptr_key(val) {
-        INTERNAL_FIELDS.lock().remove(&key);
-        OBJECT_FIELD_COUNTS.lock().remove(&key);
-        if let Some(slot) = WEAK_CALLBACKS.lock().remove(&key) {
-            if let Some(cb) = slot.callback {
-                cb(slot.parameter as *const c_void, 0);
-            }
-        }
+        context_tables::remove_object_records(rt, key);
     }
 }
 
@@ -271,7 +372,12 @@ pub fn new_v8_object(ctx: *mut JSContext) -> JSValue {
 }
 
 fn value_from_root(ctx: *mut JSContext, root: u64) -> Option<JSValue> {
-    with_state(|state| state.roots.get(root).map(|v| unsafe { qjs::JS_DupValue(ctx, v) }))
+    with_state(|state| {
+        state
+            .roots
+            .get(root)
+            .map(|v| unsafe { qjs::JS_DupValue(ctx, v) })
+    })
 }
 
 fn atom_from_key(ctx: *mut JSContext, key: JSValue) -> Option<qjs::JSAtom> {
@@ -307,7 +413,9 @@ pub unsafe extern "C" fn object_get(
         if qjs::JS_IsException(val) {
             return RasterV8Status::Exception;
         }
-        *out = state.roots.insert(state.ctx_ptr(), val);
+        *out = state.roots.insert_owned(unsafe {
+            crate::owned_js_value::OwnedJsValue::new(state.ctx_ptr(), val)
+        });
         RasterV8Status::Ok
     })
 }
@@ -329,7 +437,9 @@ pub unsafe extern "C" fn object_get_index(
         if qjs::JS_IsException(val) {
             return RasterV8Status::Exception;
         }
-        *out = state.roots.insert(state.ctx_ptr(), val);
+        *out = state.roots.insert_owned(unsafe {
+            crate::owned_js_value::OwnedJsValue::new(state.ctx_ptr(), val)
+        });
         RasterV8Status::Ok
     })
 }
@@ -470,7 +580,9 @@ pub unsafe extern "C" fn object_get_prototype(
         if qjs::JS_IsException(proto) {
             return RasterV8Status::Exception;
         }
-        *out = state.roots.insert(state.ctx_ptr(), proto);
+        *out = state.roots.insert_owned(unsafe {
+            crate::owned_js_value::OwnedJsValue::new(state.ctx_ptr(), proto)
+        });
         RasterV8Status::Ok
     })
 }
@@ -489,7 +601,9 @@ pub unsafe extern "C" fn array_new(
             let len = new_int32(state.ctx_ptr(), length);
             qjs::JS_SetPropertyStr(state.ctx_ptr(), arr, c"length".as_ptr(), len);
         }
-        *out = state.roots.insert(state.ctx_ptr(), arr);
+        *out = state.roots.insert_owned(unsafe {
+            crate::owned_js_value::OwnedJsValue::new(state.ctx_ptr(), arr)
+        });
         RasterV8Status::Ok
     })
 }
@@ -504,7 +618,9 @@ pub unsafe extern "C" fn number_new(
     }
     with_state(|state| {
         let num = qjs::JS_NewFloat64(value);
-        *out = state.roots.insert(state.ctx_ptr(), num);
+        *out = state.roots.insert_owned(unsafe {
+            crate::owned_js_value::OwnedJsValue::new(state.ctx_ptr(), num)
+        });
         RasterV8Status::Ok
     })
 }
@@ -519,7 +635,9 @@ pub unsafe extern "C" fn bigint_new(
     }
     with_state(|state| {
         let bi = qjs::JS_NewBigInt64(state.ctx_ptr(), value);
-        *out = state.roots.insert(state.ctx_ptr(), bi);
+        *out = state
+            .roots
+            .insert_owned(unsafe { crate::owned_js_value::OwnedJsValue::new(state.ctx_ptr(), bi) });
         RasterV8Status::Ok
     })
 }
@@ -534,7 +652,9 @@ pub unsafe extern "C" fn integer_new(
     }
     with_state(|state| {
         let num = new_int32(state.ctx_ptr(), value);
-        *out = state.roots.insert(state.ctx_ptr(), num);
+        *out = state.roots.insert_owned(unsafe {
+            crate::owned_js_value::OwnedJsValue::new(state.ctx_ptr(), num)
+        });
         RasterV8Status::Ok
     })
 }
@@ -550,8 +670,7 @@ pub unsafe extern "C" fn string_new_latin1(
     }
     with_state(|state| {
         let bytes = if length < 0 {
-            std::ffi::CStr::from_ptr(data as *const c_char)
-                .to_bytes()
+            std::ffi::CStr::from_ptr(data as *const c_char).to_bytes()
         } else {
             std::slice::from_raw_parts(data, length as usize)
         };
@@ -560,7 +679,9 @@ pub unsafe extern "C" fn string_new_latin1(
             bytes.as_ptr() as *const c_char,
             bytes.len() as u64,
         );
-        *out = state.roots.insert(state.ctx_ptr(), js);
+        *out = state
+            .roots
+            .insert_owned(unsafe { crate::owned_js_value::OwnedJsValue::new(state.ctx_ptr(), js) });
         RasterV8Status::Ok
     })
 }
@@ -634,13 +755,7 @@ pub unsafe extern "C" fn function_call(
                 argv.push(qjs::JS_DupValue(state.ctx_ptr(), arg));
             }
         }
-        let result = qjs::JS_Call(
-            state.ctx_ptr(),
-            func,
-            recv,
-            argc,
-            argv.as_mut_ptr(),
-        );
+        let result = qjs::JS_Call(state.ctx_ptr(), func, recv, argc, argv.as_mut_ptr());
         for arg in argv {
             qjs::JS_FreeValue(state.ctx_ptr(), arg);
         }
@@ -650,7 +765,9 @@ pub unsafe extern "C" fn function_call(
         if qjs::JS_IsException(result) {
             return RasterV8Status::Exception;
         }
-        *out = state.roots.insert(state.ctx_ptr(), result);
+        *out = state.roots.insert_owned(unsafe {
+            crate::owned_js_value::OwnedJsValue::new(state.ctx_ptr(), result)
+        });
         RasterV8Status::Ok
     })
 }
@@ -691,7 +808,7 @@ pub unsafe extern "C" fn new_exception(
                     qjs::JS_NewStringLen(state.ctx_ptr(), c"TypeError".as_ptr(), 9),
                 );
                 err
-            }
+            },
             2 => {
                 let err = qjs::JS_NewError(state.ctx_ptr());
                 qjs::JS_SetPropertyStr(
@@ -701,7 +818,7 @@ pub unsafe extern "C" fn new_exception(
                     qjs::JS_NewStringLen(state.ctx_ptr(), c"RangeError".as_ptr(), 10),
                 );
                 err
-            }
+            },
             _ => qjs::JS_NewError(state.ctx_ptr()),
         };
         qjs::JS_SetPropertyStr(
@@ -710,7 +827,9 @@ pub unsafe extern "C" fn new_exception(
             c"message".as_ptr(),
             qjs::JS_DupValue(state.ctx_ptr(), msg),
         );
-        *out = state.roots.insert(state.ctx_ptr(), err);
+        *out = state.roots.insert_owned(unsafe {
+            crate::owned_js_value::OwnedJsValue::new(state.ctx_ptr(), err)
+        });
         RasterV8Status::Ok
     })
 }
@@ -724,11 +843,20 @@ pub unsafe extern "C" fn external_new(
         return RasterV8Status::Error;
     }
     with_state(|state| {
-        let obj = new_v8_object(state.ctx_ptr());
+        let ctx = state.ctx_ptr();
+        let obj = new_v8_object(ctx);
         if let Some(key) = object_ptr_key(obj) {
-            INTERNAL_FIELDS.lock().entry(key).or_default().push(ptr as usize);
+            context_tables::with_context_tables(ctx, |tables| {
+                tables
+                    .internal_fields
+                    .entry(key)
+                    .or_default()
+                    .push(ptr as usize);
+            });
         }
-        *out = state.roots.insert(state.ctx_ptr(), obj);
+        *out = state
+            .roots
+            .insert_owned(unsafe { crate::owned_js_value::OwnedJsValue::new(ctx, obj) });
         RasterV8Status::Ok
     })
 }
@@ -742,6 +870,7 @@ pub unsafe extern "C" fn object_reserve_internal_fields(
         return RasterV8Status::Error;
     }
     with_state(|state| {
+        let ctx = state.ctx_ptr();
         let Some(obj) = state.roots.get(object_root) else {
             return RasterV8Status::Error;
         };
@@ -749,12 +878,13 @@ pub unsafe extern "C" fn object_reserve_internal_fields(
             return RasterV8Status::Error;
         };
         let count = count as usize;
-        OBJECT_FIELD_COUNTS.lock().insert(key, count);
-        let mut fields = INTERNAL_FIELDS.lock();
-        let entry = fields.entry(key).or_default();
-        if entry.len() < count {
-            entry.resize(count, 0);
-        }
+        context_tables::with_context_tables(ctx, |tables| {
+            tables.object_field_counts.insert(key, count);
+            let entry = tables.internal_fields.entry(key).or_default();
+            if entry.len() < count {
+                entry.resize(count, 0);
+            }
+        });
         RasterV8Status::Ok
     })
 }
@@ -768,6 +898,7 @@ pub unsafe extern "C" fn object_internal_field_count(
         return RasterV8Status::Error;
     }
     with_state(|state| {
+        let ctx = state.ctx_ptr();
         let Some(obj) = state.roots.get(object_root) else {
             return RasterV8Status::Error;
         };
@@ -775,11 +906,19 @@ pub unsafe extern "C" fn object_internal_field_count(
             *out = 0;
             return RasterV8Status::Ok;
         };
-        let count = OBJECT_FIELD_COUNTS
-            .lock()
-            .get(&key)
-            .copied()
-            .unwrap_or_else(|| INTERNAL_FIELDS.lock().get(&key).map(|v| v.len()).unwrap_or(0));
+        let count = context_tables::with_context_tables(ctx, |tables| {
+            tables
+                .object_field_counts
+                .get(&key)
+                .copied()
+                .unwrap_or_else(|| {
+                    tables
+                        .internal_fields
+                        .get(&key)
+                        .map(|v| v.len())
+                        .unwrap_or(0)
+                })
+        });
         *out = count as c_int;
         RasterV8Status::Ok
     })
@@ -792,29 +931,33 @@ pub unsafe extern "C" fn internal_field_set(
     ptr: *mut c_void,
 ) -> RasterV8Status {
     with_state(|state| {
+        let ctx = state.ctx_ptr();
         let Some(obj) = state.roots.get(object_root) else {
             return RasterV8Status::Error;
         };
         let Some(key) = object_ptr_key(obj) else {
             return RasterV8Status::Error;
         };
-        let mut map = INTERNAL_FIELDS.lock();
-        let fields = map.entry(key).or_default();
-        let idx = index as usize;
-        if fields.len() <= idx {
-            fields.resize(idx + 1, 0);
-        }
-        fields[idx] = ptr as usize;
-        let mut by_root = INTERNAL_FIELDS_BY_ROOT.lock();
-        let root_fields = by_root.entry(object_root).or_default();
-        if root_fields.len() <= idx {
-            root_fields.resize(idx + 1, 0);
-        }
-        root_fields[idx] = ptr as usize;
+        context_tables::with_context_tables(ctx, |tables| {
+            let fields = tables.internal_fields.entry(key).or_default();
+            let idx = index as usize;
+            if fields.len() <= idx {
+                fields.resize(idx + 1, 0);
+            }
+            fields[idx] = ptr as usize;
+            let root_fields = tables
+                .internal_fields_by_root
+                .entry(object_root)
+                .or_default();
+            if root_fields.len() <= idx {
+                root_fields.resize(idx + 1, 0);
+            }
+            root_fields[idx] = ptr as usize;
+        });
         if index == 0 {
             set_embedder_field0_in_frame(ptr as usize);
         }
-        let class_id = ensure_v8_object_class(state.ctx_ptr());
+        let class_id = ensure_v8_object_class(ctx);
         unsafe {
             qjs::JS_SetOpaque(obj, ptr);
             let _ = class_id;
@@ -833,25 +976,23 @@ pub unsafe extern "C" fn internal_field_get(
         return RasterV8Status::Error;
     }
     with_state(|state| {
+        let ctx = state.ctx_ptr();
         let obj = state.roots.get(object_root);
         let key = obj.and_then(object_ptr_key);
-        let mut ptr = {
-            let map = INTERNAL_FIELDS.lock();
+        let mut ptr = context_tables::with_context_tables(ctx, |tables| {
             key.and_then(|k| {
-                map.get(&k)
+                tables
+                    .internal_fields
+                    .get(&k)
                     .and_then(|fields| fields.get(index as usize).copied())
             })
-            .or_else(|| internal_field_ptr_for_root(object_root, index as usize))
+            .or_else(|| internal_field_ptr_for_root(tables, object_root, index as usize))
             .unwrap_or(0)
-        };
+        });
         if ptr == 0 && index == 0 {
             if let Some(obj) = obj {
-                let class_id = ensure_v8_object_class(state.ctx_ptr());
+                let class_id = ensure_v8_object_class(ctx);
                 ptr = unsafe { qjs::JS_GetOpaque(obj, class_id) as usize };
-                if ptr == 0 && unsafe { qjs::JS_IsObject(obj) } {
-                    let base = unsafe { qjs::JS_VALUE_GET_PTR(obj) as *mut u8 };
-                    ptr = unsafe { *(base.add(V8_EMBEDDER_SLOT_OFFSET) as *const usize) };
-                }
             }
         }
         unsafe {
@@ -880,7 +1021,9 @@ pub unsafe extern "C" fn symbol_iterator(
         if qjs::JS_IsException(iter) {
             return RasterV8Status::Exception;
         }
-        *out = state.roots.insert(state.ctx_ptr(), iter);
+        *out = state.roots.insert_owned(unsafe {
+            crate::owned_js_value::OwnedJsValue::new(state.ctx_ptr(), iter)
+        });
         RasterV8Status::Ok
     })
 }
@@ -911,21 +1054,20 @@ pub unsafe extern "C" fn oddball_root(
     with_state(|state| {
         let ctx = state.ctx_ptr();
         let root = match root_index {
-            4 => state.roots.insert(ctx, qjs::JS_DupValue(ctx, qjs::JS_UNDEFINED)),
-            5 => state.roots.insert(ctx, qjs::JS_DupValue(ctx, qjs::JS_UNDEFINED)),
-            6 => state.roots.insert(ctx, qjs::JS_DupValue(ctx, qjs::JS_NULL)),
-            7 => state.roots.insert(ctx, qjs::JS_DupValue(ctx, qjs::JS_TRUE)),
-            8 => state.roots.insert(ctx, qjs::JS_DupValue(ctx, qjs::JS_FALSE)),
+            4 => state.roots.insert_immortal_tag(qjs::JS_UNDEFINED),
+            5 => state.roots.insert_immortal_tag(qjs::JS_UNDEFINED),
+            6 => state.roots.insert_immortal_tag(qjs::JS_NULL),
+            7 => state.roots.insert_immortal_tag(qjs::JS_TRUE),
+            8 => state.roots.insert_immortal_tag(qjs::JS_FALSE),
             9 => {
                 let empty = qjs::JS_NewStringLen(ctx, b"".as_ptr() as *const c_char, 0);
-                let root = state.roots.insert(ctx, empty);
-                qjs::JS_FreeValue(ctx, empty);
-                root
-            }
+                state
+                    .roots
+                    .insert_owned(unsafe { crate::owned_js_value::OwnedJsValue::new(ctx, empty) })
+            },
             _ => return RasterV8Status::Error,
         };
         *out = root;
-        crate::root::mark_immortal_root(root);
         RasterV8Status::Ok
     })
 }
@@ -942,40 +1084,66 @@ pub unsafe extern "C" fn register_weak_callback(
     _ctx: *mut crate::bridge::RasterV8ContextState,
     object_root: u64,
     parameter: *mut c_void,
-    callback: Option<unsafe extern "C" fn(*const c_void, c_int)>,
+    callback: *mut c_void,
 ) -> RasterV8Status {
+    if callback.is_null() {
+        return RasterV8Status::Error;
+    }
     with_state(|state| {
+        let ctx = state.ctx_ptr();
         let Some(obj) = state.roots.get(object_root) else {
             return RasterV8Status::Error;
         };
         let Some(key) = object_ptr_key(obj) else {
             return RasterV8Status::Error;
         };
-        WEAK_CALLBACKS.lock().insert(
-            key,
-            WeakSlot {
-                callback,
-                parameter: parameter as usize,
-            },
-        );
+        context_tables::with_context_tables(ctx, |tables| {
+            tables.weak_callbacks.insert(
+                key,
+                WeakSlot {
+                    callback: callback as usize,
+                    parameter: parameter as usize,
+                    phase: WeakPhase::Registered,
+                },
+            );
+        });
         RasterV8Status::Ok
     })
 }
 
-pub fn clear_runtime_tables(rt: *mut qjs::JSRuntime) {
-    let rt_key = rt as usize;
-    V8_OBJECT_CLASS.lock().remove(&rt_key);
-    INTERNAL_FIELDS.lock().clear();
-    INTERNAL_FIELDS_BY_ROOT.lock().clear();
-    OBJECT_FIELD_COUNTS.lock().clear();
-    WEAK_CALLBACKS.lock().clear();
+pub fn clear_runtime_v8_object_class(rt: *mut qjs::JSRuntime) {
+    V8_OBJECT_CLASS.lock().remove(&(rt as usize));
 }
 
-pub fn prepare_shutdown(ctx: *mut JSContext) {
-    INTERNAL_FIELDS.lock().clear();
-    INTERNAL_FIELDS_BY_ROOT.lock().clear();
-    OBJECT_FIELD_COUNTS.lock().clear();
-    WEAK_CALLBACKS.lock().clear();
+#[cfg(test)]
+pub fn v8_object_class_for_runtime(rt: *mut qjs::JSRuntime) -> Option<qjs::JSClassID> {
+    V8_OBJECT_CLASS.lock().get(&(rt as usize)).copied()
+}
+
+pub fn shutdown_context_tables(ctx: *mut JSContext) {
+    with_state_for_ctx(ctx, |state| {
+        state.drain_weak_holds(ctx);
+    });
+    dispatch_pending_weak_callbacks_for_ctx(ctx);
+    context_tables::remove_context_tables(ctx);
     let rt = unsafe { qjs::JS_GetRuntime(ctx) };
-    clear_runtime_tables(rt);
+    for _ in 0..3 {
+        unsafe { qjs::JS_RunGC(rt) };
+    }
+}
+
+/// Backward-compatible alias for per-context side-table teardown.
+pub fn prepare_shutdown(ctx: *mut JSContext) {
+    shutdown_context_tables(ctx);
+}
+
+#[no_mangle]
+pub extern "C" fn raster_v8_run_gc() {
+    with_state(|state| {
+        let ctx = state.ctx_ptr();
+        let rt = unsafe { qjs::JS_GetRuntime(ctx) };
+        process_weak_holds_for_ctx(state);
+        unsafe { qjs::JS_RunGC(rt) };
+        dispatch_pending_weak_callbacks_for_ctx(ctx);
+    });
 }

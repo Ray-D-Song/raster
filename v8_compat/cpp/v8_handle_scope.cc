@@ -21,6 +21,10 @@ void HandleScope::Initialize(Isolate* isolate) {
   prev_next_ = reinterpret_cast<internal::Address*>(data->next);
   prev_limit_ = reinterpret_cast<internal::Address*>(data->limit);
   data->level++;
+  if (auto* ctx = raster_v8_current_context()) {
+    auto* impl = raster_v8::ctx_impl(ctx);
+    impl->scopes.push_back(raster_v8::HandleScopeFrame{impl->arena.watermark});
+  }
 }
 
 HandleScope::HandleScope(Isolate* isolate) {
@@ -38,6 +42,13 @@ HandleScope::~HandleScope() {
   if (reinterpret_cast<uintptr_t*>(data->limit) != reinterpret_cast<uintptr_t*>(prev_limit_)) {
     data->limit = reinterpret_cast<uintptr_t*>(prev_limit_);
   }
+  if (auto* ctx = raster_v8_current_context()) {
+    auto* impl = raster_v8::ctx_impl(ctx);
+    if (!impl->scopes.empty()) {
+      raster_v8::rewind_handle_arena(ctx, impl->scopes.back().watermark);
+      impl->scopes.pop_back();
+    }
+  }
 }
 
 internal::Address* HandleScope::CreateHandle(internal::Isolate* i_isolate,
@@ -53,9 +64,9 @@ internal::Address* HandleScope::CreateHandle(internal::Isolate* i_isolate,
   slot->object.tagged_map = raster_v8::shim::TaggedPointer(&slot->object);
   slot->tagged_value = raster_v8::shim::TaggedPointer(&slot->object);
   raster_v8::note_materialized_layout(&slot->object);
-  raster_v8::register_handle_repr(reinterpret_cast<uintptr_t>(&slot->object),
+  raster_v8::register_handle_repr(ctx, reinterpret_cast<uintptr_t>(&slot->object),
                                   slot->object.contents.root_id);
-  raster_v8::register_handle_repr(static_cast<uintptr_t>(slot->object.tagged_map.value),
+  raster_v8::register_handle_repr(ctx, static_cast<uintptr_t>(slot->object.tagged_map.value),
                                   slot->object.contents.root_id);
   // Indirect Local::ptr() reads the first word of the in-place object layout.
   return reinterpret_cast<internal::Address*>(&slot->object);

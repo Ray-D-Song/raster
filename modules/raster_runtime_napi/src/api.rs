@@ -13,10 +13,16 @@ use rquickjs::qjs::{self, JSValue};
 use rquickjs::{Ctx, Function, Result as JsResult, Value};
 
 use crate::env::Env;
-use crate::types::*;
-use crate::js_helpers::{napi_to_js_typedarray_type, new_float64, new_int32, new_int64, new_uint32, to_uint32, try_buffer_from};
-use crate::value::{bytes_from_js, cstr_from_js, napi_value_for_slot, string_from_bytes, string_from_cstr, value_to_napi_borrowed, value_to_napi_owned};
 use crate::external::{create_external_object, get_external_pointer, is_external_object};
+use crate::js_helpers::{
+    napi_to_js_typedarray_type, new_float64, new_int32, new_int64, new_uint32, to_uint32,
+    try_buffer_from,
+};
+use crate::types::*;
+use crate::value::{
+    bytes_from_js, cstr_from_js, napi_value_for_slot, string_from_bytes, string_from_cstr,
+    value_to_napi_borrowed, value_to_napi_owned,
+};
 
 thread_local! {
     static PENDING_MODULE: RefCell<Option<napi_module>> = const { RefCell::new(None) };
@@ -118,10 +124,8 @@ pub unsafe extern "C" fn napi_get_last_error_info(
     if env.is_null() || result.is_null() {
         return napi_status::napi_invalid_arg;
     }
-    with_env(env, |e| {
-        unsafe {
-            *result = e.last_error_info_ptr();
-        }
+    with_env(env, |e| unsafe {
+        *result = e.last_error_info_ptr();
     });
     napi_status::napi_ok
 }
@@ -235,7 +239,7 @@ pub unsafe extern "C" fn napi_escape_handle(
                     qjs::JS_FreeValue(ctx, duped);
                 }
                 return napi_status::napi_invalid_arg;
-            }
+            },
         };
         unsafe {
             *result = napi_value_for_slot(e, escape_slot);
@@ -315,14 +319,15 @@ pub unsafe extern "C" fn napi_throw_range_error(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn napi_is_exception_pending(env: napi_env, result: *mut bool) -> napi_status {
+pub unsafe extern "C" fn napi_is_exception_pending(
+    env: napi_env,
+    result: *mut bool,
+) -> napi_status {
     if env.is_null() || result.is_null() {
         return napi_status::napi_invalid_arg;
     }
-    with_env(env, |e| {
-        unsafe {
-            *result = qjs::JS_HasException(e.ctx_ptr());
-        }
+    with_env(env, |e| unsafe {
+        *result = qjs::JS_HasException(e.ctx_ptr());
     });
     napi_status::napi_ok
 }
@@ -421,11 +426,7 @@ pub unsafe extern "C" fn napi_get_boolean(
         return napi_status::napi_invalid_arg;
     }
     with_env(env, |e| {
-        let val = if value {
-            qjs::JS_TRUE
-        } else {
-            qjs::JS_FALSE
-        };
+        let val = if value { qjs::JS_TRUE } else { qjs::JS_FALSE };
         *result = value_to_napi_owned(e, val);
     });
     napi_status::napi_ok
@@ -640,7 +641,7 @@ pub unsafe extern "C" fn napi_create_string_utf8(
                 *result = v;
             }
             napi_status::napi_ok
-        }
+        },
         Err(s) => s,
     })
 }
@@ -669,7 +670,7 @@ pub unsafe extern "C" fn napi_create_string_latin1(
             Ok(v) => {
                 unsafe { *result = v };
                 napi_status::napi_ok
-            }
+            },
             Err(s) => s,
         }
     })
@@ -733,7 +734,7 @@ pub unsafe extern "C" fn napi_typeof(
         };
         let ctx = e.ctx_ptr();
         let ty = unsafe {
-            if is_external_object(val) {
+            if is_external_object(ctx, val) {
                 napi_valuetype::napi_external
             } else if qjs::JS_IsSymbol(val) {
                 napi_valuetype::napi_symbol
@@ -797,6 +798,50 @@ pub unsafe extern "C" fn napi_create_array(env: napi_env, result: *mut napi_valu
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn napi_create_symbol(
+    env: napi_env,
+    description: napi_value,
+    result: *mut napi_value,
+) -> napi_status {
+    if env.is_null() || result.is_null() {
+        return napi_status::napi_invalid_arg;
+    }
+    with_env(env, |e| {
+        let ctx = e.ctx_ptr();
+        let sym = if description.is_null() {
+            unsafe { qjs::JS_NewSymbol(ctx, ptr::null(), false) }
+        } else {
+            let mut buf = [0u8; 256];
+            let mut len = 0usize;
+            let status = unsafe {
+                napi_get_value_string_utf8(
+                    env,
+                    description,
+                    buf.as_mut_ptr() as *mut libc::c_char,
+                    buf.len() - 1,
+                    &mut len,
+                )
+            };
+            if status == napi_status::napi_string_expected {
+                unsafe { qjs::JS_NewSymbol(ctx, ptr::null(), false) }
+            } else if status != napi_status::napi_ok {
+                return status;
+            } else {
+                buf[len] = 0;
+                unsafe { qjs::JS_NewSymbol(ctx, buf.as_ptr() as *const libc::c_char, false) }
+            }
+        };
+        if unsafe { qjs::JS_IsException(sym) } {
+            return e.status_from_throw();
+        }
+        unsafe {
+            *result = value_to_napi_owned(e, sym);
+        }
+        napi_status::napi_ok
+    })
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn napi_get_array_length(
     env: napi_env,
     value: napi_value,
@@ -818,7 +863,7 @@ pub unsafe extern "C" fn napi_get_array_length(
             Err(()) => {
                 unsafe { qjs::JS_FreeValue(ctx, len_val) };
                 return e.status_from_throw();
-            }
+            },
         };
         unsafe {
             qjs::JS_FreeValue(ctx, len_val);
@@ -1303,7 +1348,7 @@ pub unsafe extern "C" fn napi_create_function(
                     *result = value_to_napi_borrowed(e, func.as_raw());
                 }
                 napi_status::napi_ok
-            }
+            },
             Err(_) => e.status_from_throw(),
         }
     })
@@ -1380,9 +1425,7 @@ pub unsafe extern "C" fn napi_call_function(
             };
             js_argv.push(v);
         }
-        let ret = unsafe {
-            qjs::JS_Call(ctx, fn_val, this_val, argc as i32, js_argv.as_mut_ptr())
-        };
+        let ret = unsafe { qjs::JS_Call(ctx, fn_val, this_val, argc as i32, js_argv.as_mut_ptr()) };
         for v in js_argv {
             unsafe { qjs::JS_FreeValue(ctx, v) };
         }
@@ -1432,7 +1475,9 @@ pub unsafe extern "C" fn napi_define_properties(
         for i in 0..property_count {
             let desc = unsafe { &*properties.add(i) };
             let name = if !desc.utf8name.is_null() {
-                unsafe { CStr::from_ptr(desc.utf8name) }.to_string_lossy().into_owned()
+                unsafe { CStr::from_ptr(desc.utf8name) }
+                    .to_string_lossy()
+                    .into_owned()
             } else if !desc.name.is_null() {
                 return napi_status::napi_invalid_arg;
             } else {
@@ -1457,6 +1502,52 @@ pub unsafe extern "C" fn napi_define_properties(
                     None => return napi_status::napi_invalid_arg,
                 };
                 if unsafe { qjs::JS_SetPropertyStr(ctx, obj, name_c.as_ptr(), fn_val) } < 0 {
+                    return e.status_from_throw();
+                }
+            } else if let Some(getter) = desc.getter {
+                let mut getter_result: napi_value = ptr::null_mut();
+                let status = napi_create_function(
+                    env,
+                    name_c.as_ptr(),
+                    name.len(),
+                    Some(getter),
+                    desc.data,
+                    &mut getter_result,
+                );
+                if status != napi_status::napi_ok {
+                    return status;
+                }
+                let getter_val = match crate::value::napi_to_value_dup(e, getter_result) {
+                    Some(v) => v,
+                    None => return napi_status::napi_invalid_arg,
+                };
+                let setter_val = if let Some(setter) = desc.setter {
+                    let mut setter_result: napi_value = ptr::null_mut();
+                    let status = napi_create_function(
+                        env,
+                        name_c.as_ptr(),
+                        name.len(),
+                        Some(setter),
+                        desc.data,
+                        &mut setter_result,
+                    );
+                    if status != napi_status::napi_ok {
+                        return status;
+                    }
+                    match crate::value::napi_to_value_dup(e, setter_result) {
+                        Some(v) => v,
+                        None => return napi_status::napi_invalid_arg,
+                    }
+                } else {
+                    qjs::JS_UNDEFINED
+                };
+                let atom = unsafe { qjs::JS_NewAtom(ctx, name_c.as_ptr()) };
+                let flags = (qjs::JS_PROP_ENUMERABLE | qjs::JS_PROP_CONFIGURABLE) as i32;
+                let ret = unsafe {
+                    qjs::JS_DefinePropertyGetSet(ctx, obj, atom, getter_val, setter_val, flags)
+                };
+                unsafe { qjs::JS_FreeAtom(ctx, atom) };
+                if ret < 0 {
                     return e.status_from_throw();
                 }
             } else if !desc.value.is_null() {
@@ -1501,7 +1592,9 @@ pub unsafe extern "C" fn napi_define_class(
                 let is_static =
                     (desc.attributes as u32) & (napi_property_attributes::napi_static as u32) != 0;
                 let name = if !desc.utf8name.is_null() {
-                    unsafe { CStr::from_ptr(desc.utf8name) }.to_string_lossy().into_owned()
+                    unsafe { CStr::from_ptr(desc.utf8name) }
+                        .to_string_lossy()
+                        .into_owned()
                 } else {
                     continue;
                 };
@@ -1512,7 +1605,7 @@ pub unsafe extern "C" fn napi_define_class(
                         None => {
                             unsafe { qjs::JS_FreeValue(ctx, prototype) };
                             return napi_status::napi_invalid_arg;
-                        }
+                        },
                     }
                 } else {
                     prototype
@@ -1542,7 +1635,7 @@ pub unsafe extern "C" fn napi_define_class(
                             }
                             unsafe { qjs::JS_FreeValue(ctx, prototype) };
                             return napi_status::napi_invalid_arg;
-                        }
+                        },
                     };
                     if unsafe { qjs::JS_SetPropertyStr(ctx, target, name_c.as_ptr(), fn_val) } < 0 {
                         if is_static {
@@ -1560,7 +1653,7 @@ pub unsafe extern "C" fn napi_define_class(
                             }
                             unsafe { qjs::JS_FreeValue(ctx, prototype) };
                             return napi_status::napi_invalid_arg;
-                        }
+                        },
                     };
                     if unsafe { qjs::JS_SetPropertyStr(ctx, target, name_c.as_ptr(), val) } < 0 {
                         if is_static {
@@ -1580,15 +1673,14 @@ pub unsafe extern "C" fn napi_define_class(
             None => {
                 unsafe { qjs::JS_FreeValue(ctx, prototype) };
                 return napi_status::napi_invalid_arg;
-            }
+            },
         };
         if unsafe { qjs::JS_SetPropertyStr(ctx, ctor_val, c"prototype".as_ptr(), prototype) } < 0 {
             unsafe { qjs::JS_FreeValue(ctx, ctor_val) };
             return e.status_from_throw();
         }
         let ctor_dup = unsafe { qjs::JS_DupValue(ctx, ctor_val) };
-        if unsafe { qjs::JS_SetPropertyStr(ctx, prototype, c"constructor".as_ptr(), ctor_dup) }
-            < 0
+        if unsafe { qjs::JS_SetPropertyStr(ctx, prototype, c"constructor".as_ptr(), ctor_dup) } < 0
         {
             unsafe { qjs::JS_FreeValue(ctx, ctor_val) };
             return e.status_from_throw();
@@ -1663,7 +1755,8 @@ pub unsafe extern "C" fn napi_remove_env_cleanup_hook(
         return napi_status::napi_invalid_arg;
     }
     with_env(env, |e| {
-        e.cleanup_hooks.retain(|&(f, a)| f as usize != fun as usize || a != arg);
+        e.cleanup_hooks
+            .retain(|&(f, a)| f as usize != fun as usize || a != arg);
         napi_status::napi_ok
     })
 }
@@ -1702,8 +1795,7 @@ pub unsafe extern "C" fn napi_create_external(
         return napi_status::napi_invalid_arg;
     }
     with_env(env, |e| {
-        let ctx = e.ctx_ptr();
-        let obj = create_external_object(ctx, data, finalize_cb, finalize_hint, env);
+        let obj = create_external_object(e, data, finalize_cb, finalize_hint);
         unsafe {
             *result = value_to_napi_owned(e, obj);
         }
@@ -1726,7 +1818,7 @@ pub unsafe extern "C" fn napi_get_value_external(
             None => return napi_status::napi_invalid_arg,
         };
         unsafe {
-            *result = get_external_pointer(val).unwrap_or(ptr::null_mut());
+            *result = get_external_pointer(e.ctx_ptr(), val).unwrap_or(ptr::null_mut());
         }
         napi_status::napi_ok
     })
@@ -1774,10 +1866,8 @@ unsafe extern "C" fn arraybuffer_free(
     if !ptr.is_null() {
         let size = opaque as usize;
         if size > 0 {
-            let layout =
-                std::alloc::Layout::from_size_align(size, 1).unwrap_or_else(|_| {
-                    std::alloc::Layout::from_size_align(1, 1).unwrap()
-                });
+            let layout = std::alloc::Layout::from_size_align(size, 1)
+                .unwrap_or_else(|_| std::alloc::Layout::from_size_align(1, 1).unwrap());
             unsafe {
                 std::alloc::dealloc(ptr as *mut u8, layout);
             }

@@ -13,22 +13,22 @@ pub type napi_deferred = *mut c_void;
 pub type napi_async_work = *mut c_void;
 pub type napi_threadsafe_function = *mut c_void;
 
-pub type napi_callback = Option<
-    unsafe extern "C" fn(env: napi_env, info: napi_callback_info) -> napi_value,
->;
-pub type napi_finalize = Option<
-    unsafe extern "C" fn(
-        env: napi_env,
-        data: *mut c_void,
-        hint: *mut c_void,
-    ),
->;
+pub type napi_callback =
+    Option<unsafe extern "C" fn(env: napi_env, info: napi_callback_info) -> napi_value>;
+pub type napi_finalize =
+    Option<unsafe extern "C" fn(env: napi_env, data: *mut c_void, hint: *mut c_void)>;
 pub type napi_async_execute_callback =
     Option<unsafe extern "C" fn(env: napi_env, data: *mut c_void)>;
 pub type napi_async_complete_callback =
     Option<unsafe extern "C" fn(env: napi_env, status: napi_status, data: *mut c_void)>;
-pub type napi_threadsafe_function_call_js =
-    Option<unsafe extern "C" fn(env: napi_env, js_callback: napi_value, context: *mut c_void, data: *mut c_void)>;
+pub type napi_threadsafe_function_call_js = Option<
+    unsafe extern "C" fn(
+        env: napi_env,
+        js_callback: napi_value,
+        context: *mut c_void,
+        data: *mut c_void,
+    ),
+>;
 pub type napi_addon_register_func =
     unsafe extern "C" fn(env: napi_env, exports: napi_value) -> napi_value;
 

@@ -4,14 +4,14 @@
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, VecDeque};
 use std::os::raw::c_void;
-use std::sync::{Arc, LazyLock};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use std::sync::{Arc, LazyLock};
 
 use libc::pthread_t;
 use parking_lot::Mutex;
 use rquickjs::qjs::{self, JSValue};
 
-use crate::driver::{DriverJob, DriverState, ensure_driver};
+use crate::driver::{ensure_driver, DriverJob, DriverState};
 use crate::env::Env;
 use crate::types::{
     napi_async_complete_callback, napi_async_execute_callback, napi_async_work, napi_deferred,
@@ -51,7 +51,10 @@ fn lookup_async_work(work: napi_async_work) -> Option<Arc<AsyncWorkState>> {
     if work.is_null() {
         return None;
     }
-    ASYNC_WORK_REGISTRY.lock().get(&async_work_key(work)).cloned()
+    ASYNC_WORK_REGISTRY
+        .lock()
+        .get(&async_work_key(work))
+        .cloned()
 }
 
 fn register_async_work(state: Arc<AsyncWorkState>) -> napi_async_work {
@@ -87,11 +90,7 @@ fn post_async_complete_job(
     false
 }
 
-fn dispatch_async_completion(
-    env: &mut Env,
-    work: &Arc<AsyncWorkState>,
-    status: napi_status,
-) {
+fn dispatch_async_completion(env: &mut Env, work: &Arc<AsyncWorkState>, status: napi_status) {
     if work.completion_posted.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -154,7 +153,10 @@ pub unsafe extern "C" fn napi_delete_async_work(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn napi_queue_async_work(env: napi_env, work: napi_async_work) -> napi_status {
+pub unsafe extern "C" fn napi_queue_async_work(
+    env: napi_env,
+    work: napi_async_work,
+) -> napi_status {
     if env.is_null() || work.is_null() {
         return napi_status::napi_invalid_arg;
     }
@@ -192,22 +194,18 @@ pub unsafe extern "C" fn napi_queue_async_work(env: napi_env, work: napi_async_w
             ) {
                 Ok(_) => {
                     exec(work_env_addr as napi_env, data_addr as *mut c_void);
-                    let _ = post_async_complete_job(
-                        &driver_clone,
-                        work_arc,
-                        napi_status::napi_ok,
-                    );
-                }
+                    let _ = post_async_complete_job(&driver_clone, work_arc, napi_status::napi_ok);
+                },
                 Err(AW_CANCELLED) => {
                     let _ = post_async_complete_job(
                         &driver_clone,
                         work_arc,
                         napi_status::napi_cancelled,
                     );
-                }
+                },
                 Err(_) => {
                     driver_clone.release_async_keepalive();
-                }
+                },
             }
         });
     } else {
@@ -219,13 +217,13 @@ pub unsafe extern "C" fn napi_queue_async_work(env: napi_env, work: napi_async_w
         ) {
             Ok(_) => {
                 post_async_complete(env_ref, &driver, work_arc, napi_status::napi_ok);
-            }
+            },
             Err(AW_CANCELLED) => {
                 post_async_complete(env_ref, &driver, work_arc, napi_status::napi_cancelled);
-            }
+            },
             Err(_) => {
                 driver.release_async_keepalive();
-            }
+            },
         }
     }
     napi_status::napi_ok
@@ -256,7 +254,7 @@ pub unsafe extern "C" fn napi_cancel_async_work(
                 {
                     return napi_status::napi_ok;
                 }
-            }
+            },
             AW_RUNNING => return napi_status::napi_generic_failure,
             AW_CANCELLED => return napi_status::napi_ok,
             _ => return napi_status::napi_invalid_arg,
@@ -368,10 +366,7 @@ impl TsfnQueue {
         if push_result != QueuePushResult::Ok {
             return push_result.into();
         }
-        if !driver.post_job(DriverJob::Tsfn {
-            tsfn,
-            done: None,
-        }) {
+        if !driver.post_job(DriverJob::Tsfn { tsfn, done: None }) {
             guard.pop_back_locked();
             return QueueAdmissionResult::PostFailed;
         }
@@ -616,7 +611,7 @@ pub(crate) unsafe fn process_driver_job(env_ptr: *mut Env, job: DriverJob) {
     match job {
         DriverJob::AsyncComplete { work, status } => {
             dispatch_async_completion(env, &work, status);
-        }
+        },
         DriverJob::Tsfn { tsfn, done } => {
             let data = tsfn.queue.pop_front();
             if let Some(data) = data {
@@ -625,15 +620,15 @@ pub(crate) unsafe fn process_driver_job(env_ptr: *mut Env, job: DriverJob) {
             if let Some(done) = done {
                 let _ = done.send(());
             }
-        }
+        },
         DriverJob::TsfnAbort { tsfn } => {
             abort_pending_payloads(&tsfn);
-        }
+        },
         DriverJob::TsfnRelease { tsfn } => {
             finish_tsfn_release(&tsfn);
             unregister_tsfn(tsfn.handle as napi_threadsafe_function);
-        }
-        DriverJob::Wake => {}
+        },
+        DriverJob::Wake => {},
     }
 }
 
@@ -647,11 +642,7 @@ fn invoke_thread_finalize(tsfn: &ThreadsafeFunction) {
     }
     if let Some(cb) = tsfn.thread_finalize_cb {
         unsafe {
-            cb(
-                tsfn.env,
-                tsfn.thread_finalize_data,
-                tsfn.context,
-            );
+            cb(tsfn.env, tsfn.thread_finalize_data, tsfn.context);
         }
     }
 }
@@ -679,10 +670,7 @@ fn finish_tsfn_release(tsfn: &ThreadsafeFunction) {
         .compare_exchange(1, 0, Ordering::SeqCst, Ordering::SeqCst)
         .is_ok()
     {
-        tsfn
-            .driver
-            .idle_refs
-            .fetch_sub(1, Ordering::SeqCst);
+        tsfn.driver.idle_refs.fetch_sub(1, Ordering::SeqCst);
     }
     tsfn.driver.wake_if_quiescent();
     tsfn_mark_closed(tsfn);
@@ -719,9 +707,8 @@ fn invoke_tsfn_call(tsfn: &ThreadsafeFunction, data: *mut c_void) {
     let _ = data;
     if let Some(call_js) = tsfn.call_js {
         let mut func_val = std::ptr::null_mut();
-        if unsafe {
-            crate::refs::napi_get_reference_value(tsfn.env, tsfn.func_ref, &mut func_val)
-        } != napi_status::napi_ok
+        if unsafe { crate::refs::napi_get_reference_value(tsfn.env, tsfn.func_ref, &mut func_val) }
+            != napi_status::napi_ok
         {
             return;
         }
@@ -734,9 +721,8 @@ fn invoke_tsfn_call(tsfn: &ThreadsafeFunction, data: *mut c_void) {
         return;
     }
     let mut func_val = std::ptr::null_mut();
-    if unsafe {
-        crate::refs::napi_get_reference_value(tsfn.env, tsfn.func_ref, &mut func_val)
-    } != napi_status::napi_ok
+    if unsafe { crate::refs::napi_get_reference_value(tsfn.env, tsfn.func_ref, &mut func_val) }
+        != napi_status::napi_ok
     {
         return;
     }
@@ -851,9 +837,11 @@ pub unsafe extern "C" fn napi_call_threadsafe_function(
     }
 
     let admission = if mode == napi_threadsafe_function_call_mode::napi_tsfn_blocking {
-        tsfn.queue.admit_and_post(&tsfn.driver, tsfn.clone(), data as usize, true)
+        tsfn.queue
+            .admit_and_post(&tsfn.driver, tsfn.clone(), data as usize, true)
     } else {
-        tsfn.queue.admit_and_post(&tsfn.driver, tsfn.clone(), data as usize, false)
+        tsfn.queue
+            .admit_and_post(&tsfn.driver, tsfn.clone(), data as usize, false)
     };
     let status = match admission {
         QueueAdmissionResult::Ok => napi_status::napi_ok,
@@ -900,8 +888,7 @@ pub unsafe extern "C" fn napi_release_threadsafe_function(
     let Some(tsfn) = lookup_tsfn(func) else {
         return napi_status::napi_invalid_arg;
     };
-    let on_js_thread =
-        unsafe { libc::pthread_equal(libc::pthread_self(), tsfn.js_pthread) != 0 };
+    let on_js_thread = unsafe { libc::pthread_equal(libc::pthread_self(), tsfn.js_pthread) != 0 };
 
     let abort_mode = mode == napi_threadsafe_function_release_mode::napi_tsfn_abort;
     if abort_mode {
@@ -911,13 +898,15 @@ pub unsafe extern "C" fn napi_release_threadsafe_function(
         schedule_tsfn_abort_cleanup(&tsfn, on_js_thread);
     }
 
-    let prev = tsfn.refs.fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| {
-        if v == 0 {
-            None
-        } else {
-            Some(v - 1)
-        }
-    });
+    let prev = tsfn
+        .refs
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| {
+            if v == 0 {
+                None
+            } else {
+                Some(v - 1)
+            }
+        });
     match prev {
         Err(0) => napi_status::napi_invalid_arg,
         Ok(1) => {
@@ -925,7 +914,7 @@ pub unsafe extern "C" fn napi_release_threadsafe_function(
             tsfn.queue.set_closing();
             schedule_last_release(tsfn, on_js_thread);
             napi_status::napi_ok
-        }
+        },
         Ok(_) => napi_status::napi_ok,
         Err(_) => napi_status::napi_invalid_arg,
     }
@@ -954,10 +943,7 @@ pub unsafe extern "C" fn napi_unref_threadsafe_function(
         .compare_exchange(1, 0, Ordering::SeqCst, Ordering::SeqCst)
         .is_ok()
     {
-        tsfn
-            .driver
-            .idle_refs
-            .fetch_sub(1, Ordering::SeqCst);
+        tsfn.driver.idle_refs.fetch_sub(1, Ordering::SeqCst);
         tsfn.driver.wake_if_quiescent();
     }
     napi_status::napi_ok
@@ -1075,7 +1061,7 @@ pub unsafe extern "C" fn napi_resolve_deferred(
                     qjs::JS_FreeValue(ctx, def.reject_fn);
                 }
                 return napi_status::napi_invalid_arg;
-            }
+            },
         }
     };
     let result = unsafe { qjs::JS_Call(ctx, def.resolve_fn, qjs::JS_UNDEFINED, 1, &mut val) };
@@ -1121,7 +1107,7 @@ pub unsafe extern "C" fn napi_reject_deferred(
                     qjs::JS_FreeValue(ctx, def.reject_fn);
                 }
                 return napi_status::napi_invalid_arg;
-            }
+            },
         }
     };
     let result = unsafe { qjs::JS_Call(ctx, def.reject_fn, qjs::JS_UNDEFINED, 1, &mut val) };

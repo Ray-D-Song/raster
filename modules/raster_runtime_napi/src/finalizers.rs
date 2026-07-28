@@ -35,7 +35,8 @@ impl FinalizerTable {
         hint: *mut c_void,
         env: napi_env,
     ) -> bool {
-        let id = gc_hook::register_gc_entry(GcEntryKind::Finalizer, data, finalize, hint, env, None);
+        let id =
+            gc_hook::register_gc_entry(GcEntryKind::Finalizer, data, finalize, hint, env, None);
         if !gc_hook::attach_holder(ctx, obj, id) {
             gc_hook::remove_gc_entry(id);
             return false;

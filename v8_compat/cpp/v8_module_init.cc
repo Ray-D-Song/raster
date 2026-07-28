@@ -53,5 +53,6 @@ extern "C" RasterV8Status raster_v8_run_module_init(
 
   *out_exports_root_id = exports_slot->object.contents.root_id;
   raster_v8_close_handle_scope(ctx);
+  raster_v8_dispatch_pending_weak_callbacks();
   return RASTER_V8_OK;
 }

@@ -30,14 +30,14 @@ fn link_v8_shim_for_host() {
         "macos" => {
             println!("cargo:rustc-link-arg=-Wl,-force_load,{archive}");
             println!("cargo:rustc-link-lib=c++");
-        }
+        },
         "linux" => {
             println!("cargo:rustc-link-search=native={out_dir}");
             println!("cargo:rustc-link-arg=-Wl,--whole-archive");
             println!("cargo:rustc-link-lib=static=raster_v8_shim");
             println!("cargo:rustc-link-arg=-Wl,--no-whole-archive");
             println!("cargo:rustc-link-lib=c++");
-        }
-        _ => {}
+        },
+        _ => {},
     }
 }

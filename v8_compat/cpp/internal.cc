@@ -1,24 +1,20 @@
 #include "internal.h"
 #include "abi_137_generated.h"
 
-#include <unordered_map>
-
 namespace raster_v8 {
 
-namespace {
-
-std::unordered_map<uintptr_t, uint64_t>& repr_to_root_map() {
-  static std::unordered_map<uintptr_t, uint64_t> map;
-  return map;
-}
-
-}  // namespace
-
-void register_handle_repr(uintptr_t repr, uint64_t root_id) {
-  if (repr == 0 || root_id == 0) {
+void register_handle_repr(RasterV8ContextState* ctx, uintptr_t repr, uint64_t root_id) {
+  if (!ctx || repr == 0 || root_id == 0) {
     return;
   }
-  repr_to_root_map()[repr] = root_id;
+  ctx_impl(ctx)->repr_to_root[repr] = root_id;
+}
+
+void unregister_handle_repr(RasterV8ContextState* ctx, uintptr_t repr) {
+  if (!ctx || repr == 0) {
+    return;
+  }
+  ctx_impl(ctx)->repr_to_root.erase(repr);
 }
 
 static uint64_t root_from_layout(RasterV8ContextState* ctx, shim::ObjectLayout* layout) {
@@ -48,15 +44,15 @@ uint64_t resolve_root_from_repr(RasterV8ContextState* ctx, uintptr_t repr) {
   if (repr == 0) {
     return 0;
   }
-  if (auto it = repr_to_root_map().find(repr); it != repr_to_root_map().end()) {
+  auto* impl = ctx_impl(ctx);
+  if (auto it = impl->repr_to_root.find(repr); it != impl->repr_to_root.end()) {
     return it->second;
   }
-  auto* impl = ctx_impl(ctx);
   for (const auto& block : impl->arena.blocks) {
     for (const auto& slot : block) {
       const uintptr_t object_addr = reinterpret_cast<uintptr_t>(&slot.object);
       if (object_addr == repr && slot.object.contents.root_id != 0) {
-        register_handle_repr(repr, slot.object.contents.root_id);
+        register_handle_repr(ctx, repr, slot.object.contents.root_id);
         return slot.object.contents.root_id;
       }
     }
@@ -65,7 +61,7 @@ uint64_t resolve_root_from_repr(RasterV8ContextState* ctx, uintptr_t repr) {
     for (const auto& slot : block) {
       const uintptr_t tagged_word = slot.object.tagged_map.value;
       if (tagged_word == repr && slot.object.contents.root_id != 0) {
-        register_handle_repr(repr, slot.object.contents.root_id);
+        register_handle_repr(ctx, repr, slot.object.contents.root_id);
         return slot.object.contents.root_id;
       }
     }
@@ -208,6 +204,8 @@ void rewind_handle_arena(RasterV8ContextState* ctx, size_t watermark) {
     size_t block = arena.watermark / HandleArena::kBlockSize;
     size_t index = arena.watermark % HandleArena::kBlockSize;
     auto& slot = arena.blocks[block][index];
+    unregister_handle_repr(ctx, reinterpret_cast<uintptr_t>(&slot.object));
+    unregister_handle_repr(ctx, static_cast<uintptr_t>(slot.object.tagged_map.value));
     if (slot.owns_root && slot.object.contents.root_id != 0 && bridge) {
       bridge->root_drop(slot.object.contents.root_id);
     }
@@ -222,8 +220,8 @@ uintptr_t local_from_root(RasterV8ContextState* ctx, uint64_t root_id, const shi
   slot->tagged_value = shim::TaggedPointer(&slot->object);
   slot->owns_root = false;
   note_materialized_layout(&slot->object);
-  register_handle_repr(reinterpret_cast<uintptr_t>(&slot->object), root_id);
-  register_handle_repr(static_cast<uintptr_t>(slot->object.tagged_map.value), root_id);
+  register_handle_repr(ctx, reinterpret_cast<uintptr_t>(&slot->object), root_id);
+  register_handle_repr(ctx, static_cast<uintptr_t>(slot->object.tagged_map.value), root_id);
   return reinterpret_cast<uintptr_t>(slot->tagged_value.slot());
 }
 
@@ -239,7 +237,35 @@ uint64_t root_from_local(uintptr_t tagged) {
     }
     return 0;
   }
+  if (layout->contents.root_id != 0) {
+    return layout->contents.root_id;
+  }
+  if (auto* ctx = raster_v8_current_context()) {
+    if (uint64_t root_id = resolve_root_from_repr(ctx, reinterpret_cast<uintptr_t>(layout))) {
+      layout->contents.root_id = root_id;
+      return root_id;
+    }
+    if (uint64_t root_id =
+            resolve_root_from_repr(ctx, static_cast<uintptr_t>(layout->tagged_map.value))) {
+      layout->contents.root_id = root_id;
+      return root_id;
+    }
+  }
   return layout->contents.root_id;
+}
+
+void dispose_isolate_persistents(IsolateImpl* isolate) {
+  if (!isolate) {
+    return;
+  }
+  for (auto it = isolate->persistents.begin(); it != isolate->persistents.end();) {
+    auto* cell = it->first;
+    delete reinterpret_cast<shim::ObjectLayout*>(*cell);
+    delete cell;
+    it = isolate->persistents.erase(it);
+  }
+  isolate->layout_to_root.clear();
+  isolate->layout_to_function_id.clear();
 }
 
 }  // namespace raster_v8

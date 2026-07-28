@@ -102,6 +102,12 @@ inline uint64_t root_from_local(v8::Local<v8::Value> local) {
   if (layout->contents.root_id != 0) {
     return layout->contents.root_id;
   }
+  if (auto* ctx = bridge_ctx()) {
+    if (uint64_t root_id = resolve_root_from_repr(ctx, reinterpret_cast<uintptr_t>(layout))) {
+      layout->contents.root_id = root_id;
+      return root_id;
+    }
+  }
   return materialize_oddball_root(layout);
 }
 

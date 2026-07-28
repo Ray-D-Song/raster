@@ -5,6 +5,37 @@ on:
   workflow_dispatch:
 
 jobs:
+  rust-unit:
+    name: rust-unit-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo fmt --all -- --check
+      - run: cargo test -p v8_compat --lib
+      - run: cargo test -p raster_runtime_napi --lib
+
+  sanitizer:
+    name: sanitizer-${{ matrix.sanitizer }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [address, undefined]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.3.0
+          cache: yarn
+      - run: yarn install --frozen-lockfile
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - run: rustup target add x86_64-unknown-linux-gnu --toolchain nightly
+      - name: Run sanitizer gate
+        run: bash v8_compat/tools/run_sanitizer_ci.sh ${{ matrix.sanitizer }}
+
   v8-abi:
     name: v8-abi-drift
     runs-on: ubuntu-latest
@@ -15,14 +46,49 @@ jobs:
           node-version: 24.3.0
       - run: bash v8_compat/tools/check_abi.sh
 
-  compatibility:
-    name: ${{ matrix.case }}
+  v8-clippy:
+    name: v8-clippy
     runs-on: ubuntu-latest
-    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo clippy -p v8_compat --all-targets -- -D warnings
+
+  napi-clippy:
+    name: napi-clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo clippy -p raster_runtime_napi --all-targets -- -D warnings
+
+  compatibility:
+    name: ${{ matrix.case }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        case: [next, vite-plus, better-sqlite3, v8-hello, napi-hello]
+        include:
+          - case: napi-hello
+            os: macos-latest
+          - case: next
+            os: ubuntu-latest
+          - case: vite-plus
+            os: ubuntu-latest
+          - case: better-sqlite3
+            os: ubuntu-latest
+          - case: better-sqlite3
+            os: macos-latest
+          - case: v8-hello
+            os: ubuntu-latest
+          - case: v8-hello
+            os: macos-latest
+          - case: v8-hello
+            os: macos-15-intel
+          - case: better-sqlite3
+            os: ubuntu-24.04-arm
+          - case: v8-hello
+            os: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

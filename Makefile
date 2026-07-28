@@ -169,6 +169,10 @@ compat-better-sqlite3: js
 check-v8-abi:
 	bash v8_compat/tools/check_abi.sh
 
+sanitizer-ci:
+	bash v8_compat/tools/run_sanitizer_ci.sh address
+	bash v8_compat/tools/run_sanitizer_ci.sh undefined
+
 compat-napi: js
 	$(CARGO) build --features napi
 	cd compat/napi-hello && yarn install

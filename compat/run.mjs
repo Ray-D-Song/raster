@@ -71,6 +71,12 @@ const cases = {
         script: "test-tsfn-refd-hold.cjs",
         expectStillRunning: { checkMs: 400, killAfterMs: 1_500 },
       },
+      {
+        script: "test-module-exports.cjs",
+        successMarker: "module-exports-replace-ok",
+        maxDurationMs: 1_000,
+        expectCode: 0,
+      },
     ],
   },
 };
@@ -169,7 +175,7 @@ async function runVitePlusBuild(testCase, directory, raster, logPath, root) {
 async function runScriptCompat(testCase, directory, raster, logPath, root) {
   const logParts = [];
 
-  if (testCase.buildCommand) {
+  if (testCase.buildCommand && process.env.COMPAT_SKIP_BUILD !== "1") {
     logParts.push(`# Build addon\n$ ${testCase.buildCommand}`);
     console.log(`[compat-${name}] building addon: ${testCase.buildCommand}`);
     const buildResult = await spawnCollect(
@@ -204,8 +210,12 @@ async function runScriptCompat(testCase, directory, raster, logPath, root) {
   }
 
   await writeLog(logPath, logParts);
+  const compatMode =
+    process.env.COMPAT_SKIP_NODE_BASELINE === "1"
+      ? "Raster only"
+      : "Node baseline + Raster";
   console.log(
-    `${name} compatibility passed (${scripts.length} script(s), Node baseline + Raster)`
+    `${name} compatibility passed (${scripts.length} script(s), ${compatMode})`
   );
 }
 
@@ -219,13 +229,17 @@ async function runCompatScript(spec, directory, raster, logParts, root, logPath)
     expectStillRunning,
   } = spec;
   const label = `${name}/${script}`;
+  const skipNodeBaseline = process.env.COMPAT_SKIP_NODE_BASELINE === "1";
 
   if (expectStillRunning) {
     const { checkMs = 400, killAfterMs = 1_500 } = expectStillRunning;
-    for (const [phase, command, args] of [
-      ["Node baseline", process.execPath, [script]],
-      ["Raster run", raster, [script]],
-    ]) {
+    const phases = skipNodeBaseline
+      ? [["Raster run", raster, [script]]]
+      : [
+          ["Node baseline", process.execPath, [script]],
+          ["Raster run", raster, [script]],
+        ];
+    for (const [phase, command, args] of phases) {
       const cmdLine = `${command} ${args.join(" ")}`;
       logParts.push(`\n# ${phase}: ${script} (still-running)\n$ ${cmdLine}`);
       console.log(`[compat-${label}] ${phase} (still-running): ${cmdLine}`);
@@ -249,27 +263,29 @@ async function runCompatScript(spec, directory, raster, logParts, root, logPath)
     return;
   }
 
-  const nodeCmd = `${process.execPath} ${script}`;
-  logParts.push(`\n# Node baseline: ${script}\n$ ${nodeCmd}`);
-  console.log(`[compat-${label}] Node baseline: ${nodeCmd}`);
+  if (!skipNodeBaseline) {
+    const nodeCmd = `${process.execPath} ${script}`;
+    logParts.push(`\n# Node baseline: ${script}\n$ ${nodeCmd}`);
+    console.log(`[compat-${label}] Node baseline: ${nodeCmd}`);
 
-  const nodeResult = await spawnCollect(
-    process.execPath,
-    [script],
-    { cwd: directory, env: { ...process.env } },
-    Math.min(NODE_BASELINE_TIMEOUT_MS, maxDurationMs)
-  );
+    const nodeResult = await spawnCollect(
+      process.execPath,
+      [script],
+      { cwd: directory, env: { ...process.env } },
+      Math.min(NODE_BASELINE_TIMEOUT_MS, maxDurationMs)
+    );
 
-  validateCompatRun(label, "Node baseline", nodeResult, {
-    maxDurationMs,
-    expectCode,
-    successMarker,
-    mustNotContainStdout,
-    logPath,
-    root,
-    logParts,
-    rasterNotStarted: true,
-  });
+    validateCompatRun(label, "Node baseline", nodeResult, {
+      maxDurationMs,
+      expectCode,
+      successMarker,
+      mustNotContainStdout,
+      logPath,
+      root,
+      logParts,
+      rasterNotStarted: true,
+    });
+  }
 
   const rasterCmd = `${raster} ${script}`;
   logParts.push(`\n# Raster run: ${script}\n$ ${rasterCmd}`);

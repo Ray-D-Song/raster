@@ -58,8 +58,7 @@ impl RefTable {
         let reference = ptr as napi_ref;
         if weak && link_gc {
             unsafe {
-                (*ptr).gc_entry_id =
-                    crate::gc_hook::attach_weak_ref(ctx, value, reference, env);
+                (*ptr).gc_entry_id = crate::gc_hook::attach_weak_ref(ctx, value, reference, env);
             }
         }
         self.live.insert(ptr as usize);
@@ -112,7 +111,6 @@ impl RefTable {
     }
 }
 
-
 #[no_mangle]
 pub unsafe extern "C" fn napi_create_reference(
     env: napi_env,
@@ -128,9 +126,13 @@ pub unsafe extern "C" fn napi_create_reference(
         Some(v) => v,
         None => return napi_status::napi_invalid_arg,
     };
-    let reference = env
-        .refs
-        .create(env.ctx_ptr(), js_val, initial_refcount, env.as_napi_env(), true);
+    let reference = env.refs.create(
+        env.ctx_ptr(),
+        js_val,
+        initial_refcount,
+        env.as_napi_env(),
+        true,
+    );
     unsafe {
         *result = reference;
     }
@@ -202,8 +204,7 @@ pub unsafe extern "C" fn napi_reference_unref(
         let value = nref.value;
         nref.weak = true;
         if nref.gc_entry_id.is_none() {
-            nref.gc_entry_id =
-                crate::gc_hook::attach_weak_ref(ctx, value, reference, napi_env);
+            nref.gc_entry_id = crate::gc_hook::attach_weak_ref(ctx, value, reference, napi_env);
         }
         unsafe {
             qjs::JS_FreeValue(ctx, value);

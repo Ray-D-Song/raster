@@ -1,16 +1,16 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use libc::pthread_t;
 use std::ptr::NonNull;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::SyncSender;
-use libc::pthread_t;
+use std::sync::Arc;
 
 use parking_lot::Mutex;
 use raster_runtime_context::CtxExtension;
-use rquickjs::Ctx;
 use rquickjs::qjs::JSRuntime;
+use rquickjs::Ctx;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -105,13 +105,15 @@ impl DriverState {
     }
 
     pub fn release_async_keepalive(&self) {
-        let _ = self.inflight_async.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
-            if v == 0 {
-                None
-            } else {
-                Some(v - 1)
-            }
-        });
+        let _ = self
+            .inflight_async
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
+                if v == 0 {
+                    None
+                } else {
+                    Some(v - 1)
+                }
+            });
         self.wake_if_quiescent();
     }
 
@@ -162,9 +164,7 @@ impl DriverState {
                 on_js_thread,
                 "spawn_loop must run on the Env's registered JS thread"
             );
-            tracing::debug!(
-                "spawn_loop skipped: current pthread does not match Env JS thread"
-            );
+            tracing::debug!("spawn_loop skipped: current pthread does not match Env JS thread");
             return;
         }
         if self.loop_running.swap(true, Ordering::SeqCst) {
@@ -188,7 +188,7 @@ impl DriverState {
                         drop(rx);
                         self.dispatch_job(env_addr, job);
                         continue;
-                    }
+                    },
                     Err(mpsc::error::TryRecvError::Empty) => break,
                     Err(mpsc::error::TryRecvError::Disconnected) => break,
                 }
@@ -222,9 +222,11 @@ impl DriverState {
     }
 
     fn dec_pending(&self) {
-        let _ = self.pending.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
-            Some(v.saturating_sub(1))
-        });
+        let _ = self
+            .pending
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
+                Some(v.saturating_sub(1))
+            });
     }
 
     #[cfg(test)]
@@ -251,7 +253,7 @@ impl DriverState {
                     }
                     self.dec_pending();
                     crate::gc_hook::drain_pending_finalizers(env);
-                }
+                },
                 Err(mpsc::error::TryRecvError::Empty) => break,
                 Err(mpsc::error::TryRecvError::Disconnected) => break,
             }

@@ -38,7 +38,8 @@ impl WrapTable {
         env: crate::types::napi_env,
         weak_ref: Option<crate::types::napi_ref>,
     ) -> Option<usize> {
-        let id = gc_hook::register_gc_entry(GcEntryKind::Wrap, native, finalize, hint, env, weak_ref);
+        let id =
+            gc_hook::register_gc_entry(GcEntryKind::Wrap, native, finalize, hint, env, weak_ref);
         if !unsafe {
             crate::js_helpers::define_hidden_usize_configurable(
                 ctx,
@@ -172,7 +173,7 @@ pub unsafe extern "C" fn napi_unwrap(
                 *result = native;
             }
             napi_status::napi_ok
-        }
+        },
         None => napi_status::napi_generic_failure,
     }
 }
@@ -198,7 +199,7 @@ pub unsafe extern "C" fn napi_remove_wrap(
                 *result = entry.native;
             }
             napi_status::napi_ok
-        }
+        },
         None => napi_status::napi_generic_failure,
     }
 }

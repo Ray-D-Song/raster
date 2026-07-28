@@ -22,6 +22,7 @@ typedef struct RasterV8IsolateState RasterV8IsolateState;
 
 typedef RasterV8Status (*RasterV8RootDupFn)(uint64_t root_id, uint64_t* out_root_id);
 typedef RasterV8Status (*RasterV8RootDropFn)(uint64_t root_id);
+typedef RasterV8Status (*RasterV8RootMakeWeakFn)(uint64_t root_id);
 typedef RasterV8Status (*RasterV8RootFromJsFn)(
     RasterV8ContextState* ctx,
     uint64_t js_value_tag,
@@ -152,7 +153,7 @@ typedef RasterV8Status (*RasterV8RegisterWeakCallbackFn)(
     RasterV8ContextState* ctx,
     uint64_t object_root_id,
     void* parameter,
-    void (*callback)(const void* data, int parameter));
+    void* callback);
 typedef RasterV8Status (*RasterV8GetContextRootFn)(RasterV8ContextState* ctx, uint64_t* out_root_id);
 
 typedef struct RasterV8BridgeV1 {
@@ -160,6 +161,7 @@ typedef struct RasterV8BridgeV1 {
   uint32_t node_module_version;
   RasterV8RootDupFn root_dup;
   RasterV8RootDropFn root_drop;
+  RasterV8RootMakeWeakFn root_make_weak;
   RasterV8RootFromJsFn root_from_js;
   RasterV8RootToJsFn root_to_js;
   RasterV8ThrowTypeErrorFn throw_type_error;
@@ -287,6 +289,9 @@ RasterV8Status raster_v8_function_new_instance(RasterV8ContextState* ctx, uint64
                                                const uint64_t* args, uint64_t* out);
 RasterV8Status raster_v8_buffer_new_copy(RasterV8ContextState* ctx, const uint8_t* data, size_t len,
                                         uint64_t* out);
+RasterV8Status raster_v8_buffer_new_external(RasterV8ContextState* ctx, uint8_t* data, size_t len,
+                                             void (*callback)(uint8_t*, void*), void* hint,
+                                             uint64_t* out);
 RasterV8Status raster_v8_buffer_data(RasterV8ContextState* ctx, uint64_t root, uint8_t** out_ptr,
                                      size_t* out_len);
 RasterV8Status raster_v8_internal_field_get(RasterV8ContextState* ctx, uint64_t object_root, int index,
@@ -295,6 +300,11 @@ RasterV8Status raster_v8_internal_field_set(RasterV8ContextState* ctx, uint64_t 
                                             void* ptr);
 RasterV8Status raster_v8_root_id_for_js_object(RasterV8ContextState* ctx, void* object_ptr,
                                                uint64_t* out_root_id);
+RasterV8Status raster_v8_object_ptr_for_root(RasterV8ContextState* ctx, uint64_t root,
+                                             void** out_object_ptr);
+RasterV8Status raster_v8_root_restrong_from_object_ptr(RasterV8ContextState* ctx, void* object_ptr,
+                                                     uint64_t* out_root_id);
+void raster_v8_unregister_weak_for_object_ptr(RasterV8ContextState* ctx, void* object_ptr);
 RasterV8Status raster_v8_root_id_for_persistent_layout(void* layout, uint64_t* out_root_id);
 void raster_v8_register_layout_root(void* layout, uint64_t root_id);
 void raster_v8_register_layout_function_id(void* layout, uint32_t function_id);
@@ -305,6 +315,13 @@ RasterV8Status raster_v8_function_root_for_id(RasterV8ContextState* ctx, uint32_
                                              uint64_t* out_root_id);
 RasterV8Status raster_v8_buffer_has_instance(RasterV8ContextState* ctx, uint64_t root, bool* out);
 void raster_v8_add_env_cleanup_hook(RasterV8IsolateState* isolate, void (*cb)(void*), void* arg);
+void raster_v8_remove_env_cleanup_hook(RasterV8IsolateState* isolate, void (*cb)(void*), void* arg);
+void raster_v8_invoke_weak_callback(void* callback, void* parameter);
+int raster_v8_invoke_weak_callback_first_pass(void* callback, void* parameter, void** out_second_pass);
+void raster_v8_invoke_weak_callback_second_pass(void* callback, void* parameter);
+void raster_v8_dispatch_pending_weak_callbacks(void);
+void raster_v8_run_gc(void);
+void raster_v8_dispose_all_persistents(void);
 
 #ifdef __cplusplus
 }

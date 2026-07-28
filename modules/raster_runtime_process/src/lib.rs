@@ -18,6 +18,7 @@ use raster_runtime_utils::{
     sysinfo::{ARCH, PLATFORM},
     time, VERSION,
 };
+use rquickjs::qjs;
 use rquickjs::Exception;
 use rquickjs::{
     convert::Coerced,
@@ -68,14 +69,24 @@ fn dlopen<'js>(
     module: Object<'js>,
     filename: String,
     flags: Opt<u32>,
-) -> Result<Object<'js>> {
+) -> Result<()> {
     let exports: Object = module.get("exports")?;
     let exports_val = exports.clone().into_value().as_raw();
     let ctx_ptr = ctx.as_raw();
     let flag_bits = flags.0.unwrap_or(0);
-    raster_runtime_napi::dlopen::process_dlopen(ctx_ptr, exports_val, &filename, flag_bits)
-        .map_err(|e| Exception::throw_message(&ctx, &e))?;
-    Ok(exports)
+    let new_exports =
+        raster_runtime_napi::dlopen::process_dlopen(ctx_ptr, exports_val, &filename, flag_bits)
+            .map_err(|e| Exception::throw_message(&ctx, &e))?;
+    unsafe {
+        let module_val = module.clone().into_value().as_raw();
+        qjs::JS_SetPropertyStr(
+            ctx_ptr.as_ptr(),
+            module_val,
+            c"exports".as_ptr(),
+            new_exports,
+        );
+    }
+    Ok(())
 }
 
 fn next_tick<'js>(ctx: Ctx<'js>, cb: Function<'js>, args: Rest<Value<'js>>) -> Result<()> {

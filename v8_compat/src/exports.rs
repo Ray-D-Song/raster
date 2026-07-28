@@ -1,5 +1,7 @@
 //! Additional V8 value / buffer helpers exported as C symbols.
 
+use std::os::raw::c_void;
+
 use crate::value_ops::*;
 
 #[no_mangle]
@@ -153,6 +155,18 @@ pub unsafe extern "C" fn raster_v8_buffer_new_copy(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn raster_v8_buffer_new_external(
+    ctx: *mut crate::bridge::RasterV8ContextState,
+    data: *mut u8,
+    len: usize,
+    callback: Option<unsafe extern "C" fn(*mut u8, *mut c_void)>,
+    hint: *mut c_void,
+    out: *mut u64,
+) -> crate::bridge::RasterV8Status {
+    buffer_new_external(ctx, data, len, callback, hint, out)
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn raster_v8_buffer_data(
     ctx: *mut crate::bridge::RasterV8ContextState,
     root: u64,
@@ -210,6 +224,32 @@ pub unsafe extern "C" fn raster_v8_root_id_for_js_object(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn raster_v8_object_ptr_for_root(
+    ctx: *mut crate::bridge::RasterV8ContextState,
+    root: u64,
+    out: *mut *mut std::ffi::c_void,
+) -> crate::bridge::RasterV8Status {
+    crate::js_ops::object_ptr_for_root(ctx, root, out)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn raster_v8_root_restrong_from_object_ptr(
+    ctx: *mut crate::bridge::RasterV8ContextState,
+    object_ptr: *mut std::ffi::c_void,
+    out: *mut u64,
+) -> crate::bridge::RasterV8Status {
+    crate::js_ops::root_restrong_from_object_ptr(ctx, object_ptr, out)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn raster_v8_unregister_weak_for_object_ptr(
+    ctx: *mut crate::bridge::RasterV8ContextState,
+    object_ptr: *mut std::ffi::c_void,
+) {
+    crate::js_ops::unregister_weak_for_object_ptr(ctx, object_ptr);
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn raster_v8_buffer_has_instance(
     ctx: *mut crate::bridge::RasterV8ContextState,
     root: u64,
@@ -221,8 +261,17 @@ pub unsafe extern "C" fn raster_v8_buffer_has_instance(
 #[no_mangle]
 pub unsafe extern "C" fn raster_v8_add_env_cleanup_hook(
     isolate: *mut crate::bridge::RasterV8IsolateState,
-    _cb: Option<unsafe extern "C" fn(*mut std::ffi::c_void)>,
+    cb: Option<unsafe extern "C" fn(*mut std::ffi::c_void)>,
     arg: *mut std::ffi::c_void,
 ) {
-    add_env_cleanup_hook(isolate, _cb, arg);
+    add_env_cleanup_hook(isolate, cb, arg);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn raster_v8_remove_env_cleanup_hook(
+    isolate: *mut crate::bridge::RasterV8IsolateState,
+    cb: Option<unsafe extern "C" fn(*mut std::ffi::c_void)>,
+    arg: *mut std::ffi::c_void,
+) {
+    remove_env_cleanup_hook(isolate, cb, arg);
 }

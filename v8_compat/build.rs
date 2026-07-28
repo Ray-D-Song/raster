@@ -6,8 +6,7 @@ fn node24_include_dir() -> PathBuf {
         return PathBuf::from(path);
     }
     if let Ok(home) = env::var("HOME") {
-        let nvm = PathBuf::from(home)
-            .join(".nvm/versions/node/v24.3.0/include/node");
+        let nvm = PathBuf::from(home).join(".nvm/versions/node/v24.3.0/include/node");
         if nvm.join("v8.h").exists() {
             return nvm;
         }
@@ -16,6 +15,38 @@ fn node24_include_dir() -> PathBuf {
         .parent()
         .unwrap()
         .join("refs/node/src")
+}
+
+fn apply_sanitizer_flags(build: &mut cc::Build) {
+    let rust_sanitizer = env::var("CARGO_CFG_SANITIZE")
+        .ok()
+        .filter(|value| !value.is_empty());
+
+    let fallback_sanitizer = env::var("RASTER_SANITIZE")
+        .ok()
+        .filter(|value| !value.is_empty());
+
+    let sanitizer = rust_sanitizer.as_deref().or(fallback_sanitizer.as_deref());
+
+    let Some(sanitizer) = sanitizer else {
+        return;
+    };
+
+    match sanitizer {
+        "address" | "undefined" | "thread" | "memory" => {
+            build
+                .flag(format!("-fsanitize={sanitizer}"))
+                .flag("-fno-sanitize-recover=all")
+                .flag("-fno-omit-frame-pointer");
+
+            if rust_sanitizer.is_none() {
+                println!("cargo:rustc-link-arg=-fsanitize={sanitizer}");
+            }
+        },
+        x => {
+            println!("cargo:warning=Unsupported sanitizer: {x}");
+        },
+    }
 }
 
 fn main() {
@@ -43,6 +74,8 @@ fn main() {
         .include(manifest_dir.join("cpp/include"))
         .include(&node_src)
         .include(&v8_include);
+
+    apply_sanitizer_flags(&mut build);
 
     if node_root.join("deps").exists() {
         let deps = node_root.join("deps");
@@ -76,8 +109,10 @@ fn main() {
         "accessor_registry.cc",
         "template_registry.cc",
         "v8_handle_scope.cc",
+        "v8_escapable_handle_scope.cc",
         "v8_api.cc",
         "v8_api_internal.cc",
+        "weak_dispatch.cc",
         "v8_dispatch.cc",
         "v8_accessor_dispatch.cc",
         "v8_module_init.cc",
@@ -103,4 +138,5 @@ fn main() {
     println!("cargo:rerun-if-changed=cpp/");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=RASTER_NODE24_INCLUDE");
+    println!("cargo:rerun-if-env-changed=RASTER_SANITIZE");
 }

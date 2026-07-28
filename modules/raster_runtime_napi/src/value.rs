@@ -84,22 +84,12 @@ pub fn bytes_from_js(
         let latin1_bytes: Vec<u8> = if latin1 {
             let s = std::str::from_utf8(utf8).unwrap_or("");
             s.chars()
-                .map(|c| {
-                    if c <= '\u{00FF}' {
-                        c as u8
-                    } else {
-                        b'?'
-                    }
-                })
+                .map(|c| if c <= '\u{00FF}' { c as u8 } else { b'?' })
                 .collect()
         } else {
             Vec::new()
         };
-        let copy_len = if latin1 {
-            latin1_bytes.len()
-        } else {
-            len
-        };
+        let copy_len = if latin1 { latin1_bytes.len() } else { len };
         if !buf.is_null() && bufsize > 0 {
             let n = copy_len.min(bufsize.saturating_sub(1));
             if latin1 {
@@ -141,7 +131,7 @@ pub fn string_from_bytes(
             Err(_) => {
                 env.set_last_error(napi_status::napi_invalid_arg, Some("Invalid UTF-8"));
                 return Err(napi_status::napi_invalid_arg);
-            }
+            },
         }
     };
     Ok(value_to_napi_owned(env, js_str))
