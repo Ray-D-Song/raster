@@ -66,6 +66,10 @@ codegen-units = 1
 opt-level = 3
 panic = "abort"
 
+# Proc-macros are dlopen'd by rustc; release strip breaks rquickjs_macro loading.
+[profile.release.package.rquickjs-macro]
+strip = false
+
 [profile.test]
 opt-level = 3
 
