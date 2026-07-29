@@ -226,6 +226,10 @@ impl Default for ModuleBuilder {
         {
             builder = builder.with_module(crate::modules::zlib::ZlibModule);
         }
+        #[cfg(feature = "tls")]
+        {
+            builder = builder.with_module(crate::modules::tls::TlsModule);
+        }
 
         builder
     }

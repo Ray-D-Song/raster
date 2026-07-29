@@ -82,6 +82,37 @@ impl BytearrayBuffer {
         }
     }
 
+    /// Write bytes into the queue, removing each committed byte from `item`.
+    /// Safe to cancel: only uncommitted bytes remain in `item`.
+    pub async fn write_consuming(&self, item: &mut Vec<u8>) -> usize {
+        let _ = self.write_semaphore.acquire().await.unwrap();
+        loop {
+            let max_capacity = self.max_capacity.load(Ordering::Relaxed);
+            if self.closed.load(Ordering::Relaxed) {
+                return max_capacity;
+            }
+
+            if item.is_empty() {
+                return max_capacity;
+            }
+
+            let len = self.len.load(Ordering::Relaxed);
+            let available = max_capacity.saturating_sub(len);
+
+            if available > 0 {
+                let take = min(item.len(), available);
+                let chunk = item.drain(..take).collect::<Vec<_>>();
+                let chunk_len = chunk.len();
+                self.inner.lock().unwrap().extend(chunk);
+                self.len.fetch_add(chunk_len, Ordering::Relaxed);
+                if item.is_empty() {
+                    return max_capacity;
+                }
+            }
+            self.notify.notified().await;
+        }
+    }
+
     #[allow(dead_code)]
     pub fn is_closed(&self) -> bool {
         self.closed.load(Ordering::Relaxed)
@@ -222,5 +253,23 @@ mod tests {
         let _ = write_task.await;
 
         assert_eq!(data.len(), 256 * 256)
+    }
+
+    #[tokio::test]
+    async fn write_consuming_drains_on_partial_write() {
+        let queue = BytearrayBuffer::new(4);
+        queue.write_forced(&[1, 2, 3]);
+        let mut data = vec![4u8, 5, 6, 7, 8];
+        {
+            let write = queue.write_consuming(&mut data);
+            tokio::pin!(write);
+            tokio::select! {
+                _ = &mut write => {},
+                _ = tokio::time::sleep(std::time::Duration::from_millis(5)) => {},
+            }
+        }
+        assert_eq!(data, vec![5, 6, 7, 8]);
+        let stored = queue.read(None).unwrap_or_default();
+        assert_eq!(stored, vec![1, 2, 3, 4]);
     }
 }

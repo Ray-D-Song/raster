@@ -1,0 +1,8 @@
+# OpenSSL intermediates from generate.sh — committed PEMs/keys are the test fixtures.
+*.csr
+*.srl
+*.cnf
+_tmp_*
+root.key
+wrong_root.*
+intermediate.key

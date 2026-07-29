@@ -14,7 +14,8 @@ use std::{fs::File, io};
 use rustls::{pki_types::CertificateDer, version, SupportedProtocolVersion};
 
 #[cfg(any(feature = "tls-ring", feature = "tls-aws-lc", feature = "tls-graviola"))]
-use crate::modules::tls::{set_extra_ca_certs, set_tls_versions};
+use crate::modules::tls::root_ca::set_extra_ca_certs;
+use crate::modules::tls::set_tls_versions;
 
 #[cfg(feature = "tls-openssl")]
 use crate::modules::tls::set_tls_version;

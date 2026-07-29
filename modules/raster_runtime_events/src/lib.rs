@@ -252,15 +252,24 @@ where
         let mut events = events.write().or_throw(&ctx)?;
 
         let key = EventKey::from_value(&ctx, event)?;
+        let mut removed_last = false;
         if let Some(index) = events.iter_mut().position(|(k, _)| k == &key) {
             let items = &mut events[index].1;
             if let Some(pos) = items.iter().position(|item| item.callback == listener) {
                 items.remove(pos);
                 if items.is_empty() {
                     events.remove(index);
+                    removed_last = true;
                 }
             }
         };
+        drop(events);
+
+        if removed_last {
+            if let Some(class) = Class::<Self>::from_object(&this.0) {
+                class.borrow_mut().on_event_changed(key, false)?;
+            }
+        }
 
         Ok(this.0)
     }
@@ -513,13 +522,38 @@ where
     ) -> Result<Object<'js>> {
         let events = Self::resolve_events_from(&ctx, &this)?;
         let mut events = events.write().or_throw(&ctx)?;
-        match event.0 {
+        let removed_keys: Vec<EventKey<'js>> = match event.0 {
             Some(event) if !event.is_undefined() => {
                 let key = EventKey::from_value(&ctx, event)?;
+                let had_listeners = events
+                    .iter()
+                    .any(|(k, items)| k == &key && !items.is_empty());
                 events.retain(|(k, _)| k != &key);
+                if had_listeners {
+                    vec![key]
+                } else {
+                    vec![]
+                }
             },
-            _ => events.clear(),
+            _ => {
+                let keys: Vec<_> = events
+                    .iter()
+                    .filter(|(_, items)| !items.is_empty())
+                    .map(|(k, _)| k.clone())
+                    .collect();
+                events.clear();
+                keys
+            },
+        };
+        drop(events);
+
+        if let Some(class) = Class::<Self>::from_object(&this.0) {
+            let mut class_borrow = class.borrow_mut();
+            for key in removed_keys {
+                class_borrow.on_event_changed(key, false)?;
+            }
         }
+
         Ok(this.0)
     }
 }

@@ -24,6 +24,11 @@ pub fn get_deny_list() -> Option<&'static Vec<String>> {
     NET_DENY_LIST.get()
 }
 
+pub fn check_network_access(ctx: &Ctx<'_>, host: &str, port: u16) -> Result<()> {
+    let hostname = [host, itoa::Buffer::new().format(port)].join(":");
+    ensure_access(ctx, &hostname)
+}
+
 pub fn ensure_access(ctx: &Ctx<'_>, resource: &String) -> Result<()> {
     if let Some(allow_list) = NET_ALLOW_LIST.get() {
         if !allow_list.contains(resource) {

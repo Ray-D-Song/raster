@@ -1,6 +1,12 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
-use std::sync::{atomic::AtomicUsize, Arc, RwLock};
+use std::{
+    any::Any,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex, RwLock,
+    },
+};
 
 use raster_runtime_buffer::Buffer;
 use raster_runtime_context::CtxExtension;
@@ -15,11 +21,38 @@ use tokio::{
     io::{AsyncRead, AsyncReadExt, BufReader},
     sync::{
         broadcast::{self, Sender},
-        oneshot::Receiver,
+        oneshot::{self, Receiver},
     },
 };
 
 use super::{impl_stream_events, set_destroyed_and_error, SteamEvents, DEFAULT_BUFFER_SIZE};
+
+fn complete_readable_handoff<T: AsyncRead + Unpin + Send + 'static>(
+    reader: &mut Option<BufReader<T>>,
+    ba_buffer: &BytearrayBuffer,
+    buffer: &mut Vec<u8>,
+    handoff_waiter: &Arc<Mutex<Option<Box<dyn Any + Send>>>>,
+) -> Result<bool> {
+    if handoff_waiter.lock().unwrap().is_none() {
+        return Ok(false);
+    }
+
+    let reader = reader.take().expect("reader available for handoff");
+    let mut prefix = Vec::new();
+    if let Some(stored) = ba_buffer.read(None) {
+        prefix.extend(stored);
+    }
+    prefix.extend(buffer.drain(..));
+    prefix.extend_from_slice(reader.buffer());
+    let inner_reader = reader.into_inner();
+    if let Some(boxed) = handoff_waiter.lock().unwrap().take() {
+        let tx = *boxed
+            .downcast::<oneshot::Sender<(T, Vec<u8>)>>()
+            .expect("handoff waiter type mismatch");
+        let _ = tx.send((inner_reader, prefix));
+    }
+    Ok(true)
+}
 
 #[derive(PartialEq, Clone, Debug)]
 pub enum ReadableState {
@@ -41,6 +74,8 @@ pub struct ReadableStreamInner<'js> {
     high_water_mark: AtomicUsize,
     listener: Option<&'static str>,
     data_listener_attached_tx: Sender<()>,
+    handoff_waiter: Arc<Mutex<Option<Box<dyn Any + Send>>>>,
+    handoff_notify: Sender<()>,
 }
 
 impl<'js> Trace<'js> for ReadableStreamInner<'js> {
@@ -62,6 +97,9 @@ impl<'js> ReadableStreamInner<'js> {
                         self.listener = Some("data");
                     } else {
                         self.listener = None;
+                        if self.state == ReadableState::Flowing {
+                            self.state = ReadableState::Paused;
+                        }
                     }
                 },
                 "readable" => {
@@ -81,6 +119,7 @@ impl<'js> ReadableStreamInner<'js> {
     pub fn new(emitter: EventEmitter<'js>, emit_close: bool) -> Self {
         let (destroy_tx, _) = broadcast::channel::<Option<Value<'js>>>(1);
         let (listener_attached_tx, _) = broadcast::channel::<()>(1);
+        let (handoff_notify, _) = broadcast::channel::<()>(1);
         Self {
             emitter,
             destroy_tx,
@@ -93,6 +132,8 @@ impl<'js> ReadableStreamInner<'js> {
             is_destroyed: false,
             emit_close,
             errored: false,
+            handoff_waiter: Arc::new(Mutex::new(None)),
+            handoff_notify,
         }
     }
 }
@@ -209,7 +250,7 @@ where
         Ok(())
     }
 
-    fn process<T: AsyncRead + 'js + Unpin>(
+    fn process<T: AsyncRead + Send + 'static + 'js + Unpin>(
         this: Class<'js, Self>,
         ctx: &Ctx<'js>,
         readable: T,
@@ -217,7 +258,7 @@ where
         Self::do_process(this, ctx, readable, || {})
     }
 
-    fn process_callback<T: AsyncRead + 'js + Unpin, C: FnOnce() + Sized + 'js>(
+    fn process_callback<T: AsyncRead + Send + 'static + 'js + Unpin, C: FnOnce() + Sized + 'js>(
         this: Class<'js, Self>,
         ctx: &Ctx<'js>,
         readable: T,
@@ -226,13 +267,44 @@ where
         Self::do_process(this, ctx, readable, on_end)
     }
 
-    fn do_process<T: AsyncRead + 'js + Unpin, C: FnOnce() + Sized + 'js>(
+    fn request_handoff<T: Send + 'static>(
+        this: Class<'js, Self>,
+        _ctx: &Ctx<'js>,
+    ) -> Result<Receiver<(T, Vec<u8>)>> {
+        let (tx, rx) = oneshot::channel();
+        let mut borrow = this.borrow_mut();
+        let inner = borrow.inner_mut();
+        *inner.handoff_waiter.lock().unwrap() = Some(Box::new(tx));
+        let _ = inner.handoff_notify.send(());
+        drop(borrow);
+        Ok(rx)
+    }
+
+    fn process_handoff<T: AsyncRead + Send + 'static + 'js + Unpin>(
+        this: Class<'js, Self>,
+        ctx: &Ctx<'js>,
+        readable: T,
+    ) -> Result<(Receiver<bool>, Receiver<(T, Vec<u8>)>)> {
+        let (handoff_tx, handoff_rx) = oneshot::channel();
+        {
+            let mut borrow = this.borrow_mut();
+            let inner = borrow.inner_mut();
+            *inner.handoff_waiter.lock().unwrap() = Some(Box::new(handoff_tx));
+        }
+        let completion_rx = Self::do_process(this, ctx, readable, || {})?;
+        Ok((completion_rx, handoff_rx))
+    }
+
+    fn do_process<T: AsyncRead + Send + 'static + 'js + Unpin, C: FnOnce() + Sized + 'js>(
         this: Class<'js, Self>,
         ctx: &Ctx<'js>,
         readable: T,
         on_end: C,
     ) -> Result<Receiver<bool>> {
         let ctx2 = ctx.clone();
+        let handoff_completed = Arc::new(AtomicBool::new(false));
+        let handoff_completed2 = handoff_completed.clone();
+
         ctx.spawn_exit(async move {
             let this2 = this.clone();
             let ctx3 = ctx2.clone();
@@ -246,23 +318,47 @@ where
 
             let mut listener_attached_tx = inner.data_listener_attached_tx.subscribe();
             let ba_buffer = inner.buffer.clone();
+            let handoff_waiter = inner.handoff_waiter.clone();
+            let mut handoff_rx = inner.handoff_notify.subscribe();
             let mut has_data = false;
             drop(borrow);
 
             let read_function = async move {
-                let mut reader: BufReader<T> = BufReader::new(readable);
+                let mut reader = Some(BufReader::new(readable));
                 let mut buffer = Vec::<u8>::with_capacity(DEFAULT_BUFFER_SIZE);
                 let mut last_state = ReadableState::Init;
                 let mut error_value = None;
 
                 if !is_ended && !is_destroyed {
+                    if complete_readable_handoff(
+                        &mut reader,
+                        &ba_buffer,
+                        &mut buffer,
+                        &handoff_waiter,
+                    )?
+                    {
+                        handoff_completed2.store(true, Ordering::SeqCst);
+                        return Ok(());
+                    }
+
                     loop {
+                        if complete_readable_handoff(
+                            &mut reader,
+                            &ba_buffer,
+                            &mut buffer,
+                            &handoff_waiter,
+                        )?
+                        {
+                            handoff_completed2.store(true, Ordering::SeqCst);
+                            return Ok(());
+                        }
+
                         tokio::select! {
-                            result = reader.read_buf(&mut buffer) => {
+                            result = reader.as_mut().expect("reader").read_buf(&mut buffer) => {
                                 let bytes_read = result.or_throw(&ctx3)?;
 
                                 let mut state = this2.borrow().inner().state.clone();
-                                if !has_data && state == ReadableState::Init {
+                                if !has_data && state == ReadableState::Init && bytes_read > 0 {
                                     this2.borrow_mut().inner_mut().state = ReadableState::Paused;
                                     state =  ReadableState::Paused;
                                     has_data = true;
@@ -277,6 +373,16 @@ where
                                         }
 
                                         if buffer.is_empty() {
+                                            if complete_readable_handoff(
+                                                &mut reader,
+                                                &ba_buffer,
+                                                &mut buffer,
+                                                &handoff_waiter,
+                                            )?
+                                            {
+                                                handoff_completed2.store(true, Ordering::SeqCst);
+                                                return Ok(());
+                                            }
                                             break;
                                         }
 
@@ -290,32 +396,54 @@ where
                                         buffer.clear();
                                     },
                                     ReadableState::Paused => {
-
                                         if bytes_read == 0 {
+                                            if complete_readable_handoff(
+                                                &mut reader,
+                                                &ba_buffer,
+                                                &mut buffer,
+                                                &handoff_waiter,
+                                            )?
+                                            {
+                                                handoff_completed2.store(true, Ordering::SeqCst);
+                                                return Ok(());
+                                            }
                                             break;
-                                        }
-
-                                        let write_buffer_future = ba_buffer.write(&mut buffer);
-                                        Self::emit_str(
-                                            this2.clone(),
-                                            &ctx3,
-                                            "readable",
-                                            vec![],
-                                            false
-                                        )?;
-                                        tokio::select!{
-                                            capacity = write_buffer_future => {
-                                                buffer.clear();
-                                                //increase buffer capacity if bytearray buffer has more capacity to reduce read syscalls
-                                                buffer.reserve(buffer.capacity()-capacity);
+                                        } else {
+                                            let write_buffer_future = ba_buffer.write_consuming(&mut buffer);
+                                            Self::emit_str(
+                                                this2.clone(),
+                                                &ctx3,
+                                                "readable",
+                                                vec![],
+                                                false
+                                            )?;
+                                            let mut handoff_requested = false;
+                                            tokio::select!{
+                                                capacity = write_buffer_future => {
+                                                    buffer.clear();
+                                                    buffer.reserve(buffer.capacity()-capacity);
+                                                }
+                                                error = destroy_rx.recv()  => {
+                                                    set_destroyed_and_error(&mut is_destroyed,  &mut error_value, error);
+                                                    break;
+                                                }
+                                                _ = listener_attached_tx.recv() => {
+                                                    ba_buffer.clear().await
+                                                }
+                                                _ = handoff_rx.recv() => {
+                                                    handoff_requested = true;
+                                                }
                                             }
-                                            error = destroy_rx.recv()  => {
-                                                set_destroyed_and_error(&mut is_destroyed,  &mut error_value, error);
-                                                break;
-                                            }
-                                            _ = listener_attached_tx.recv() => {
-                                                ba_buffer.clear().await
-                                                //don't clear buffer
+                                            if handoff_requested
+                                                && complete_readable_handoff(
+                                                    &mut reader,
+                                                    &ba_buffer,
+                                                    &mut buffer,
+                                                    &handoff_waiter,
+                                                )?
+                                            {
+                                                handoff_completed2.store(true, Ordering::SeqCst);
+                                                return Ok(());
                                             }
                                         }
                                     },
@@ -332,8 +460,24 @@ where
                                 set_destroyed_and_error(&mut is_destroyed,  &mut error_value, error);
                                 break;
                             },
+                            _ = handoff_rx.recv() => {
+                                if complete_readable_handoff(
+                                    &mut reader,
+                                    &ba_buffer,
+                                    &mut buffer,
+                                    &handoff_waiter,
+                                )?
+                                {
+                                    handoff_completed2.store(true, Ordering::SeqCst);
+                                    return Ok(());
+                                }
+                            },
                         }
                     }
+                }
+
+                if handoff_completed2.load(Ordering::SeqCst) {
+                    return Ok(());
                 }
 
                 let mut borrow = this2.borrow_mut();
@@ -346,7 +490,6 @@ where
                 }
 
                 drop(borrow);
-                drop(reader);
 
                 if !is_destroyed {
                     on_end();
@@ -363,11 +506,125 @@ where
 
             let had_error = read_function.emit_error("readable",&ctx2, this.clone())?;
 
-            if emit_close {
+            if emit_close && !handoff_completed.load(Ordering::SeqCst) {
                 Self::emit_close(this,&ctx2,had_error)?;
             }
 
             Ok::<_, Error>(had_error)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{io::Cursor, sync::Arc};
+
+    use raster_runtime_events::{EventEmitter, EventKey};
+    use tokio::io::AsyncBufReadExt;
+    use tokio::sync::{broadcast, oneshot};
+
+    use super::*;
+
+    #[test]
+    fn data_listener_removed_returns_to_paused() {
+        let emitter = EventEmitter {
+            events: Arc::new(RwLock::new(Vec::new())),
+        };
+        let mut inner = ReadableStreamInner::new(emitter, true);
+        inner.state = ReadableState::Flowing;
+        inner.listener = Some("data");
+
+        let key = EventKey::String(std::rc::Rc::from("data"));
+        inner.on_event_changed(key, false).unwrap();
+
+        assert_eq!(inner.state, ReadableState::Paused);
+        assert_eq!(inner.listener, None);
+    }
+
+    #[tokio::test]
+    async fn handoff_prefix_preserves_buffer_order() {
+        let ba_buffer = BytearrayBuffer::new(8);
+        ba_buffer.write_forced(b"ba");
+
+        let mut local = b"lo".to_vec();
+        let mut reader = Some(BufReader::new(Cursor::new(b"reader".to_vec())));
+        reader.as_mut().unwrap().fill_buf().await.unwrap();
+
+        let handoff_waiter: Arc<Mutex<Option<Box<dyn std::any::Any + Send>>>> =
+            Arc::new(Mutex::new(None));
+        let (tx, mut rx) = oneshot::channel::<(Cursor<Vec<u8>>, Vec<u8>)>();
+        *handoff_waiter.lock().unwrap() = Some(Box::new(tx));
+
+        assert!(complete_readable_handoff::<Cursor<Vec<u8>>>(
+            &mut reader,
+            &ba_buffer,
+            &mut local,
+            &handoff_waiter,
+        )
+        .unwrap());
+        assert!(reader.is_none());
+
+        let (_inner, prefix) = rx.try_recv().unwrap();
+        assert_eq!(prefix, b"baloreader");
+    }
+
+    #[tokio::test]
+    async fn handoff_waiter_available_without_broadcast_subscriber() {
+        let (notify_tx, _) = broadcast::channel(1);
+        let handoff_waiter: Arc<Mutex<Option<Box<dyn std::any::Any + Send>>>> =
+            Arc::new(Mutex::new(None));
+        let (tx, mut rx) = oneshot::channel::<(Cursor<Vec<u8>>, Vec<u8>)>();
+        *handoff_waiter.lock().unwrap() = Some(Box::new(tx));
+
+        assert!(notify_tx.send(()).is_err());
+
+        let mut reader = Some(BufReader::new(Cursor::new(b"payload".to_vec())));
+        reader.as_mut().unwrap().fill_buf().await.unwrap();
+        let mut local = Vec::new();
+        let ba_buffer = BytearrayBuffer::new(16);
+
+        assert!(complete_readable_handoff::<Cursor<Vec<u8>>>(
+            &mut reader,
+            &ba_buffer,
+            &mut local,
+            &handoff_waiter,
+        )
+        .unwrap());
+
+        let (_, prefix) = rx.try_recv().unwrap();
+        assert_eq!(prefix, b"payload");
+    }
+
+    #[tokio::test]
+    async fn handoff_prefix_no_duplicate_after_cancelled_partial_write() {
+        let ba_buffer = BytearrayBuffer::new(4);
+        ba_buffer.write_forced(&[1, 2, 3]);
+
+        let mut local = vec![4u8, 5, 6, 7];
+        let handoff_waiter: Arc<Mutex<Option<Box<dyn std::any::Any + Send>>>> =
+            Arc::new(Mutex::new(None));
+        let (tx, mut rx) = oneshot::channel::<(Cursor<Vec<u8>>, Vec<u8>)>();
+        *handoff_waiter.lock().unwrap() = Some(Box::new(tx));
+
+        {
+            let write = ba_buffer.write_consuming(&mut local);
+            tokio::pin!(write);
+            tokio::select! {
+                _ = &mut write => {},
+                _ = tokio::time::sleep(std::time::Duration::from_millis(5)) => {},
+            }
+        }
+
+        let mut reader = Some(BufReader::new(Cursor::new(Vec::new())));
+        assert!(complete_readable_handoff::<Cursor<Vec<u8>>>(
+            &mut reader,
+            &ba_buffer,
+            &mut local,
+            &handoff_waiter,
+        )
+        .unwrap());
+
+        let (_, prefix) = rx.try_recv().unwrap();
+        assert_eq!(prefix, vec![1, 2, 3, 4, 5, 6, 7]);
     }
 }

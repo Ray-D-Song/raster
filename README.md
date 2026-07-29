@@ -79,7 +79,7 @@ The test runner also has support for filters. Using filters is as simple as addi
 | node:string_decoder                              | ✔︎       | ✔︎     |
 | node:test                                        | ✔︎       | ✘     |
 | node:timers                                      | ✔︎       | ✔︎⚠️   |
-| node:tls                                         | ✔︎       | ✘⏱    |
+| node:tls                                         | ✔︎       | ✔︎⚠️   |
 | node:tty                                         | ✔︎       | ✔︎⚠️   |
 | node:url                                         | ✔︎       | ✔︎⚠️   |
 | node:util                                        | ✔︎       | ✔︎⚠️   |
@@ -323,6 +323,8 @@ raster_runtime supports multiple cryptographic backends for both the crypto modu
 | `tls-ring` (default) | rustls with ring crypto                       |
 | `tls-graviola`       | rustls with graviola crypto                   |
 | `tls-openssl`        | OpenSSL for TLS                               |
+
+`node:tls` is implemented as a **partial** Node core subset (client/server, `TLSSocket`, `SecureContext`, STARTTLS handoff for `net.Socket`, TLS 1.2/1.3, ALPN, SNI, mTLS). Not supported: session resume/tickets, PFX, custom ciphers/sigalgs, OCSP, renegotiation, PSK, and other advanced options (these throw `ERR_TLS_OPTION_NOT_SUPPORTED`). HTTP/HTTPS/Fetch continue to use the internal `BuildClientConfigOptions` / `TLS_CONFIG` Rust API unchanged.
 
 ### Building with Different Backends
 

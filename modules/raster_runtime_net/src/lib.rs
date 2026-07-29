@@ -19,18 +19,23 @@ use tokio::{
     sync::oneshot::Receiver,
 };
 
-use self::security::ensure_access;
-pub use self::security::{get_allow_list, get_deny_list, set_allow_list, set_deny_list};
+pub use self::security::{
+    check_network_access, ensure_access, get_allow_list, get_deny_list, set_allow_list,
+    set_deny_list,
+};
 
 mod security;
 mod server;
 mod socket;
+mod transport;
 
-use self::server::Server;
-pub use self::socket::Socket;
+pub use self::server::Server;
+pub use self::socket::{Socket, TransportState};
+pub use self::transport::PrefixedTcpStream;
 
 const LOCALHOST: &str = "localhost";
 
+#[derive(PartialEq)]
 #[allow(dead_code)]
 enum ReadyState {
     Opening,
@@ -104,11 +109,11 @@ impl Listener {
     }
 }
 
-fn get_hostname(host: &str, port: u16) -> String {
+pub fn get_hostname(host: &str, port: u16) -> String {
     [host, itoa::Buffer::new().format(port)].join(":")
 }
 
-fn get_address_parts(
+pub fn get_address_parts(
     ctx: &Ctx,
     addr: StdResult<SocketAddr, std::io::Error>,
 ) -> Result<(String, u16, String)> {

@@ -118,7 +118,13 @@ Diagnostics land in `compat/napi-hello/compat.log`.
 
 The fixture keeps mysql2's default `enableKeepAlive: true` and default authentication flow. It does **not** disable keepalive, switch to legacy auth plugins, or use MariaDB to bypass compatibility gaps.
 
-**Current Raster gaps (expected):** `Socket.setNoDelay()` is the first known failure. Further gaps may include `Socket.setKeepAlive()` and RSA `publicEncrypt` required for non-TLS `caching_sha2_password` on MySQL 8.4.
+**Current Raster gaps (expected), in order:**
+
+1. `net.Socket.setNoDelay()`.
+2. `net.Socket.setKeepAlive()`.
+3. RSA `publicEncrypt` for first-time non-TLS `caching_sha2_password` authentication on MySQL 8.4. Node baseline success is followed by `FLUSH PRIVILEGES` before Raster runs so the auth cache does not mask this gap.
+
+The `node:tls` module is now loadable (mysql2's unconditional `require("tls")` at import time is satisfied). SSL/TLS connections from mysql2 are not exercised by this fixture's default non-SSL config.
 
 **CI:** The `mysql-compat` job calls `make compat-mysql` on Ubuntu (Docker is available on the runner). It uses `continue-on-error: true` while Raster gaps are being closed — failures are recorded and `compat/mysql2/compat.log` is uploaded, but the job does not block merges. Remove `continue-on-error` only when Raster reliably prints `mysql2 compat OK`.
 

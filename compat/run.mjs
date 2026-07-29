@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
@@ -256,7 +257,8 @@ async function runCompatScript(
   logParts,
   root,
   logPath,
-  env
+  env,
+  mysqlContainerId = null
 ) {
   const {
     script,
@@ -306,11 +308,12 @@ async function runCompatScript(
     logParts.push(`\n# Node baseline: ${script}\n$ ${nodeCmd}`);
     console.log(`[compat-${label}] Node baseline: ${nodeCmd}`);
 
-    const nodeResult = await spawnCollect(
+    const nodeResult = await spawnCompatChild(
       process.execPath,
       [script],
       { cwd: directory, env },
-      Math.min(NODE_BASELINE_TIMEOUT_MS, maxDurationMs)
+      Math.min(NODE_BASELINE_TIMEOUT_MS, maxDurationMs),
+      logParts
     );
 
     validateCompatRun(label, "Node baseline", nodeResult, {
@@ -323,17 +326,22 @@ async function runCompatScript(
       logParts,
       rasterNotStarted: true,
     });
+
+    if (mysqlContainerId) {
+      await flushMysqlAuthCache(mysqlContainerId, logParts);
+    }
   }
 
   const rasterCmd = `${raster} ${script}`;
   logParts.push(`\n# Raster run: ${script}\n$ ${rasterCmd}`);
   console.log(`[compat-${label}] Raster run: ${rasterCmd}`);
 
-  const rasterResult = await spawnCollect(
+  const rasterResult = await spawnCompatChild(
     raster,
     [script],
     { cwd: directory, env },
-    maxDurationMs
+    maxDurationMs,
+    logParts
   );
 
   validateCompatRun(label, "Raster run", rasterResult, {
@@ -492,6 +500,7 @@ async function runMysql2ScriptCompat(
 
   let testFailed = false;
   try {
+    await assertRasterExecutable(raster, logParts);
     logParts.push(`# Docker\nimage: ${MYSQL_DOCKER_IMAGE}`);
 
     const dockerVersion = await execDocker([
@@ -603,7 +612,8 @@ async function runMysql2ScriptCompat(
         logParts,
         root,
         logPath,
-        testEnv
+        testEnv,
+        containerId
       );
     }
 
@@ -616,6 +626,7 @@ async function runMysql2ScriptCompat(
     );
   } catch (err) {
     testFailed = true;
+    logParts.push(`\n# Error\n${formatSpawnError(err)}`);
     try {
       await appendContainerDiagnostics();
     } catch {
@@ -636,6 +647,50 @@ async function runMysql2ScriptCompat(
   }
 }
 
+async function assertRasterExecutable(rasterPath, logParts) {
+  logParts.push(`\n# Raster preflight\nraster: ${rasterPath}`);
+  try {
+    const stat = await fs.stat(rasterPath);
+    if (!stat.isFile()) {
+      throw new Error(`Raster runtime is not a file: ${rasterPath}`);
+    }
+    await fs.access(rasterPath, fsConstants.X_OK);
+  } catch (err) {
+    const code =
+      err && typeof err === "object" && "code" in err ? err.code : null;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      throw new Error(
+        `Raster runtime not found: ${rasterPath}\n` +
+          "Build it first with: cargo +nightly build"
+      );
+    }
+    if (code === "EACCES") {
+      throw new Error(
+        `Raster runtime is not executable: ${rasterPath}\n` +
+          "Build it first with: cargo +nightly build"
+      );
+    }
+    throw err;
+  }
+}
+
+async function spawnCompatChild(command, args, options, timeoutMs, logParts) {
+  try {
+    return await spawnCollect(command, args, options, timeoutMs);
+  } catch (err) {
+    const detail = formatSpawnError(err);
+    logParts.push(`exit: spawn error\n\nstdout:\n\nstderr:\n${detail}`);
+    throw err;
+  }
+}
+
+function formatSpawnError(err) {
+  if (err instanceof Error && err.stack) {
+    return err.stack;
+  }
+  return String(err);
+}
+
 function redactSecrets(text) {
   if (!text) {
     return "";
@@ -643,6 +698,35 @@ function redactSecrets(text) {
   return String(text)
     .replace(/([A-Za-z_]*PASSWORD=)[^\s"']*/gi, "$1***")
     .replace(/(^|\s)-p\S+/gm, "$1-p***");
+}
+
+async function flushMysqlAuthCache(containerId, logParts) {
+  const flushArgs = [
+    "exec",
+    containerId,
+    "mysql",
+    "-uroot",
+    "-pcompat-root",
+    "-e",
+    "FLUSH PRIVILEGES;",
+  ];
+  const loggedCmd = redactSecrets(`docker ${flushArgs.join(" ")}`);
+  logParts.push(
+    `\n# Flush authentication cache before Raster run\n$ ${loggedCmd}`
+  );
+  console.log(
+    "[compat-mysql2] flushing authentication cache before Raster run"
+  );
+
+  const result = await execDocker(flushArgs);
+  logParts.push(
+    `exit: ${result.code ?? result.signal}\n\nstdout:\n${redactSecrets(result.stdout)}\n\nstderr:\n${redactSecrets(result.stderr)}`
+  );
+  if (result.code !== 0) {
+    throw new Error(
+      `Failed to flush MySQL authentication cache: ${redactSecrets(result.stderr.trim()) || "unknown error"}`
+    );
+  }
 }
 
 function execDocker(args, timeoutMs = 60_000) {

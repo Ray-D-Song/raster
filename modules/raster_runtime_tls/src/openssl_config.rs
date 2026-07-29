@@ -4,21 +4,17 @@ use std::sync::OnceLock;
 
 use once_cell::sync::Lazy;
 use openssl::ssl::{SslConnectorBuilder, SslMethod, SslVerifyMode};
-use openssl::x509::X509;
 
-static EXTRA_CA_CERTS: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
+use crate::root_ca::{get_extra_ca_certs_openssl, load_openssl_ca_store, set_extra_ca_certs_openssl};
 
-pub fn set_extra_ca_certs(certs: Vec<Vec<u8>>) {
-    _ = EXTRA_CA_CERTS.set(certs);
+pub use crate::root_ca::set_extra_ca_certs_bytes as set_extra_ca_certs;
+
+pub fn set_extra_ca_certs_der(certs: Vec<Vec<u8>>) {
+    set_extra_ca_certs_openssl(certs);
 }
 
 pub fn get_extra_ca_certs() -> Option<Vec<Vec<u8>>> {
-    let certs = EXTRA_CA_CERTS.get_or_init(Vec::new).clone();
-    if certs.is_empty() {
-        None
-    } else {
-        Some(certs)
-    }
+    get_extra_ca_certs_openssl()
 }
 
 static TLS_VERSION: OnceLock<Option<openssl::ssl::SslVersion>> = OnceLock::new();
@@ -57,23 +53,10 @@ pub fn build_client_config(
     // Certificate verification
     if !options.reject_unauthorized {
         builder.set_verify(SslVerifyMode::NONE);
-    } else if let Some(ca) = options.ca {
-        for cert_pem in ca {
-            let cert = X509::from_pem(&cert_pem)?;
-            builder.cert_store_mut().add_cert(cert)?;
-        }
+    } else if let Some(ca) = options.ca.as_deref() {
+        load_openssl_ca_store(&mut builder, Some(ca))?;
     } else {
-        // Use system default CA certificates
-        builder.set_default_verify_paths()?;
-
-        // Add extra CA certs if configured
-        if let Some(extra_certs) = get_extra_ca_certs() {
-            for cert_der in extra_certs {
-                if let Ok(cert) = X509::from_der(&cert_der) {
-                    let _ = builder.cert_store_mut().add_cert(cert);
-                }
-            }
-        }
+        load_openssl_ca_store(&mut builder, None)?;
     }
 
     Ok(builder)

@@ -68,3 +68,20 @@ impl Drop for MockServer {
         let _ = self.shutdown_tx.send(());
     }
 }
+
+/// PEM fixtures for integration tests.
+pub mod fixtures {
+    pub const ROOT_CA: &str = include_str!("../data/root.pem");
+    pub const SERVER_CERT: &str = include_str!("../data/server.pem");
+    pub const SERVER_KEY: &str = include_str!("../data/server.key");
+    pub const ALT_SERVER_CERT: &str = include_str!("../data/alt_server.pem");
+    pub const ALT_SERVER_KEY: &str = include_str!("../data/alt_server.key");
+    pub const WILDCARD_SERVER_CERT: &str = include_str!("../data/wildcard_server.pem");
+    pub const WILDCARD_SERVER_KEY: &str = include_str!("../data/wildcard_server.key");
+    pub const CLIENT_CERT: &str = include_str!("../data/client.pem");
+    pub const CLIENT_KEY: &str = include_str!("../data/client.key");
+    pub const WRONG_CLIENT_CERT: &str = include_str!("../data/wrong_client.pem");
+    pub const WRONG_CLIENT_KEY: &str = include_str!("../data/wrong_client.key");
+    pub const INTERMEDIATE_CERT: &str = include_str!("../data/intermediate.pem");
+    pub const CHAIN_LEAF_CERT: &str = include_str!("../data/chain_leaf.pem");
+}

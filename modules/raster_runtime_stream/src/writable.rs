@@ -1,6 +1,12 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
-use std::sync::{Arc, RwLock};
+use std::{
+    any::Any,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, RwLock,
+    },
+};
 
 use raster_runtime_context::CtxExtension;
 use raster_runtime_events::{EmitError, Emitter, EventEmitter, EventList};
@@ -15,7 +21,7 @@ use tokio::{
     sync::{
         broadcast::{self, Sender},
         mpsc::{self, UnboundedReceiver, UnboundedSender},
-        oneshot::Receiver,
+        oneshot::{self, Receiver},
     },
 };
 
@@ -31,6 +37,7 @@ pub struct WritableStreamInner<'js> {
     emit_close: bool,
     is_destroyed: bool,
     destroy_tx: Sender<Option<Value<'js>>>,
+    handoff_waiter: Arc<Mutex<Option<Box<dyn Any + Send>>>>,
 }
 
 impl<'js> Trace<'js> for WritableStreamInner<'js> {
@@ -54,6 +61,7 @@ impl<'js> WritableStreamInner<'js> {
             destroy_tx,
             emit_close,
             errored: false,
+            handoff_waiter: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -64,6 +72,8 @@ pub enum WriteCommand<'js> {
     End,
     Write(Value<'js>, Option<Function<'js>>, bool),
     Flush,
+    FlushBarrier(oneshot::Sender<()>),
+    Handoff,
 }
 
 #[rquickjs::class]
@@ -210,7 +220,36 @@ where
         Ok(())
     }
 
-    fn process<T: AsyncWrite + 'js + Unpin>(
+    fn request_flush_barrier(
+        this: Class<'js, Self>,
+        ctx: &Ctx<'js>,
+    ) -> Result<Receiver<()>> {
+        let (tx, rx) = oneshot::channel();
+        this.borrow()
+            .inner()
+            .command_tx
+            .send(WriteCommand::FlushBarrier(tx))
+            .or_throw(ctx)?;
+        Ok(rx)
+    }
+
+    fn request_handoff<T: Send + 'static>(
+        this: Class<'js, Self>,
+        ctx: &Ctx<'js>,
+    ) -> Result<Receiver<T>> {
+        let (tx, rx) = oneshot::channel();
+        let mut borrow = this.borrow_mut();
+        let inner = borrow.inner_mut();
+        *inner.handoff_waiter.lock().unwrap() = Some(Box::new(tx));
+        inner
+            .command_tx
+            .send(WriteCommand::Handoff)
+            .or_throw(ctx)?;
+        drop(borrow);
+        Ok(rx)
+    }
+
+    fn process<T: AsyncWrite + Send + 'static + 'js + Unpin>(
         this: Class<'js, Self>,
         ctx: &Ctx<'js>,
         writable: T,
@@ -224,10 +263,13 @@ where
             .take()
             .expect("rx from writable process already taken!");
         let mut destroy_rx = inner.destroy_tx.subscribe();
+        let handoff_waiter = inner.handoff_waiter.clone();
         let mut error_value = None;
 
         drop(borrow);
         let ctx2 = ctx.clone();
+        let handoff_completed = Arc::new(AtomicBool::new(false));
+        let handoff_completed2 = handoff_completed.clone();
 
         ctx.spawn_exit(async move {
             let ctx3 = ctx2.clone();
@@ -277,6 +319,22 @@ where
                                         break;
                                     },
                                     Some(WriteCommand::Flush) => writer.flush().await.or_throw(&ctx3)?,
+                                    Some(WriteCommand::FlushBarrier(ack)) => {
+                                        writer.flush().await.or_throw(&ctx3)?;
+                                        let _ = ack.send(());
+                                    },
+                                    Some(WriteCommand::Handoff) => {
+                                        writer.flush().await.or_throw(&ctx3)?;
+                                        let inner_writer = writer.into_inner();
+                                        if let Some(boxed) = handoff_waiter.lock().unwrap().take() {
+                                            let tx = *boxed
+                                                .downcast::<oneshot::Sender<T>>()
+                                                .expect("handoff waiter type mismatch");
+                                            let _ = tx.send(inner_writer);
+                                        }
+                                        handoff_completed2.store(true, Ordering::SeqCst);
+                                        return Ok(());
+                                    },
                                     None => break,
                                 }
                             },
@@ -304,7 +362,7 @@ where
 
             let had_error = write_function.emit_error("writable", &ctx2, this.clone())?;
 
-            if emit_close {
+            if emit_close && !handoff_completed.load(Ordering::SeqCst) {
                 Self::emit_close(this,&ctx2,had_error)?;
             }
 

@@ -6,6 +6,8 @@ use std::{
 };
 
 use raster_runtime_buffer::Buffer;
+use std::time::Duration;
+
 use raster_runtime_context::CtxExtension;
 use raster_runtime_events::{EmitError, Emitter, EventEmitter, EventKey, EventList};
 use raster_runtime_stream::{
@@ -24,7 +26,7 @@ use rquickjs::{
 use tokio::net::UnixStream;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
-    net::TcpStream,
+    net::{tcp::OwnedReadHalf, tcp::OwnedWriteHalf, TcpStream},
     sync::{mpsc::UnboundedSender, oneshot::Receiver},
 };
 use tracing::trace;
@@ -32,6 +34,14 @@ use tracing::trace;
 use super::{ensure_access, get_address_parts, get_hostname, rw_join, ReadyState, LOCALHOST};
 
 impl_stream_events!(Socket);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportState {
+    Attached,
+    HandoffPending,
+    Detached,
+    Closed,
+}
 
 enum RawShutdown {
     Tcp(Arc<std::net::TcpStream>),
@@ -59,6 +69,10 @@ pub struct Socket<'js> {
     raw_writer: Option<UnboundedSender<Vec<u8>>>,
     raw_reader: Option<Arc<Mutex<Vec<u8>>>>,
     raw_shutdown: Option<RawShutdown>,
+    transport_state: TransportState,
+    tcp_read_half: Option<OwnedReadHalf>,
+    tcp_write_half: Option<OwnedWriteHalf>,
+    handoff_prefix: Option<Vec<u8>>,
 }
 
 unsafe impl<'js> JsLifetime<'js> for Socket<'js> {
@@ -136,6 +150,12 @@ impl<'js> Socket<'js> {
         value: Value<'js>,
         cb: Opt<Function<'js>>,
     ) -> Result<()> {
+        if Self::blocks_transport_writes(&this.borrow()) {
+            return Err(Exception::throw_message(
+                &ctx,
+                "Socket transport is not available for writes",
+            ));
+        }
         if let Some(writer) = this.borrow().raw_writer.clone() {
             let bytes =
                 raster_runtime_utils::bytes::ObjectBytes::from(&ctx, &value)?.into_bytes(&ctx)?;
@@ -152,6 +172,12 @@ impl<'js> Socket<'js> {
     }
 
     pub fn end(this: This<Class<'js, Self>>, ctx: Ctx<'js>, args: Rest<Value<'js>>) -> Result<()> {
+        if Self::blocks_transport_writes(&this.borrow()) {
+            return Err(Exception::throw_message(
+                &ctx,
+                "Socket transport is not available for writes",
+            ));
+        }
         let mut args = args.0.into_iter();
         let first = args.next();
         let (value, callback) = match first {
@@ -354,9 +380,24 @@ impl<'js> Socket<'js> {
 
                 Socket::emit_str(this2.clone(), &ctx3, "connect", vec![], false)?;
 
-                let had_error = rw_join(&ctx3, readable_done, writable_done).await?;
+                let this4 = this2.clone();
+                let ctx4 = ctx3.clone();
+                ctx3.spawn_exit_simple(async move {
+                    let _ = async {
+                        let had_error = rw_join(&ctx4, readable_done, writable_done).await?;
 
-                Socket::emit_close(this2, &ctx3, had_error)?;
+                        if !matches!(
+                            this4.borrow().transport_state,
+                            TransportState::HandoffPending | TransportState::Detached
+                        ) {
+                            Socket::emit_close(this4, &ctx4, had_error)?;
+                        }
+
+                        Ok::<_, Error>(())
+                    }
+                    .await;
+                    Ok(())
+                });
 
                 Ok::<_, Error>(())
             }
@@ -397,9 +438,113 @@ impl<'js> Socket<'js> {
                 raw_writer: None,
                 raw_reader: None,
                 raw_shutdown: None,
+                transport_state: TransportState::Closed,
+                tcp_read_half: None,
+                tcp_write_half: None,
+                handoff_prefix: None,
             },
         )?;
         Ok(instance)
+    }
+
+    pub fn is_detached(&self) -> bool {
+        self.transport_state == TransportState::Detached
+    }
+
+    fn blocks_transport_writes(socket: &Socket<'_>) -> bool {
+        matches!(
+            socket.transport_state,
+            TransportState::HandoffPending | TransportState::Detached
+        )
+    }
+
+    pub async fn begin_tls_handoff(
+        ctx: &Ctx<'js>,
+        this: Class<'js, Socket<'js>>,
+    ) -> Result<(OwnedReadHalf, OwnedWriteHalf, Vec<u8>)> {
+        {
+            let borrow = this.borrow();
+            if borrow.destroyed {
+                return Err(Exception::throw_message(ctx, "Socket destroyed"));
+            }
+            if borrow.raw_writer.is_some() || borrow.raw_reader.is_some() {
+                return Err(Exception::throw_message(
+                    ctx,
+                    "STARTTLS handoff is not supported for raw transport sockets",
+                ));
+            }
+            if borrow.transport_state != TransportState::Attached {
+                return Err(Exception::throw_message(
+                    ctx,
+                    "Socket transport is not attached",
+                ));
+            }
+            if borrow.ready_state != ReadyState::Open {
+                return Err(Exception::throw_message(ctx, "Socket is not connected"));
+            }
+        }
+
+        this.borrow_mut().transport_state = TransportState::HandoffPending;
+
+        let flush_rx = WritableStream::request_flush_barrier(this.clone(), ctx)?;
+        match tokio::time::timeout(Duration::from_secs(10), flush_rx).await {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => {
+                this.borrow_mut().transport_state = TransportState::Attached;
+                return Err(Exception::throw_message(ctx, "Flush barrier failed"));
+            }
+            Err(_) => {
+                this.borrow_mut().transport_state = TransportState::Attached;
+                return Err(Exception::throw_message(ctx, "Flush barrier timeout"));
+            }
+        }
+
+        this.borrow_mut().transport_state = TransportState::Detached;
+
+        let fail_handoff = |this: &Class<'js, Socket<'js>>| {
+            let mut borrow = this.borrow_mut();
+            borrow.transport_state = TransportState::Closed;
+            borrow.destroyed = true;
+        };
+
+        let read_rx = match ReadableStream::request_handoff::<OwnedReadHalf>(this.clone(), ctx) {
+            Ok(rx) => rx,
+            Err(err) => {
+                fail_handoff(&this);
+                return Err(err);
+            }
+        };
+        let write_rx = match WritableStream::request_handoff::<OwnedWriteHalf>(this.clone(), ctx) {
+            Ok(rx) => rx,
+            Err(err) => {
+                fail_handoff(&this);
+                return Err(err);
+            }
+        };
+
+        let (read_half, read_prefix) = match tokio::time::timeout(Duration::from_secs(10), read_rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) | Err(_) => {
+                fail_handoff(&this);
+                return Err(Exception::throw_message(ctx, "Readable handoff failed"));
+            }
+        };
+        let write_half = match tokio::time::timeout(Duration::from_secs(10), write_rx).await {
+            Ok(Ok(half)) => half,
+            Ok(Err(_)) | Err(_) => {
+                fail_handoff(&this);
+                return Err(Exception::throw_message(ctx, "Writable handoff failed"));
+            }
+        };
+
+        let prefix = read_prefix;
+
+        {
+            let mut borrow = this.borrow_mut();
+            borrow.handoff_prefix = Some(prefix.clone());
+        }
+
+        Ok((read_half, write_half, prefix))
     }
 
     pub fn process_tcp_stream(
@@ -458,7 +603,7 @@ impl<'js> Socket<'js> {
         Self::process_stream(this, ctx, reader, writer, allow_half_open)
     }
 
-    pub fn process_io<T: AsyncRead + AsyncWrite + 'js + Unpin>(
+    pub fn process_io<T: AsyncRead + AsyncWrite + Send + 'static + 'js + Unpin>(
         this: &Class<'js, Self>,
         ctx: &Ctx<'js>,
         stream: T,
@@ -468,7 +613,7 @@ impl<'js> Socket<'js> {
         Self::process_stream(this, ctx, reader, writer, allow_half_open)
     }
 
-    fn process_stream<R: AsyncRead + 'js + Unpin, W: AsyncWrite + 'js + Unpin>(
+    fn process_stream<R: AsyncRead + Send + 'static + 'js + Unpin, W: AsyncWrite + Send + 'static + 'js + Unpin>(
         this: &Class<'js, Self>,
         ctx: &Ctx<'js>,
         reader: R,
@@ -476,9 +621,10 @@ impl<'js> Socket<'js> {
         allow_half_open: bool,
     ) -> Result<(Receiver<bool>, Receiver<bool>)> {
         let this2 = this.clone();
+        let this3 = this.clone();
         let readable_done =
             ReadableStream::process_callback(this.clone(), ctx, reader, move || {
-                if !allow_half_open {
+                if !allow_half_open && !this3.borrow().is_detached() {
                     WritableStream::end(This(this2));
                 }
             })?;
@@ -489,6 +635,7 @@ impl<'js> Socket<'js> {
         borrow.connecting = false;
         borrow.pending = false;
         borrow.ready_state = ReadyState::Open;
+        borrow.transport_state = TransportState::Attached;
         drop(borrow);
 
         Ok((readable_done, writable_done))

@@ -9,6 +9,8 @@ use tokio::sync::broadcast::error::RecvError;
 pub mod readable;
 pub mod writable;
 
+pub use writable::WriteCommand;
+
 pub fn set_destroyed_and_error<'js>(
     is_destroyed: &mut bool,
     error_value: &mut Option<Value<'js>>,

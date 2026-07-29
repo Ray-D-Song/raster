@@ -20,6 +20,29 @@ compile_error!("Features `tls-aws-lc` and `tls-openssl` are mutually exclusive")
 #[cfg(all(feature = "tls-graviola", feature = "tls-openssl"))]
 compile_error!("Features `tls-graviola` and `tls-openssl` are mutually exclusive");
 
+pub mod alpn;
+pub mod backend;
+pub mod certificate;
+pub mod client;
+pub mod connect_args;
+pub mod error;
+pub mod identity;
+pub mod module;
+pub mod options;
+pub mod pem;
+pub mod root_ca;
+pub mod secure_context;
+pub mod server;
+pub mod sni;
+pub mod tls_socket;
+pub mod version;
+
+#[cfg(test)]
+mod test_support;
+
+#[cfg(test)]
+mod tests;
+
 #[cfg(any(feature = "tls-ring", feature = "tls-aws-lc", feature = "tls-graviola"))]
 mod rustls_config;
 
@@ -35,5 +58,16 @@ mod openssl_config;
 #[cfg(feature = "tls-openssl")]
 pub use openssl_config::*;
 
-// Once we are ready to add the node TLS module, it should be here.
-// Right now this module is supporting the https/fetch modules.
+pub use alpn::{convert_alpn_protocols, convert_alpn_protocols_export};
+pub use certificate::{parse_cert_chain_der, parse_cert_der, parse_cert_pem, CertObject};
+pub use error::{
+    cert_altname_invalid, throw_invalid_arg_value, throw_option_not_supported, throw_tls_error,
+    tls_error, ERR_INVALID_ARG_VALUE, ERR_TLS_CERT_ALTNAME_FORMAT, ERR_TLS_CERT_ALTNAME_INVALID,
+    ERR_TLS_OPTION_NOT_SUPPORTED,
+};
+pub use identity::{canonicalize_ip, check_server_identity, CnValue};
+pub use module::TlsModule;
+pub use options::{parse_connect_options, parse_pem_value, parse_server_options, parse_tls_options, TlsOptions};
+pub use secure_context::{create_secure_context, JsSecureContext, SecureContext};
+pub use sni::SniRegistry;
+pub use version::{TlsVersion, DEFAULT_MAX_VERSION, DEFAULT_MIN_VERSION};
