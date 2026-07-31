@@ -2,16 +2,9 @@
 
 raster_runtime is a lightweight JavaScript runtime built on QuickJS.
 
-This project is forked from [LLRT](https://github.com/awslabs/llrt) and is maintained for the Raster project. Because this fork is diverging substantially from upstream LLRT, future development will continue through manual upstream synchronization where useful, or without upstream synchronization when the Raster runtime requirements differ.
+This project is forked from [LLRT](https://github.com/awslabs/llrt). The difference from LLRT is that this project takes Node.js compatibility as its primary goal, aiming to become a lightweight direct drop-in replacement for Node.js. Its compatibility matrix includes Wasm, N-API, and V8-API, while removing all AWS SDK content.
 
 It's built in Rust, utilizing QuickJS as the JavaScript engine, ensuring efficient memory usage and swift startup.
-
-> [!WARNING]
-> raster_runtime is an **experimental** package. It is subject to change and intended only for evaluation purposes.
-
-> [!IMPORTANT]
-> Even though raster_runtime supports [ES2023](https://262.ecma-international.org/14.0/) it's **NOT** a drop in replacement for Node.js. Consult [Compatibility matrix](#compatibility-matrix) and [API](API.md) for more details.
-> All dependencies should be bundled for a `browser` platform.
 
 ## Testing & ensuring compatibility
 
@@ -42,93 +35,95 @@ The test runner also has support for filters. Using filters is as simple as addi
 > [!NOTE]
 > raster_runtime only support a fraction of the Node.js APIs. It is **NOT** a drop in replacement for Node.js, nor will it ever be. Below is a high level overview of partially supported APIs and modules. For more details consult the [API](API.md) documentation
 
-| [Node.js API](https://nodejs.org/api/index.html) | Node.js | raster_runtime  |
-| ------------------------------------------------ | ------- | ----- |
-| node:assert                                      | ✔︎       | ✔︎️⚠️   |
-| node:async_hooks                                 | ✔︎       | ✔︎️⚠️   |
-| node:buffer                                      | ✔︎       | ✔︎️⚠️   |
-| node:child_process                               | ✔︎       | ✔︎⚠️   |
-| node:cluster                                     | ✔︎       | ✘     |
-| node:console                                     | ✔︎       | ✔︎⚠️   |
-| node:crypto                                      | ✔︎       | ✔︎⚠️   |
-| node:dgram                                       | ✔︎       | ✘     |
-| node:diagnostics_channel                         | ✔︎       | ✘     |
-| node:dns                                         | ✔︎       | ✔︎⚠️   |
-| node:events                                      | ✔︎       | ✔︎⚠️   |
-| node:fs                                          | ✔︎       | ✔︎⚠️   |
-| node:fs/promises                                 | ✔︎       | ✔︎⚠️   |
-| node:http                                        | ✔︎       | ✔︎⚠️   |
-| node:http2                                       | ✔︎       | ✘     |
-| node:https                                       | ✔︎       | ✘⏱    |
-| node:inspector                                   | ✔︎       | ✘     |
-| node:inspector/promises                          | ✔︎       | ✘     |
-| node:module                                      | ✔︎       | ✔︎⚠️   |
-| node:net                                         | ✔︎       | ✔︎⚠️   |
-| node:os                                          | ✔︎       | ✔︎⚠️   |
-| node:path                                        | ✔︎       | ✔︎⚠️   |
-| node:perf_hooks                                  | ✔︎       | ✔︎⚠️   |
-| node:process                                     | ✔︎       | ✔︎⚠️   |
-| node:querystring                                 | ✔︎       | ✘     |
-| node:readline                                    | ✔︎       | ✘     |
-| node:readline/promises                           | ✔︎       | ✘     |
-| node:repl                                        | ✔︎       | ✘     |
-| node:sqlite                                      | ✔︎       | ✘     |
-| node:stream                                      | ✔︎       | ✔︎\*   |
-| node:stream/promises                             | ✔︎       | ✔︎\*   |
-| node:stream/web                                  | ✔︎       | ✔︎⚠️   |
-| node:string_decoder                              | ✔︎       | ✔︎     |
-| node:test                                        | ✔︎       | ✘     |
-| node:timers                                      | ✔︎       | ✔︎⚠️   |
-| node:tls                                         | ✔︎       | ✔︎⚠️   |
-| node:tty                                         | ✔︎       | ✔︎⚠️   |
-| node:url                                         | ✔︎       | ✔︎⚠️   |
-| node:util                                        | ✔︎       | ✔︎⚠️   |
-| node:v8                                          | ✔︎       | ✘\*\* |
-| node:vm                                          | ✔︎       | ✘     |
-| node:wasi                                        | ✔︎       | ✘     |
-| node:worker_threads                              | ✔︎       | ✘     |
-| node:zlib                                        | ✔︎       | ✔︎⚠️   |
+| [Node.js API](https://nodejs.org/api/index.html) | Node.js | raster_runtime |
+| ------------------------------------------------ | ------- | -------------- |
+| node:assert                                      | ✔︎       | ✔︎️⚠️            |
+| node:async_hooks                                 | ✔︎       | ✔︎️⚠️            |
+| node:buffer                                      | ✔︎       | ✔︎️⚠️            |
+| node:child_process                               | ✔︎       | ✔︎⚠️            |
+| node:cluster                                     | ✔︎       | ✘              |
+| node:console                                     | ✔︎       | ✔︎⚠️            |
+| node:constants                                   | ✔︎       | ✔︎⚠️            |
+| node:crypto                                      | ✔︎       | ✔︎⚠️            |
+| node:dgram                                       | ✔︎       | ✔︎⚠️            |
+| node:diagnostics_channel                         | ✔︎       | ✔︎⚠️            |
+| node:dns                                         | ✔︎       | ✔︎⚠️            |
+| node:dns/promises                                | ✔︎       | ✔︎⚠️            |
+| node:events                                      | ✔︎       | ✔︎⚠️            |
+| node:fs                                          | ✔︎       | ✔︎⚠️            |
+| node:fs/promises                                 | ✔︎       | ✔︎⚠️            |
+| node:http                                        | ✔︎       | ✔︎⚠️            |
+| node:http2                                       | ✔︎       | ✘              |
+| node:https                                       | ✔︎       | ✔︎⚠️            |
+| node:inspector                                   | ✔︎       | ✔︎⚠️            |
+| node:inspector/promises                          | ✔︎       | ✘              |
+| node:module                                      | ✔︎       | ✔︎⚠️            |
+| node:net                                         | ✔︎       | ✔︎⚠️            |
+| node:os                                          | ✔︎       | ✔︎⚠️            |
+| node:path                                        | ✔︎       | ✔︎⚠️            |
+| node:perf_hooks                                  | ✔︎       | ✔︎⚠️            |
+| node:process                                     | ✔︎       | ✔︎⚠️            |
+| node:querystring                                 | ✔︎       | ✔︎⚠️            |
+| node:readline                                    | ✔︎       | ✘              |
+| node:readline/promises                           | ✔︎       | ✘              |
+| node:repl                                        | ✔︎       | ✘              |
+| node:sqlite                                      | ✔︎       | ✘              |
+| node:stream                                      | ✔︎       | ✔︎\*            |
+| node:stream/promises                             | ✔︎       | ✔︎\*            |
+| node:stream/web                                  | ✔︎       | ✔︎⚠️            |
+| node:string_decoder                              | ✔︎       | ✔︎              |
+| node:test                                        | ✔︎       | ✘              |
+| node:timers                                      | ✔︎       | ✔︎⚠️            |
+| node:timers/promises                             | ✔︎       | ✔︎⚠️            |
+| node:tls                                         | ✔︎       | ✔︎⚠️            |
+| node:tty                                         | ✔︎       | ✔︎⚠️            |
+| node:url                                         | ✔︎       | ✔︎⚠️            |
+| node:util                                        | ✔︎       | ✔︎⚠️            |
+| node:v8                                          | ✔︎       | ✔︎⚠️            |
+| node:vm                                          | ✔︎       | ✔︎⚠️            |
+| node:wasi                                        | ✔︎       | ✘              |
+| node:worker_threads                              | ✔︎       | ✘              |
+| node:zlib                                        | ✔︎       | ✔︎⚠️            |
 
 | [raster_runtime API](https://github.com/ray-d-song/raster_runtime/blob/main/API.md) | Node.js | raster_runtime |
-| ------------------------------------------------------------ | ------- | ---- |
-| raster_runtime:hex                                                     | ✘       | ✔︎    |
-| raster_runtime:qjs                                                     | ✘       | ✔︎    |
-| raster_runtime:util                                                    | ✘       | ✔︎    |
-| raster_runtime:xml                                                     | ✘       | ✔︎    |
+| ----------------------------------------------------------------------------------- | ------- | -------------- |
+| raster_runtime:hex                                                                  | ✘       | ✔︎              |
+| raster_runtime:qjs                                                                  | ✘       | ✔︎              |
+| raster_runtime:util                                                                 | ✘       | ✔︎              |
+| raster_runtime:xml                                                                  | ✘       | ✔︎              |
 
 | [Web Platform API](https://min-common-api.proposal.wintertc.org/) | raster_runtime |
-| ----------------------------------------------------------------- | ---- |
-| COMPRESSION                                                       | ✘⏱   |
-| CONSOLE                                                           | ✔︎⚠️  |
-| DOM                                                               | ✔︎⚠️  |
-| ECMASCRIPT                                                        | ✔︎⚠️  |
-| ENCODING                                                          | ✔︎⚠️  |
-| FETCH                                                             | ✔︎⚠️  |
-| FILEAPI                                                           | ✔︎⚠️  |
-| HR-TIME                                                           | ✔︎    |
-| HTML                                                              | ✔︎⚠️  |
-| STREAMS                                                           | ✔︎⚠️  |
-| URL                                                               | ✔︎    |
-| URLPATTERN                                                        | ✘⏱   |
-| WASM-JS-API-2                                                     | ✘    |
-| WASM-WEB-API-2                                                    | ✘    |
-| WEBCRYPTO                                                         | ✔︎⚠️  |
-| WEBIDL                                                            | ✔︎⚠️  |
-| XHR                                                               | ✔︎⚠️  |
+| ----------------------------------------------------------------- | -------------- |
+| COMPRESSION                                                       | ✘⏱             |
+| CONSOLE                                                           | ✔︎⚠️            |
+| DOM                                                               | ✔︎⚠️            |
+| ECMASCRIPT                                                        | ✔︎⚠️            |
+| ENCODING                                                          | ✔︎⚠️            |
+| FETCH                                                             | ✔︎⚠️            |
+| FILEAPI                                                           | ✔︎⚠️            |
+| HR-TIME                                                           | ✔︎              |
+| HTML                                                              | ✔︎⚠️            |
+| STREAMS                                                           | ✔︎⚠️            |
+| URL                                                               | ✔︎              |
+| URLPATTERN                                                        | ✘⏱             |
+| WASM-JS-API-2                                                     | ✔︎⚠️            |
+| WASM-WEB-API-2                                                    | ✔︎⚠️            |
+| WEBCRYPTO                                                         | ✔︎⚠️            |
+| WEBIDL                                                            | ✔︎⚠️            |
+| XHR                                                               | ✔︎⚠️            |
 
 | Other features | raster_runtime |
-| -------------- | ---- |
-| async/await    | ✔︎    |
-| esm            | ✔︎    |
-| cjs            | ✔︎    |
-| Intl           | ✔︎⚠️  |
-| Temporal       | ✔︎⚠️  |
+| -------------- | -------------- |
+| async/await    | ✔︎              |
+| esm            | ✔︎              |
+| cjs            | ✔︎              |
+| Intl           | ✔︎⚠️            |
+| Temporal       | ✔︎⚠️            |
 
 _⚠️ = partially supported in RASTER_RUNTIME_<br />
 _⏱ = planned partial support_<br />
 _\* = Not native_<br />
-_\*\* = The `module.registerHooks()` API allows you to emulate some functionality. See also `example/register-hooks`._<br />
-_`node:module` provides a CommonJS loader facade (`Module`, `require.resolve`, `require.cache`, `require.extensions`, writable `_resolveFilename` / `_nodeModulePaths`, and `Module._compile` for require-hook compatibility). Extension hooks apply to the CommonJS loader only; they do not change static ESM `import` semantics. **N-API** native addon (`.node`) loading is supported when Raster is built with `--features napi` on a dynamically linked target; V8 C++ ABI addons (e.g. `better-sqlite3`) are not supported._<br />
+_`node:module` provides a CommonJS loader facade (`Module`, `require.resolve`, `require.cache`, `require.extensions`, writable `_resolveFilename` / `_nodeModulePaths`, and `Module._compile` for require-hook compatibility). Extension hooks apply to the CommonJS loader only; they do not change static ESM `import` semantics. **N-API** native addon (`.node`) loading is supported when Raster is built with `--features napi` on a dynamically linked target. V8 C++ ABI addons targeting Node 24 (e.g. `better-sqlite3`) are supported with `--features v8-compat` through a limited QuickJS-backed V8 shim._<br />
 
 ## Using node_modules (dependencies) with raster_runtime
 
@@ -141,7 +136,7 @@ raster_runtime can work with any bundler of your choice. Below are some configur
 > By implementing the following conversions in the bundler's alias function, your application may be faster, but we recommend that you test thoroughly as they are not fully compatible.
 
 | Node.js         | raster_runtime     |
-| --------------- | -------- |
+| --------------- | ------------------ |
 | fast-xml-parser | raster_runtime:xml |
 
 ### ESBuild
@@ -318,11 +313,11 @@ raster_runtime supports multiple cryptographic backends for both the crypto modu
 
 ### TLS Backend Features
 
-| Feature              | Description                                   |
-| -------------------- | --------------------------------------------- |
-| `tls-ring` (default) | rustls with ring crypto                       |
-| `tls-graviola`       | rustls with graviola crypto                   |
-| `tls-openssl`        | OpenSSL for TLS                               |
+| Feature              | Description                 |
+| -------------------- | --------------------------- |
+| `tls-ring` (default) | rustls with ring crypto     |
+| `tls-graviola`       | rustls with graviola crypto |
+| `tls-openssl`        | OpenSSL for TLS             |
 
 `node:tls` is implemented as a **partial** Node core subset (client/server, `TLSSocket`, `SecureContext`, STARTTLS handoff for `net.Socket`, TLS 1.2/1.3, ALPN, SNI, mTLS). Not supported: session resume/tickets, PFX, custom ciphers/sigalgs, OCSP, renegotiation, PSK, and other advanced options (these throw `ERR_TLS_OPTION_NOT_SUPPORTED`). HTTP/HTTPS/Fetch continue to use the internal `BuildClientConfigOptions` / `TLS_CONFIG` Rust API unchanged.
 
@@ -404,13 +399,6 @@ We provide a concrete example in `example/register-hooks`. Hook files can also b
 ### `RASTER_RUNTIME_TLS_VERSION=value`
 
 Set the TLS version to be used for network connections. By default only TLS 1.2 is enabled. TLS 1.3 can also be enabled by setting this variable to `1.3`
-
-## Security
-
-Please report security issues privately to Ray-D-Song at
-<songraysmail@gmail.com>. See
-[CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more
-information.
 
 ## License
 

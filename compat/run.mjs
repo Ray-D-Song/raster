@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 
 const HTTP_CHECK_TIMEOUT_MS = 5_000;
@@ -15,6 +16,10 @@ const MYSQL_DOCKER_IMAGE = "mysql:8.4";
 const MYSQL_HEALTH_TIMEOUT_MS = 120_000;
 const MYSQL_DOCKER_RUN_TIMEOUT_MS = 180_000;
 const MYSQL_DOCKER_HOST = "127.0.0.1";
+const POSTGRES_DOCKER_IMAGE = "postgres:16.14-bookworm";
+const POSTGRES_DOCKER_HOST = "127.0.0.1";
+const POSTGRES_HEALTH_TIMEOUT_MS = 120_000;
+const POSTGRES_DOCKER_RUN_TIMEOUT_MS = 180_000;
 
 const [name, rasterPath] = process.argv.slice(2);
 const root = process.cwd();
@@ -43,6 +48,12 @@ const cases = {
     directory: "compat/mysql2",
     script: "test.cjs",
     successMarker: "mysql2 compat OK",
+  },
+  "node-postgres": {
+    directory: "compat/node-postgres",
+    script: "test.cjs",
+    successMarker: "node-postgres compat OK",
+    allowRasterFailure: true,
   },
   "v8-hello": {
     directory: "compat/v8-hello",
@@ -94,7 +105,7 @@ const cases = {
 const testCase = cases[name];
 if (!testCase || !rasterPath) {
   throw new Error(
-    "Usage: node compat/run.mjs <next|vite-plus|better-sqlite3|mysql2|v8-hello|napi-hello> <raster-runtime>"
+    "Usage: node compat/run.mjs <next|vite-plus|better-sqlite3|mysql2|node-postgres|v8-hello|napi-hello> <raster-runtime>"
   );
 }
 
@@ -107,6 +118,7 @@ if (name === "next") {
 } else if (
   name === "better-sqlite3" ||
   name === "mysql2" ||
+  name === "node-postgres" ||
   name === "napi-hello" ||
   name === "v8-hello"
 ) {
@@ -193,6 +205,11 @@ async function runScriptCompat(testCase, directory, raster, logPath, root) {
     return;
   }
 
+  if (name === "node-postgres") {
+    await runPostgresScriptCompat(testCase, directory, raster, logPath, root);
+    return;
+  }
+
   const logParts = [];
   const childEnv = { ...process.env };
 
@@ -258,7 +275,7 @@ async function runCompatScript(
   root,
   logPath,
   env,
-  mysqlContainerId = null
+  betweenPhases = null
 ) {
   const {
     script,
@@ -267,6 +284,7 @@ async function runCompatScript(
     expectCode = 0,
     mustNotContainStdout,
     expectStillRunning,
+    allowRasterFailure = false,
   } = spec;
   const label = `${name}/${script}`;
   const skipNodeBaseline = process.env.COMPAT_SKIP_NODE_BASELINE === "1";
@@ -300,7 +318,7 @@ async function runCompatScript(
         );
       }
     }
-    return;
+    return { rasterPassed: true };
   }
 
   if (!skipNodeBaseline) {
@@ -327,8 +345,8 @@ async function runCompatScript(
       rasterNotStarted: true,
     });
 
-    if (mysqlContainerId) {
-      await flushMysqlAuthCache(mysqlContainerId, logParts);
+    if (betweenPhases) {
+      await betweenPhases();
     }
   }
 
@@ -344,16 +362,31 @@ async function runCompatScript(
     logParts
   );
 
-  validateCompatRun(label, "Raster run", rasterResult, {
-    maxDurationMs,
-    expectCode,
-    successMarker,
-    mustNotContainStdout,
-    logPath,
-    root,
-    logParts,
-    rasterNotStarted: false,
-  });
+  let rasterPassed = true;
+
+  try {
+    validateCompatRun(label, "Raster run", rasterResult, {
+      maxDurationMs,
+      expectCode,
+      successMarker,
+      mustNotContainStdout,
+      logPath,
+      root,
+      logParts,
+      rasterNotStarted: false,
+    });
+  } catch (error) {
+    if (!allowRasterFailure) {
+      throw error;
+    }
+
+    rasterPassed = false;
+    const message = formatSpawnError(error);
+    logParts.push(`\n# Non-blocking Raster probe failure\n${message}`);
+    emitGitHubWarning(`${label}: ${message}`);
+  }
+
+  return { rasterPassed };
 }
 
 function validateCompatRun(
@@ -613,7 +646,7 @@ async function runMysql2ScriptCompat(
         root,
         logPath,
         testEnv,
-        containerId
+        () => flushMysqlAuthCache(containerId, logParts)
       );
     }
 
@@ -641,6 +674,293 @@ async function runMysql2ScriptCompat(
       if (!testFailed && !cleanupResult.ok) {
         throw new Error(
           `MySQL container cleanup failed: ${cleanupResult.message}`
+        );
+      }
+    }
+  }
+}
+
+async function runPostgresScriptCompat(
+  testCase,
+  directory,
+  raster,
+  logPath,
+  root
+) {
+  const logParts = [];
+  let containerId = null;
+  let certDir = null;
+  let cleanupDone = false;
+  let signalExitCode = null;
+
+  const appendContainerDiagnostics = async () => {
+    await appendPostgresDiagnostics(containerId, logParts);
+  };
+
+  const stopContainer = async (reason) => {
+    if (!containerId) {
+      return { ok: true, message: "no container to stop" };
+    }
+    const stopResult = await execDocker(["stop", "--time", "5", containerId]);
+    if (stopResult.code !== 0) {
+      return {
+        ok: false,
+        message:
+          `docker stop failed (exit ${stopResult.code}, ${reason}): ` +
+          `${redactSecrets(stopResult.stderr.trim())}`,
+      };
+    }
+    return { ok: true, message: `stopped (${reason})` };
+  };
+
+  const cleanupCerts = async () => {
+    if (!certDir) {
+      return { ok: true, message: "no certificate directory to remove" };
+    }
+    const dir = certDir;
+    certDir = null;
+    try {
+      await fs.rm(dir, { recursive: true, force: true });
+      logParts.push(`\n# Certificate cleanup\nremoved: ${dir}`);
+      return { ok: true, message: `removed cert dir ${dir}` };
+    } catch (err) {
+      const message =
+        `certificate cleanup failed: ${err instanceof Error ? err.message : String(err)}`;
+      logParts.push(`\n# Certificate cleanup\n${message}`);
+      return { ok: false, message };
+    }
+  };
+
+  const cleanup = async (reason) => {
+    if (cleanupDone) {
+      return { ok: true, message: "already cleaned up" };
+    }
+    cleanupDone = true;
+    let stopResult;
+    try {
+      stopResult = await stopContainer(reason);
+    } catch (err) {
+      stopResult = {
+        ok: false,
+        message: `docker stop error: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+    logParts.push(`\n# Container cleanup\n${stopResult.message}`);
+    const certResult = await cleanupCerts();
+    try {
+      await writeLog(logPath, logParts);
+    } catch {
+      // do not override the original test error
+    }
+    return {
+      ok: stopResult.ok && certResult.ok,
+      message: [stopResult.message, certResult.message]
+        .filter(Boolean)
+        .join("; "),
+    };
+  };
+
+  const onSignal = (signal) => {
+    if (signalExitCode !== null) {
+      return;
+    }
+    signalExitCode = signal === "SIGINT" ? 130 : 143;
+    cleanup(signal).finally(() => process.exit(signalExitCode));
+  };
+
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+
+  let testFailed = false;
+  try {
+    await assertRasterExecutable(raster, logParts);
+    logParts.push(`# Docker\nimage: ${POSTGRES_DOCKER_IMAGE}`);
+
+    const dockerVersion = await execDocker([
+      "version",
+      "--format",
+      "{{.Server.Version}}",
+    ]);
+    if (dockerVersion.code !== 0 || !dockerVersion.stdout.trim()) {
+      throw new Error(
+        "Docker daemon is not available. Install Docker and ensure the daemon is running." +
+          (dockerVersion.stderr.trim()
+            ? `\n${dockerVersion.stderr.trim()}`
+            : "")
+      );
+    }
+    logParts.push(`docker-server: ${dockerVersion.stdout.trim()}`);
+
+    const postgresBootstrap = `
+set -eu
+umask 077
+
+openssl req \\
+  -x509 \\
+  -newkey rsa:2048 \\
+  -sha256 \\
+  -nodes \\
+  -days 1 \\
+  -subj /CN=localhost \\
+  -addext subjectAltName=DNS:localhost,IP:127.0.0.1 \\
+  -keyout /tmp/raster-postgres.key \\
+  -out /tmp/raster-postgres.crt
+
+chown postgres:postgres \\
+  /tmp/raster-postgres.key \\
+  /tmp/raster-postgres.crt
+chmod 600 /tmp/raster-postgres.key
+
+exec docker-entrypoint.sh postgres \\
+  -c ssl=on \\
+  -c ssl_cert_file=/tmp/raster-postgres.crt \\
+  -c ssl_key_file=/tmp/raster-postgres.key
+`;
+
+    const runArgs = [
+      "run",
+      "--detach",
+      "--rm",
+      "--env",
+      "POSTGRES_DB=raster_compat",
+      "--env",
+      "POSTGRES_USER=raster",
+      "--env",
+      "POSTGRES_PASSWORD=raster-compat-secret",
+      "--env",
+      "POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256",
+      "--publish",
+      `${POSTGRES_DOCKER_HOST}::5432`,
+      "--health-cmd=pg_isready -U raster -d raster_compat",
+      "--health-interval=2s",
+      "--health-timeout=5s",
+      "--health-retries=30",
+      POSTGRES_DOCKER_IMAGE,
+      "sh",
+      "-ceu",
+      postgresBootstrap,
+    ];
+    logParts.push(
+      `\n# docker run\n$ docker ${redactSecrets(runArgs.join(" "))}`
+    );
+
+    const runResult = await execDocker(runArgs, POSTGRES_DOCKER_RUN_TIMEOUT_MS);
+    if (runResult.timedOut) {
+      logParts.push(
+        `exit: timeout after ${POSTGRES_DOCKER_RUN_TIMEOUT_MS / 1000}s`
+      );
+      throw new Error(
+        `Timed out starting PostgreSQL container after ${POSTGRES_DOCKER_RUN_TIMEOUT_MS / 1000}s ` +
+          "(image pull or container start may be slow)"
+      );
+    }
+    if (runResult.code !== 0) {
+      logParts.push(
+        `exit: ${runResult.code}\nstderr:\n${redactSecrets(runResult.stderr)}`
+      );
+      throw new Error(
+        `Failed to start PostgreSQL container: ${redactSecrets(runResult.stderr.trim()) || "unknown error"}`
+      );
+    }
+
+    containerId = runResult.stdout.trim();
+    if (!containerId) {
+      throw new Error("docker run produced no container ID");
+    }
+    logParts.push(`container-id: ${containerId}`);
+
+    const portResult = await execDocker(["port", containerId, "5432/tcp"]);
+    const port = parseDockerPort(portResult.stdout);
+    if (!port) {
+      await appendContainerDiagnostics();
+      throw new Error(
+        `Failed to parse mapped port from: ${redactSecrets(portResult.stdout.trim() || portResult.stderr.trim())}`
+      );
+    }
+    logParts.push(`host: ${POSTGRES_DOCKER_HOST}\nport: ${port}`);
+
+    await waitForPostgresHealthy(
+      containerId,
+      logParts,
+      appendContainerDiagnostics
+    );
+
+    certDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "raster-node-postgres-")
+    );
+    const caPath = path.join(certDir, "postgres-ca.crt");
+    await copyPostgresCa(containerId, caPath, logParts);
+
+    const testEnv = {
+      ...process.env,
+      PGHOST: POSTGRES_DOCKER_HOST,
+      PGPORT: port,
+      PGDATABASE: "raster_compat",
+      PGUSER: "raster",
+      PGPASSWORD: "raster-compat-secret",
+      PG_CA_FILE: caPath,
+    };
+    logParts.push(
+      `\n# Database config\nhost: ${POSTGRES_DOCKER_HOST}\nport: ${port}\ndatabase: raster_compat\nuser: raster\nca: ${caPath}`
+    );
+
+    const scripts = testCase.scripts ?? [
+      {
+        script: testCase.script,
+        successMarker: testCase.successMarker,
+        maxDurationMs: SCRIPT_TIMEOUT_MS,
+        expectCode: 0,
+        allowRasterFailure: testCase.allowRasterFailure === true,
+      },
+    ];
+
+    let rasterPassed = true;
+    for (const spec of scripts) {
+      const result = await runCompatScript(
+        spec,
+        directory,
+        raster,
+        logParts,
+        root,
+        logPath,
+        testEnv,
+        () => resetPostgresSchema(containerId, logParts)
+      );
+      if (result && result.rasterPassed === false) {
+        rasterPassed = false;
+      }
+    }
+
+    const compatMode =
+      process.env.COMPAT_SKIP_NODE_BASELINE === "1"
+        ? "Raster only"
+        : "Node baseline + Raster";
+    if (rasterPassed) {
+      console.log(
+        `${name} compatibility passed (${scripts.length} script(s), ${compatMode})`
+      );
+    } else {
+      console.log(
+        "node-postgres compatibility probe completed with Raster failures"
+      );
+    }
+  } catch (err) {
+    testFailed = true;
+    logParts.push(`\n# Error\n${formatSpawnError(err)}`);
+    try {
+      await appendContainerDiagnostics();
+    } catch {
+      // ignore diagnostic failures
+    }
+    throw err;
+  } finally {
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+    if (signalExitCode === null) {
+      const cleanupResult = await cleanup(testFailed ? "error" : "complete");
+      if (!testFailed && !cleanupResult.ok) {
+        throw new Error(
+          `PostgreSQL cleanup failed: ${cleanupResult.message}`
         );
       }
     }
@@ -729,6 +1049,92 @@ async function flushMysqlAuthCache(containerId, logParts) {
   }
 }
 
+async function resetPostgresSchema(containerId, logParts) {
+  const sql =
+    "DROP SCHEMA public CASCADE; CREATE SCHEMA public; GRANT ALL ON SCHEMA public TO raster;";
+  const resetArgs = [
+    "exec",
+    containerId,
+    "psql",
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-U",
+    "raster",
+    "-d",
+    "raster_compat",
+    "-c",
+    sql,
+  ];
+  const loggedCmd = redactSecrets(`docker ${resetArgs.join(" ")}`);
+  logParts.push(
+    `\n# Reset public schema before Raster run\n$ ${loggedCmd}`
+  );
+  console.log("[compat-node-postgres] resetting public schema before Raster run");
+
+  const result = await execDocker(resetArgs);
+  logParts.push(
+    `exit: ${result.code ?? result.signal}\n\nstdout:\n${redactSecrets(result.stdout)}\n\nstderr:\n${redactSecrets(result.stderr)}`
+  );
+  if (result.code !== 0) {
+    throw new Error(
+      `Failed to reset PostgreSQL schema: ${redactSecrets(result.stderr.trim()) || "unknown error"}`
+    );
+  }
+}
+
+async function copyPostgresCa(containerId, caPath, logParts) {
+  const copyArgs = [
+    "cp",
+    `${containerId}:/tmp/raster-postgres.crt`,
+    caPath,
+  ];
+  logParts.push(
+    `\n# Export PostgreSQL CA\n$ docker ${copyArgs.join(" ")}`
+  );
+  const result = await execDocker(copyArgs);
+  logParts.push(
+    `exit: ${result.code ?? result.signal}\n\nstdout:\n${redactSecrets(result.stdout)}\n\nstderr:\n${redactSecrets(result.stderr)}`
+  );
+  if (result.code !== 0) {
+    throw new Error(
+      `Failed to copy PostgreSQL CA: ${redactSecrets(result.stderr.trim()) || "unknown error"}`
+    );
+  }
+}
+
+async function appendPostgresDiagnostics(containerId, logParts) {
+  if (!containerId) {
+    return;
+  }
+  const [stateStatus, exitCode, health, ports] = await Promise.all([
+    execDocker(["inspect", "--format={{.State.Status}}", containerId]),
+    execDocker(["inspect", "--format={{.State.ExitCode}}", containerId]),
+    execDocker(["inspect", "--format={{.State.Health.Status}}", containerId]),
+    execDocker(["port", containerId, "5432/tcp"]),
+  ]);
+  logParts.push(
+    "\n# container diagnostics\n" +
+      `state: ${redactSecrets(stateStatus.stdout.trim())}\n` +
+      `exit-code: ${redactSecrets(exitCode.stdout.trim())}\n` +
+      `health: ${redactSecrets(health.stdout.trim())}\n` +
+      `port: ${redactSecrets(ports.stdout.trim())}`
+  );
+  const logs = await execDocker(["logs", containerId]);
+  logParts.push(
+    `\n# docker logs\nstdout:\n${redactSecrets(logs.stdout)}\nstderr:\n${redactSecrets(logs.stderr)}`
+  );
+}
+
+function emitGitHubWarning(message) {
+  const escaped = String(message)
+    .replace(/%/g, "%25")
+    .replace(/\r/g, "%0D")
+    .replace(/\n/g, "%0A");
+  console.warn(
+    `::warning title=node-postgres Raster compatibility::${escaped}`
+  );
+}
+
 function execDocker(args, timeoutMs = 60_000) {
   return spawnCollect("docker", args, { env: { ...process.env } }, timeoutMs);
 }
@@ -788,6 +1194,55 @@ async function waitForMysqlHealthy(containerId, logParts, appendDiagnostics) {
   await appendDiagnostics();
   throw new Error(
     `MySQL container health check timed out after ${MYSQL_HEALTH_TIMEOUT_MS / 1000}s`
+  );
+}
+
+async function waitForPostgresHealthy(containerId, logParts, appendDiagnostics) {
+  const deadline = Date.now() + POSTGRES_HEALTH_TIMEOUT_MS;
+  let lastStatus = null;
+
+  while (Date.now() < deadline) {
+    const stateResult = await execDocker([
+      "inspect",
+      "--format={{.State.Status}}",
+      containerId,
+    ]);
+    if (stateResult.code !== 0) {
+      await appendDiagnostics();
+      throw new Error("PostgreSQL container no longer exists");
+    }
+
+    const stateStatus = stateResult.stdout.trim();
+    if (stateStatus === "exited") {
+      await appendDiagnostics();
+      throw new Error("PostgreSQL container exited before becoming healthy");
+    }
+
+    const healthResult = await execDocker([
+      "inspect",
+      "--format={{.State.Health.Status}}",
+      containerId,
+    ]);
+    const status = healthResult.stdout.trim();
+    if (status && status !== lastStatus) {
+      logParts.push(`health: ${status}`);
+      lastStatus = status;
+    }
+
+    if (status === "healthy") {
+      return;
+    }
+    if (status === "unhealthy") {
+      await appendDiagnostics();
+      throw new Error("PostgreSQL container became unhealthy");
+    }
+
+    await sleep(1_000);
+  }
+
+  await appendDiagnostics();
+  throw new Error(
+    `PostgreSQL container health check timed out after ${POSTGRES_HEALTH_TIMEOUT_MS / 1000}s`
   );
 }
 

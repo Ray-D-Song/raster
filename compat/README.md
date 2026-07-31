@@ -10,10 +10,11 @@ Each fixture installs its own locked dependencies. **Vite+** still runs the upst
 | v8-hello native addon              | node-addon-api 8.3.1       | `npm run build` (node-gyp) → Node `test.cjs` baseline → Raster runs `test.cjs` → stdout contains `v8-hello compat OK`                                             | **Green** with `cargo build --features v8-compat`. Requires `make compat-v8`.                                                                                                                                                                                                                                                                         |
 | N-API hello addon                  | node-addon-api 8.3.1       | `yarn build` (node-gyp) → Node `test.cjs` baseline → Raster (`--features napi`) runs `test.cjs` → stdout contains `napi-hello compat OK`                          | **Green** when built with `cargo build --features napi` on a dynamically linked target (macOS / glibc). Requires `make compat-napi`.                                                                                                                                                                                                                  |
 | mysql2 async API                   | mysql2 3.23.2, MySQL 8.4   | Docker `mysql:8.4` temp container → Node `test.cjs` baseline → Raster runs `test.cjs` → stdout contains `mysql2 compat OK`                                        | **Green** for default non-SSL MySQL 8.4 (`caching_sha2_password` + Promise/callback/pool). CI job `mysql-compat` is blocking. Requires Docker and `make compat-mysql`.                                                                                                                                                                                |
+| node-postgres                      | pg 8.22.0 / PostgreSQL 16.14 | Node baseline → schema reset → Raster probe                                                                                                                                                       | **Observing / non-blocking**: SCRAM, Client, Pool, transactions, types, TLS, channel binding, cancel, disconnect recovery, LISTEN/NOTIFY. Node baseline is a hard gate; Raster failures emit CI warnings only. Requires Docker and `make compat-node-postgres`.                                                                                                                                 |
 
-Run `make compat-next`, `make compat-vite-plus`, `make compat-better-sqlite3`, `make compat-mysql`, `make compat-v8`, or `make compat-napi` after building Raster. V8-native fixtures (`better-sqlite3`, `v8-hello`) require `cargo build --features v8-compat` (the Makefile targets build this automatically). Upgrade a fixture only in a dedicated change that updates its exact dependency versions and lockfile.
+Run `make compat-next`, `make compat-vite-plus`, `make compat-better-sqlite3`, `make compat-mysql`, `make compat-node-postgres`, `make compat-v8`, or `make compat-napi` after building Raster. V8-native fixtures (`better-sqlite3`, `v8-hello`) require `cargo build --features v8-compat` (the Makefile targets build this automatically). Upgrade a fixture only in a dedicated change that updates its exact dependency versions and lockfile.
 
-**Local `make compat`:** V8 fixtures pin **Node 24.3.0** for ABI 137 (`nvm use 24.3.0`). **Next** and **vite-plus** install steps expect **Node 22.18.0** (CI default) or **≥24.11.0** per upstream engine fields; with only 24.3.0 active, `yarn install` in `compat/vite-plus` may fail on engine checks. **vite-plus** build under Raster still requires `node:readline` (not yet implemented) — see Vite+ row above. **`make compat` includes `compat-mysql`**, which requires a running Docker daemon. The **mysql2** fixture baseline uses **Node 22.18.0** (fixture `engines` accept **≥22.18.0**).
+**Local `make compat`:** V8 fixtures pin **Node 24.3.0** for ABI 137 (`nvm use 24.3.0`). **Next** and **vite-plus** install steps expect **Node 22.18.0** (CI default) or **≥24.11.0** per upstream engine fields; with only 24.3.0 active, `yarn install` in `compat/vite-plus` may fail on engine checks. **vite-plus** build under Raster still requires `node:readline` (not yet implemented) — see Vite+ row above. **`make compat` includes `compat-mysql` and `compat-node-postgres`**, which require a running Docker daemon. The **mysql2** and **node-postgres** fixture baselines use **Node 22.18.0** (fixture `engines` accept **≥22.18.0**).
 
 **V8 C++ shim platform support:** Linux (x64, arm64) and macOS (Apple Silicon and Intel) are tested in CI. **Windows is not supported** for `v8-compat` — the C++ shim is Unix-only (`build.rs` links a static archive; no `rstr.dll` proxy path). Use WSL or a Linux/macOS host for V8-native addons (`better-sqlite3`, `v8-hello`).
 
@@ -131,8 +132,54 @@ The `node:tls` module is loadable (mysql2's unconditional `require("tls")` at im
 
 Diagnostics land in `compat/mysql2/compat.log` (Docker image/container/port, health transitions, container logs on failure, database host/port/database/user, Node baseline and Raster run stdout/stderr, container stop result). Passwords are never logged.
 
+## node-postgres (pg driver)
+
+`make compat-node-postgres` manages the full test lifecycle:
+
+1. Starts a temporary **postgres:16.14-bookworm** Docker container with SSL enabled via short-lived certs generated inside the container, published on a random local port.
+2. Waits for Docker health checks to report `healthy` (up to 120s).
+3. Exports the container CA certificate to a temp directory (`PG_CA_FILE`) for TLS verification tests.
+4. **Node baseline** (hard gate): `node test.cjs` in `compat/node-postgres/` — must exit `0` and print `node-postgres compat OK`. If this fails, Raster is not started.
+5. **Schema reset**: `DROP SCHEMA public CASCADE; CREATE SCHEMA public; GRANT ALL ON SCHEMA public TO raster;` so Raster starts from the same empty state as Node.
+6. **Raster probe** (non-blocking): `$RASTER_RUNTIME test.cjs` with the same env. Raster failures are recorded in `compat.log` and emitted as GitHub Actions warnings; they do **not** fail the job.
+7. Always stops the container and removes temporary certificates on success, failure, or interrupt (`SIGINT` / `SIGTERM`).
+
+**Requirements:** Docker daemon available locally or on the CI runner. You do **not** need to pre-install PostgreSQL. The fixed image `postgres:16.14-bookworm` is pulled on first run. Private keys exist only inside the temporary container (never committed). Raster is built **without** `napi` or `v8-compat`. Node **22.18.0** (fixture `engines` accept **≥22.18.0**), **pg 8.22.0**, PostgreSQL **16.14** with `scram-sha-256`.
+
+**Environment variables** when running `test.cjs` directly against an external database (defaults shown):
+
+| Variable      | Default                  |
+| ------------- | ------------------------ |
+| `PGHOST`      | `127.0.0.1`              |
+| `PGPORT`      | `5432`                   |
+| `PGDATABASE`  | `raster_compat`          |
+| `PGUSER`      | `raster`                 |
+| `PGPASSWORD`  | `raster-compat-secret`   |
+| `PG_CA_FILE`  | (required for TLS cases) |
+
+`make compat-node-postgres` overrides these with values from its temporary container.
+
+`test.cjs` exercises (24 cases, PG-001 … PG-024):
+
+- CommonJS module surface (`Client`, `Pool`, `types`)
+- Plain SCRAM-SHA-256 connect/query/`end`
+- Callback API, keepalive (`setNoDelay` / `setKeepAlive`)
+- Parameter encoding and default type parsers (int8/numeric/jsonb/bytea/timestamptz)
+- Query config `rowMode`, named prepared statements
+- DML metadata (`RETURNING`), commit/rollback
+- SQL error recovery, pool concurrency and connect/release
+- Auth failure (`28P01`), statement timeout, `pg_cancel_backend`
+- TLS (`rejectUnauthorized: false`, CA verification, channel binding / SCRAM-SHA-256-PLUS, unknown CA rejection)
+- Forced disconnect + pool recovery, LISTEN/NOTIFY, clean shutdown
+
+**Out of scope:** `pg-native` (libpq bindings).
+
+**CI:** The `postgres-compat` (`node-postgres-compat`) job calls `make compat-node-postgres` on Ubuntu. Node/Docker/DB init/cleanup failures fail the job; Raster probe failures only produce warnings. Artifacts always upload `compat/node-postgres/compat.log`.
+
+Diagnostics land in `compat/node-postgres/compat.log` (Docker image/container/port, health transitions, CA export, schema reset, Node and Raster stdout/stderr, container stop result). Passwords are never logged.
+
 ## Failures and CI
 
-Most compatibility failures block merges. The workflow runs `better-sqlite3` and `v8-hello` on Ubuntu and macOS with Node 24.3.0. The **`mysql-compat` job is blocking** and must print `mysql2 compat OK`.
+Most compatibility failures block merges. The workflow runs `better-sqlite3` and `v8-hello` on Ubuntu and macOS with Node 24.3.0. The **`mysql-compat` job is blocking** and must print `mysql2 compat OK`. The **`postgres-compat` job** treats the Node baseline as blocking and Raster results as a non-blocking probe.
 
 When a child exits `0` but produces no expected artifact (or HTTP checks fail), `compat/run.mjs` fails with an explicit diagnosis (see `compat/*/compat.log`). On CI failure, `compat.log` and `.next` / `dist` are uploaded as artifacts.

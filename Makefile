@@ -146,7 +146,7 @@ run-ssr: js
 	cargo build
 	cd example/functions && yarn build && cd build && ../../../target/debug/raster_runtime
 
-compat: compat-next compat-vite-plus compat-better-sqlite3 compat-mysql compat-napi compat-v8
+compat: compat-next compat-vite-plus compat-better-sqlite3 compat-mysql compat-node-postgres compat-napi compat-v8
 
 compat-v8: js
 	$(CARGO) build --features v8-compat
@@ -169,6 +169,10 @@ compat-better-sqlite3: js
 compat-mysql: js
 	cd compat/mysql2 && yarn install --frozen-lockfile
 	node compat/run.mjs mysql2 $(RASTER_RUNTIME)
+
+compat-node-postgres: js
+	cd compat/node-postgres && yarn install --frozen-lockfile
+	node compat/run.mjs node-postgres $(RASTER_RUNTIME)
 
 check-v8-abi:
 	bash v8_compat/tools/check_abi.sh
@@ -292,4 +296,4 @@ check-crates:
 	  cargo check -p "$$crate"; \
 	done
 
-.PHONY: libs check check-all check-crates libs-arm64 libs-x64 toolchain clean-js release-linux release-darwin release-windows stdlib stdlib-x64 stdlib-arm64 test test-ci run js run-release build release clean flame deploy compat compat-next compat-vite-plus compat-better-sqlite3 compat-mysql compat-napi compat-v8 check-v8-abi types-pack-check types-smoke
+.PHONY: libs check check-all check-crates libs-arm64 libs-x64 toolchain clean-js release-linux release-darwin release-windows stdlib stdlib-x64 stdlib-arm64 test test-ci run js run-release build release clean flame deploy compat compat-next compat-vite-plus compat-better-sqlite3 compat-mysql compat-node-postgres compat-napi compat-v8 check-v8-abi types-pack-check types-smoke

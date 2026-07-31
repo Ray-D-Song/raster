@@ -1,0 +1,12 @@
+{
+  "name": "@raster-runtime/compat-node-postgres",
+  "private": true,
+  "version": "0.0.0",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "packageManager": "yarn@1.22.22",
+  "dependencies": {
+    "pg": "8.22.0"
+  }
+}

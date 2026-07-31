@@ -84,6 +84,28 @@ jobs:
           path: compat/mysql2/compat.log
           if-no-files-found: ignore
 
+  postgres-compat:
+    name: node-postgres-compat
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+          cache: yarn
+      - run: yarn install --frozen-lockfile
+      - run: make js JS_MINIFY=0
+      - run: rustup toolchain install nightly
+      - name: Build raster_runtime
+        run: cargo +nightly build
+      - run: make compat-node-postgres
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compat-node-postgres-logs
+          path: compat/node-postgres/compat.log
+          if-no-files-found: ignore
+
   compatibility:
     name: ${{ matrix.case }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
