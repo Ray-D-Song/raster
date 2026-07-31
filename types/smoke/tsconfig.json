@@ -32,7 +32,11 @@
       "timers": ["./timers.d.ts"],
       "node:timers": ["./timers.d.ts"],
       "timers/promises": ["./timers/promises.d.ts"],
-      "node:timers/promises": ["./timers/promises.d.ts"]
+      "node:timers/promises": ["./timers/promises.d.ts"],
+      "net": ["./net.d.ts"],
+      "node:net": ["./net.d.ts"],
+      "crypto": ["./crypto.d.ts"],
+      "node:crypto": ["./crypto.d.ts"]
     }
   },
   "include": ["./**/*.ts"]

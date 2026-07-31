@@ -188,13 +188,10 @@ mod tests {
     #[test]
     fn accepts_matching_fixture_cert_key() {
         let mut options = TlsOptions::default();
-        options.cert = vec![include_bytes!(
-            "../../../libs/raster_runtime_test_tls/data/server.pem"
-        )
-        .to_vec()];
-        options.key = Some(
-            include_bytes!("../../../libs/raster_runtime_test_tls/data/server.key").to_vec(),
-        );
+        options.cert =
+            vec![include_bytes!("../../../libs/raster_runtime_test_tls/data/server.pem").to_vec()];
+        options.key =
+            Some(include_bytes!("../../../libs/raster_runtime_test_tls/data/server.key").to_vec());
         assert!(SecureContext::from_options(&options).is_ok());
     }
 }

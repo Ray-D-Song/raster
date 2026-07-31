@@ -2902,6 +2902,7 @@ dependencies = [
  "raster_runtime_test",
  "raster_runtime_utils",
  "rquickjs",
+ "socket2",
  "tokio",
  "tracing",
 ]

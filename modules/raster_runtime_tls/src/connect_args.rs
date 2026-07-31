@@ -86,8 +86,8 @@ mod tests {
         ctx.with(|ctx| {
             let opts = Object::new(ctx.clone()).unwrap();
             opts.set("minVersion", "TLSv1.2").unwrap();
-            let cb = rquickjs::Function::new(ctx.clone(), |_: ()| Ok::<_, rquickjs::Error>(()))
-                .unwrap();
+            let cb =
+                rquickjs::Function::new(ctx.clone(), |_: ()| Ok::<_, rquickjs::Error>(())).unwrap();
             let (value, callback) = normalize_connect_args(
                 &ctx,
                 vec![

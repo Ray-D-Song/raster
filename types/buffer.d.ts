@@ -444,6 +444,12 @@ declare module "buffer" {
       sourceEnd?: number
     ): number;
     /**
+     * Returns `true` if both `buf` and `otherBuffer` have exactly the same bytes,
+     * `false` otherwise.
+     * @param otherBuffer A `Buffer` or {@link Uint8Array} with which to compare `buf`.
+     */
+    equals(otherBuffer: Uint8Array): boolean;
+    /**
      * Returns a new `Buffer` that references the same memory as the original, but
      * offset and cropped by the `start` and `end` indices.
      *

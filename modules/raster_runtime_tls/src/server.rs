@@ -6,10 +6,15 @@ use std::sync::{
 };
 use std::time::Duration;
 
+use crate::backend::{accept, AcceptOptions};
+use crate::options::parse_server_options;
+use crate::secure_context::{secure_context_from_value, SecureContext};
+use crate::sni::SniRegistry;
+use crate::tls_socket::{rw_join, TlsSocket};
 use raster_runtime_context::CtxExtension;
 use raster_runtime_events::{EmitError, Emitter, EventEmitter, EventList};
-use raster_runtime_stream::SteamEvents;
 use raster_runtime_net::{get_address_parts, get_hostname};
+use raster_runtime_stream::SteamEvents;
 use raster_runtime_utils::{object::ObjectExt, result::ResultExt, reuse_list::ReuseList};
 use rquickjs::{
     class::Trace,
@@ -24,11 +29,6 @@ use tokio::{
         Notify,
     },
 };
-use crate::backend::{accept, AcceptOptions};
-use crate::options::parse_server_options;
-use crate::secure_context::{secure_context_from_value, SecureContext};
-use crate::sni::SniRegistry;
-use crate::tls_socket::{rw_join, TlsSocket};
 
 raster_runtime_stream::impl_stream_events!(Server);
 
@@ -113,8 +113,9 @@ impl<'js> Server<'js> {
                 false,
                 true,
                 Arc::new(
-                    SecureContext::from_options(&crate::options::TlsOptions::default())
-                        .map_err(|_e| Exception::throw_message(&ctx, "default secure context required"))?,
+                    SecureContext::from_options(&crate::options::TlsOptions::default()).map_err(
+                        |_e| Exception::throw_message(&ctx, "default secure context required"),
+                    )?,
                 ),
             )
         };
@@ -255,14 +256,9 @@ impl<'js> Server<'js> {
 
         let release_listen = already_running.clone();
         if let Some(callback) = callback {
-            if let Err(err) = Self::add_event_listener_str(
-                this.clone(),
-                &ctx,
-                "listening",
-                callback,
-                true,
-                true,
-            ) {
+            if let Err(err) =
+                Self::add_event_listener_str(this.clone(), &ctx, "listening", callback, true, true)
+            {
                 release_listen.store(false, Ordering::SeqCst);
                 return Err(err);
             }
@@ -272,20 +268,16 @@ impl<'js> Server<'js> {
         let server = this.0.clone();
         if let Err(err) = ctx.spawn_exit(async move {
             let should_emit_close: Result<bool> = async {
-                let listener = match Self::bind(
-                    server.clone(),
-                    ctx2.clone(),
-                    port.map(|p| p as i32),
-                    host,
-                )
-                .await
-                {
-                    Ok(listener) => listener,
-                    Err(e) => {
-                        Err::<(), _>(e).emit_error("listen", &ctx2, server.clone())?;
-                        return Ok(false);
-                    }
-                };
+                let listener =
+                    match Self::bind(server.clone(), ctx2.clone(), port.map(|p| p as i32), host)
+                        .await
+                    {
+                        Ok(listener) => listener,
+                        Err(e) => {
+                            Err::<(), _>(e).emit_error("listen", &ctx2, server.clone())?;
+                            return Ok(false);
+                        },
+                    };
 
                 Self::emit_str(server.clone(), &ctx2, "listening", vec![], false)?;
 
@@ -384,7 +376,10 @@ impl<'js> Server<'js> {
     fn handle_connection(
         this: Class<'js, Self>,
         ctx: Ctx<'js>,
-        accept_result: std::result::Result<(tokio::net::TcpStream, std::net::SocketAddr), std::io::Error>,
+        accept_result: std::result::Result<
+            (tokio::net::TcpStream, std::net::SocketAddr),
+            std::io::Error,
+        >,
         notify_close: Arc<Notify>,
         allow_half_open: bool,
         secure_context: Arc<RwLock<Arc<SecureContext>>>,
@@ -411,7 +406,13 @@ impl<'js> Server<'js> {
             TlsSocket::set_addresses_from_tcp(&tls_socket, &ctx, &tcp_stream)?;
 
             let socket_instance = tls_socket.clone().into_value();
-            Self::emit_str(this.clone(), &ctx, "connection", vec![socket_instance.clone()], false)?;
+            Self::emit_str(
+                this.clone(),
+                &ctx,
+                "connection",
+                vec![socket_instance.clone()],
+                false,
+            )?;
 
             let context = secure_context.read().unwrap().clone();
             let selected_local_cert = Arc::new(Mutex::new(None));
@@ -441,7 +442,7 @@ impl<'js> Server<'js> {
                         Err(err_value) => {
                             TlsSocket::fail_connect(tls_socket.clone(), &ctx, err_value)?;
                             return Ok(());
-                        }
+                        },
                     };
 
                     Self::emit_str(
@@ -453,8 +454,13 @@ impl<'js> Server<'js> {
                     )?;
 
                     let (reader, writer) = tokio::io::split(tls_stream);
-                    let (readable_done, writable_done) =
-                        TlsSocket::process_split_io(&tls_socket, &ctx, reader, writer, allow_half_open)?;
+                    let (readable_done, writable_done) = TlsSocket::process_split_io(
+                        &tls_socket,
+                        &ctx,
+                        reader,
+                        writer,
+                        allow_half_open,
+                    )?;
 
                     let had_error = rw_join(&ctx, readable_done, writable_done).await?;
                     TlsSocket::emit_close(tls_socket, &ctx, had_error)?;

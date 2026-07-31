@@ -22,6 +22,7 @@ compile_error!("Features `crypto-ring` and `crypto-graviola` are mutually exclus
 
 mod crc32;
 mod hash;
+mod rsa;
 mod subtle;
 
 mod provider;
@@ -59,7 +60,7 @@ use self::{
     hash::{Hash, HashAlgorithm, Hmac},
 };
 
-static CRYPTO_PROVIDER: Lazy<provider::DefaultProvider> =
+pub(crate) static CRYPTO_PROVIDER: Lazy<provider::DefaultProvider> =
     Lazy::new(|| provider::DefaultProvider {});
 
 fn encoded_bytes<'js>(ctx: &Ctx<'js>, bytes: &[u8], encoding: &str) -> Result<Option<Value<'js>>> {
@@ -296,6 +297,9 @@ impl ModuleDef for CryptoModule {
         declare.declare("randomFillSync")?;
         declare.declare("randomFill")?;
         declare.declare("getRandomValues")?;
+        declare.declare("publicEncrypt")?;
+        declare.declare("constants")?;
+        declare.declare("subtle")?;
 
         for algorithm in HashAlgorithm::iter() {
             declare.declare(algorithm.class_name())?;
@@ -326,6 +330,8 @@ impl ModuleDef for CryptoModule {
             }
 
             let crypto: Object = ctx.globals().get("crypto")?;
+            let subtle: Value = crypto.get("subtle")?;
+            let constants = rsa::create_constants_object(ctx)?;
 
             Class::<Crc32>::define(default)?;
             Class::<Crc32c>::define(default)?;
@@ -338,6 +344,10 @@ impl ModuleDef for CryptoModule {
             default.set("randomFillSync", Func::from(random_fill_sync))?;
             default.set("randomFill", Func::from(random_fill))?;
             default.set("getRandomValues", Func::from(get_random_values))?;
+            default.set("publicEncrypt", Func::from(rsa::public_encrypt))?;
+            default.set("constants", constants)?;
+            // Node exposes top-level `subtle` as an alias of `webcrypto.subtle`.
+            default.set("subtle", subtle)?;
             default.set("crypto", crypto.clone())?;
             default.set("webcrypto", crypto)?;
             Ok(())

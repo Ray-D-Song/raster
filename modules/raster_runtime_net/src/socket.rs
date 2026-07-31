@@ -1,13 +1,13 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 use std::{
+    io,
     net::Shutdown,
     sync::{Arc, Mutex, RwLock},
+    time::Duration,
 };
 
 use raster_runtime_buffer::Buffer;
-use std::time::Duration;
-
 use raster_runtime_context::CtxExtension;
 use raster_runtime_events::{EmitError, Emitter, EventEmitter, EventKey, EventList};
 use raster_runtime_stream::{
@@ -22,6 +22,7 @@ use rquickjs::{
     prelude::{Opt, Rest, This},
     Class, Ctx, Error, Exception, Function, IntoJs, JsLifetime, Object, Result, Value,
 };
+use socket2::{SockRef, TcpKeepalive};
 #[cfg(unix)]
 use tokio::net::UnixStream;
 use tokio::{
@@ -41,6 +42,18 @@ pub enum TransportState {
     HandoffPending,
     Detached,
     Closed,
+}
+
+#[derive(Debug, Clone, Default)]
+struct KeepAliveOptions {
+    enabled: bool,
+    initial_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct TcpSocketOptions {
+    no_delay: Option<bool>,
+    keep_alive: Option<KeepAliveOptions>,
 }
 
 enum RawShutdown {
@@ -73,6 +86,10 @@ pub struct Socket<'js> {
     tcp_read_half: Option<OwnedReadHalf>,
     tcp_write_half: Option<OwnedWriteHalf>,
     handoff_prefix: Option<Vec<u8>>,
+    tcp_options: TcpSocketOptions,
+    /// Control handle for TCP socket options / force-close. Not shared with
+    /// the raw HTTP shutdown handle (`raw_shutdown`).
+    pub(crate) tcp_control: Option<Arc<std::net::TcpStream>>,
 }
 
 unsafe impl<'js> JsLifetime<'js> for Socket<'js> {
@@ -215,21 +232,123 @@ impl<'js> Socket<'js> {
     }
 
     pub fn destroy(this: This<Class<'js, Self>>, error: Opt<Value<'js>>) -> Class<'js, Self> {
-        if let Some(stream) = &this.borrow().raw_shutdown {
-            match stream {
-                RawShutdown::Tcp(stream) => {
-                    let _ = stream.shutdown(Shutdown::Both);
-                },
-                #[cfg(unix)]
-                RawShutdown::Unix(stream) => {
-                    let _ = stream.shutdown(Shutdown::Both);
-                },
+        {
+            let mut borrow = this.borrow_mut();
+            if let Some(control) = borrow.tcp_control.take() {
+                let _ = control.shutdown(Shutdown::Both);
+            }
+            if let Some(stream) = &borrow.raw_shutdown {
+                match stream {
+                    RawShutdown::Tcp(stream) => {
+                        let _ = stream.shutdown(Shutdown::Both);
+                    },
+                    #[cfg(unix)]
+                    RawShutdown::Unix(stream) => {
+                        let _ = stream.shutdown(Shutdown::Both);
+                    },
+                }
             }
         }
         this.borrow_mut().destroyed = true;
         ReadableStream::destroy(This(this.clone()), Opt(None));
         WritableStream::destroy(This(this.clone()), error);
         this.0
+    }
+
+    /// Node-compatible `socket.setNoDelay([noDelay])`. Defaults to `true`.
+    pub fn set_no_delay(
+        this: This<Class<'js, Self>>,
+        ctx: Ctx<'js>,
+        no_delay: Opt<bool>,
+    ) -> Result<Class<'js, Self>> {
+        let enable = no_delay.0.unwrap_or(true);
+        let control = {
+            let mut borrow = this.borrow_mut();
+
+            // Skip redundant syscalls when the same value is already stored.
+            if borrow.tcp_options.no_delay == Some(enable) {
+                None
+            } else {
+                borrow.tcp_options.no_delay = Some(enable);
+
+                // Detached (post-STARTTLS) sockets only update local state.
+                if borrow.transport_state == TransportState::Detached {
+                    None
+                } else {
+                    borrow.tcp_control.clone()
+                }
+            }
+        };
+
+        if let Some(control) = control {
+            control
+                .set_nodelay(enable)
+                .map_err(|err| Exception::throw_message(&ctx, &err.to_string()))?;
+        }
+
+        Ok(this.0)
+    }
+
+    /// Node-compatible `socket.setKeepAlive([enable[, initialDelay]])`.
+    /// Only the traditional two-argument form is supported.
+    pub fn set_keep_alive(
+        this: This<Class<'js, Self>>,
+        ctx: Ctx<'js>,
+        enable: Opt<Value<'js>>,
+        initial_delay: Opt<Value<'js>>,
+    ) -> Result<Class<'js, Self>> {
+        let enabled = match enable.0 {
+            Some(value) => value_to_bool(&value),
+            None => false,
+        };
+        let delay_secs = normalize_keep_alive_delay(&ctx, initial_delay.0)?;
+        let delay = if delay_secs == 0 {
+            None
+        } else {
+            Some(Duration::from_secs(delay_secs))
+        };
+
+        let apply = {
+            let mut borrow = this.borrow_mut();
+            let prev_delay = borrow
+                .tcp_options
+                .keep_alive
+                .as_ref()
+                .and_then(|ka| ka.initial_delay);
+            // Keep prior delay when disabling so re-enable can reapply it.
+            let saved_delay = delay.or(prev_delay);
+
+            let options = KeepAliveOptions {
+                enabled,
+                initial_delay: if enabled {
+                    delay.or(prev_delay)
+                } else {
+                    saved_delay
+                },
+            };
+
+            let unchanged = borrow.tcp_options.keep_alive.as_ref().map(|ka| {
+                ka.enabled == options.enabled && ka.initial_delay == options.initial_delay
+            }) == Some(true);
+
+            if unchanged {
+                None
+            } else {
+                borrow.tcp_options.keep_alive = Some(options.clone());
+                if borrow.transport_state == TransportState::Detached {
+                    None
+                } else {
+                    borrow.tcp_control.clone().map(|c| (c, options))
+                }
+            }
+        };
+
+        if let Some((control, options)) = apply {
+            apply_keep_alive(&control, &options)
+                .map_err(|err| Exception::throw_message(&ctx, &err.to_string()))?;
+        }
+
+        Ok(this.0)
     }
 
     pub fn read(
@@ -378,13 +497,17 @@ impl<'js> Socket<'js> {
                     unreachable!()
                 }?;
 
-                Socket::emit_str(this2.clone(), &ctx3, "connect", vec![], false)?;
-
+                // Start the join/cleanup task *before* emitting `connect`.
+                // If a connect listener throws, tcp_control must still be released.
                 let this4 = this2.clone();
                 let ctx4 = ctx3.clone();
                 ctx3.spawn_exit_simple(async move {
                     let _ = async {
-                        let had_error = rw_join(&ctx4, readable_done, writable_done).await?;
+                        let join_result = rw_join(&ctx4, readable_done, writable_done).await;
+                        // Drop the option-control clone after drivers finish, even on error.
+                        // This must not affect a normally closed primary stream.
+                        this4.borrow_mut().tcp_control = None;
+                        let had_error = join_result?;
 
                         if !matches!(
                             this4.borrow().transport_state,
@@ -398,6 +521,8 @@ impl<'js> Socket<'js> {
                     .await;
                     Ok(())
                 });
+
+                Socket::emit_str(this2.clone(), &ctx3, "connect", vec![], false)?;
 
                 Ok::<_, Error>(())
             }
@@ -442,6 +567,8 @@ impl<'js> Socket<'js> {
                 tcp_read_half: None,
                 tcp_write_half: None,
                 handoff_prefix: None,
+                tcp_options: TcpSocketOptions::default(),
+                tcp_control: None,
             },
         )?;
         Ok(instance)
@@ -488,15 +615,15 @@ impl<'js> Socket<'js> {
 
         let flush_rx = WritableStream::request_flush_barrier(this.clone(), ctx)?;
         match tokio::time::timeout(Duration::from_secs(10), flush_rx).await {
-            Ok(Ok(())) => {}
+            Ok(Ok(())) => {},
             Ok(Err(_)) => {
                 this.borrow_mut().transport_state = TransportState::Attached;
                 return Err(Exception::throw_message(ctx, "Flush barrier failed"));
-            }
+            },
             Err(_) => {
                 this.borrow_mut().transport_state = TransportState::Attached;
                 return Err(Exception::throw_message(ctx, "Flush barrier timeout"));
-            }
+            },
         }
 
         this.borrow_mut().transport_state = TransportState::Detached;
@@ -512,29 +639,30 @@ impl<'js> Socket<'js> {
             Err(err) => {
                 fail_handoff(&this);
                 return Err(err);
-            }
+            },
         };
         let write_rx = match WritableStream::request_handoff::<OwnedWriteHalf>(this.clone(), ctx) {
             Ok(rx) => rx,
             Err(err) => {
                 fail_handoff(&this);
                 return Err(err);
-            }
+            },
         };
 
-        let (read_half, read_prefix) = match tokio::time::timeout(Duration::from_secs(10), read_rx).await {
-            Ok(Ok(result)) => result,
-            Ok(Err(_)) | Err(_) => {
-                fail_handoff(&this);
-                return Err(Exception::throw_message(ctx, "Readable handoff failed"));
-            }
-        };
+        let (read_half, read_prefix) =
+            match tokio::time::timeout(Duration::from_secs(10), read_rx).await {
+                Ok(Ok(result)) => result,
+                Ok(Err(_)) | Err(_) => {
+                    fail_handoff(&this);
+                    return Err(Exception::throw_message(ctx, "Readable handoff failed"));
+                },
+            };
         let write_half = match tokio::time::timeout(Duration::from_secs(10), write_rx).await {
             Ok(Ok(half)) => half,
             Ok(Err(_)) | Err(_) => {
                 fail_handoff(&this);
                 return Err(Exception::throw_message(ctx, "Writable handoff failed"));
-            }
+            },
         };
 
         let prefix = read_prefix;
@@ -542,6 +670,9 @@ impl<'js> Socket<'js> {
         {
             let mut borrow = this.borrow_mut();
             borrow.handoff_prefix = Some(prefix.clone());
+            // Full handoff succeeded: drop the TCP control handle so detached
+            // sockets only update local option state.
+            borrow.tcp_control = None;
         }
 
         Ok((read_half, write_half, prefix))
@@ -555,8 +686,33 @@ impl<'js> Socket<'js> {
     ) -> Result<(Receiver<bool>, Receiver<bool>)> {
         Self::set_addresses(this, ctx, &stream)?;
 
+        let std_stream = stream.into_std().or_throw(ctx)?;
+        let control_std = std_stream.try_clone().or_throw(ctx)?;
+        let control = Arc::new(control_std);
+
+        let options = this.borrow().tcp_options.clone();
+        if let Err(err) = apply_tcp_options(&control, &options) {
+            return Err(Exception::throw_message(ctx, &err.to_string()));
+        }
+
+        this.borrow_mut().tcp_control = Some(control);
+
+        let stream = match TcpStream::from_std(std_stream) {
+            Ok(stream) => stream,
+            Err(err) => {
+                this.borrow_mut().tcp_control = None;
+                return Err(Exception::throw_message(ctx, &err.to_string()));
+            },
+        };
         let (reader, writer) = stream.into_split();
-        Self::process_stream(this, ctx, reader, writer, allow_half_open)
+        match Self::process_stream(this, ctx, reader, writer, allow_half_open) {
+            Ok(done) => Ok(done),
+            Err(err) => {
+                // Clear control handle if the stream driver failed to start.
+                this.borrow_mut().tcp_control = None;
+                Err(err)
+            },
+        }
     }
 
     /// Attach a raw byte writer for upgraded HTTP connections. The HTTP
@@ -613,7 +769,10 @@ impl<'js> Socket<'js> {
         Self::process_stream(this, ctx, reader, writer, allow_half_open)
     }
 
-    fn process_stream<R: AsyncRead + Send + 'static + 'js + Unpin, W: AsyncWrite + Send + 'static + 'js + Unpin>(
+    fn process_stream<
+        R: AsyncRead + Send + 'static + 'js + Unpin,
+        W: AsyncWrite + Send + 'static + 'js + Unpin,
+    >(
         this: &Class<'js, Self>,
         ctx: &Ctx<'js>,
         reader: R,
@@ -665,13 +824,81 @@ impl<'js> Socket<'js> {
     }
 }
 
+fn value_to_bool(value: &Value<'_>) -> bool {
+    if let Some(b) = value.as_bool() {
+        return b;
+    }
+    if let Some(n) = value.as_number() {
+        return n != 0.0 && !n.is_nan();
+    }
+    if value.is_null() || value.is_undefined() {
+        return false;
+    }
+    if let Some(s) = value.as_string() {
+        return s.to_string().map(|s| !s.is_empty()).unwrap_or(false);
+    }
+    true
+}
+
+fn normalize_keep_alive_delay(ctx: &Ctx<'_>, value: Option<Value<'_>>) -> Result<u64> {
+    let Some(value) = value else {
+        return Ok(0);
+    };
+    if value.is_undefined() || value.is_null() {
+        return Ok(0);
+    }
+    let Some(n) = value.as_number() else {
+        return Err(Exception::throw_type(
+            ctx,
+            "The \"initialDelay\" argument must be of type number.",
+        ));
+    };
+    if !n.is_finite() || n < 0.0 {
+        return Err(Exception::throw_range(
+            ctx,
+            "The value of \"initialDelay\" is out of range.",
+        ));
+    }
+    // Truncate toward zero; values under 1000ms become 0 seconds.
+    Ok((n as u64) / 1000)
+}
+
+fn apply_keep_alive(stream: &std::net::TcpStream, options: &KeepAliveOptions) -> io::Result<()> {
+    let sock = SockRef::from(stream);
+    sock.set_keepalive(options.enabled)?;
+    if options.enabled {
+        if let Some(delay) = options.initial_delay {
+            if !delay.is_zero() {
+                let ka = TcpKeepalive::new().with_time(delay);
+                sock.set_tcp_keepalive(&ka)?;
+            }
+            // delay == 0: enable keepalive only; keep the OS default idle timeout.
+        }
+    }
+    Ok(())
+}
+
+fn apply_tcp_options(stream: &std::net::TcpStream, options: &TcpSocketOptions) -> io::Result<()> {
+    if let Some(no_delay) = options.no_delay {
+        stream.set_nodelay(no_delay)?;
+    }
+    if let Some(ref keep_alive) = options.keep_alive {
+        apply_keep_alive(stream, keep_alive)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
     use raster_runtime_buffer as buffer;
     use raster_runtime_test::{call_test, test_async_with, ModuleEvaluator};
-    use rquickjs::{function::IntoArgs, module::Evaluated, Ctx, FromJs, Module};
+    use rquickjs::{
+        function::IntoArgs, module::Evaluated, prelude::Opt, prelude::This, Class, Ctx, FromJs,
+        Module, Value,
+    };
+    use socket2::SockRef;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
@@ -755,6 +982,341 @@ mod tests {
 
                 let ok: bool = call_test_delay(&ctx, &module, (port,)).await;
                 assert!(ok)
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_set_no_delay_default_and_pre_connect() {
+        test_async_with(|ctx| {
+            Box::pin(async move {
+                buffer::init(&ctx).unwrap();
+                ModuleEvaluator::eval_rust::<NetModule>(ctx.clone(), "net")
+                    .await
+                    .unwrap();
+
+                let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+                let port = listener.local_addr().unwrap().port();
+                let (hold_tx, hold_rx) = tokio::sync::oneshot::channel::<()>();
+                tokio::spawn(async move {
+                    let (_stream, _) = listener.accept().await.unwrap();
+                    let _ = hold_rx.await;
+                });
+
+                let module = ModuleEvaluator::eval_js(
+                    ctx.clone(),
+                    "test",
+                    r#"
+                        import { Socket } from 'net';
+                        export async function test(port) {
+                            const socket = new Socket();
+                            const ret = socket.setNoDelay();
+                            if (ret !== socket) return 'not-this';
+                            return new Promise((resolve, reject) => {
+                                socket.on('connect', () => {
+                                    resolve(socket);
+                                });
+                                socket.on('error', reject);
+                                socket.setNoDelay(true);
+                                socket.connect(port, '127.0.0.1');
+                            });
+                        }
+                    "#,
+                )
+                .await
+                .unwrap();
+
+                let socket: Class<crate::Socket> = call_test_delay(&ctx, &module, (port,)).await;
+                {
+                    let borrow = socket.borrow();
+                    assert_eq!(borrow.tcp_options.no_delay, Some(true));
+                    let control = borrow.tcp_control.as_ref().expect("tcp_control");
+                    assert!(control.nodelay().unwrap());
+                }
+                socket.borrow_mut().tcp_control = None;
+                let _ = hold_tx.send(());
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_set_no_delay_toggle_after_connect() {
+        test_async_with(|ctx| {
+            Box::pin(async move {
+                buffer::init(&ctx).unwrap();
+                ModuleEvaluator::eval_rust::<NetModule>(ctx.clone(), "net")
+                    .await
+                    .unwrap();
+
+                let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+                let port = listener.local_addr().unwrap().port();
+                let (hold_tx, hold_rx) = tokio::sync::oneshot::channel::<()>();
+                tokio::spawn(async move {
+                    let (_stream, _) = listener.accept().await.unwrap();
+                    let _ = hold_rx.await;
+                });
+
+                let module = ModuleEvaluator::eval_js(
+                    ctx.clone(),
+                    "test",
+                    r#"
+                        import { connect } from 'net';
+                        export async function test(port) {
+                            const socket = connect({ port, host: '127.0.0.1' });
+                            return new Promise((resolve, reject) => {
+                                socket.on('connect', () => {
+                                    socket.setNoDelay(false);
+                                    resolve(socket);
+                                });
+                                socket.on('error', reject);
+                            });
+                        }
+                    "#,
+                )
+                .await
+                .unwrap();
+
+                let socket: Class<crate::Socket> = call_test_delay(&ctx, &module, (port,)).await;
+                {
+                    let borrow = socket.borrow();
+                    assert_eq!(borrow.tcp_options.no_delay, Some(false));
+                    assert!(!borrow.tcp_control.as_ref().unwrap().nodelay().unwrap());
+                }
+                // Toggle back to true
+                {
+                    let this = This(socket.clone());
+                    crate::Socket::set_no_delay(this, ctx.clone(), Opt(Some(true))).unwrap();
+                    assert!(socket
+                        .borrow()
+                        .tcp_control
+                        .as_ref()
+                        .unwrap()
+                        .nodelay()
+                        .unwrap());
+                }
+                socket.borrow_mut().tcp_control = None;
+                let _ = hold_tx.send(());
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_set_keep_alive_pre_and_post_connect() {
+        test_async_with(|ctx| {
+            Box::pin(async move {
+                buffer::init(&ctx).unwrap();
+                ModuleEvaluator::eval_rust::<NetModule>(ctx.clone(), "net")
+                    .await
+                    .unwrap();
+
+                let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+                let port = listener.local_addr().unwrap().port();
+                let (hold_tx, hold_rx) = tokio::sync::oneshot::channel::<()>();
+                tokio::spawn(async move {
+                    let (_stream, _) = listener.accept().await.unwrap();
+                    let _ = hold_rx.await;
+                });
+
+                let module = ModuleEvaluator::eval_js(
+                    ctx.clone(),
+                    "test",
+                    r#"
+                        import { Socket } from 'net';
+                        export async function test(port) {
+                            const socket = new Socket();
+                            socket.setKeepAlive(true, 0);
+                            return new Promise((resolve, reject) => {
+                                socket.on('connect', () => {
+                                    resolve(socket);
+                                });
+                                socket.on('error', reject);
+                                socket.connect(port, '127.0.0.1');
+                            });
+                        }
+                    "#,
+                )
+                .await
+                .unwrap();
+
+                let socket: Class<crate::Socket> = call_test_delay(&ctx, &module, (port,)).await;
+                {
+                    let borrow = socket.borrow();
+                    let ka = borrow.tcp_options.keep_alive.as_ref().unwrap();
+                    assert!(ka.enabled);
+                    assert!(ka.initial_delay.is_none());
+                    let control = borrow.tcp_control.as_ref().unwrap();
+                    assert!(SockRef::from(control.as_ref()).keepalive().unwrap());
+                }
+
+                // Immediately on connect path: set again with positive delay.
+                {
+                    let this = This(socket.clone());
+                    crate::Socket::set_keep_alive(
+                        this,
+                        ctx.clone(),
+                        Opt(Some(Value::new_bool(ctx.clone(), true))),
+                        Opt(Some(Value::new_int(ctx.clone(), 3000))),
+                    )
+                    .unwrap();
+                    let borrow = socket.borrow();
+                    let ka = borrow.tcp_options.keep_alive.as_ref().unwrap();
+                    assert_eq!(ka.initial_delay, Some(Duration::from_secs(3)));
+                    assert!(SockRef::from(borrow.tcp_control.as_ref().unwrap().as_ref())
+                        .keepalive()
+                        .unwrap());
+                }
+
+                socket.borrow_mut().tcp_control = None;
+                let _ = hold_tx.send(());
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_set_keep_alive_invalid_delay() {
+        test_async_with(|ctx| {
+            Box::pin(async move {
+                buffer::init(&ctx).unwrap();
+                ModuleEvaluator::eval_rust::<NetModule>(ctx.clone(), "net")
+                    .await
+                    .unwrap();
+
+                let module = ModuleEvaluator::eval_js(
+                    ctx.clone(),
+                    "test",
+                    r#"
+                        import { Socket } from 'net';
+                        export async function test() {
+                            const socket = new Socket();
+                            const cases = [];
+                            for (const d of [-1, NaN, Infinity, -Infinity]) {
+                                try {
+                                    socket.setKeepAlive(true, d);
+                                    cases.push('ok');
+                                } catch (e) {
+                                    cases.push(e.name || 'Error');
+                                }
+                            }
+                            return cases;
+                        }
+                    "#,
+                )
+                .await
+                .unwrap();
+
+                let cases: Vec<String> = call_test(&ctx, &module, ()).await;
+                assert_eq!(cases.len(), 4);
+                for c in cases {
+                    assert_eq!(c, "RangeError");
+                }
+            })
+        })
+        .await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_set_options_on_unix_socket_noop() {
+        test_async_with(|ctx| {
+            Box::pin(async move {
+                buffer::init(&ctx).unwrap();
+                ModuleEvaluator::eval_rust::<NetModule>(ctx.clone(), "net")
+                    .await
+                    .unwrap();
+
+                let dir = std::env::temp_dir();
+                let path = dir.join(format!("raster-net-ka-{}.sock", std::process::id()));
+                let _ = std::fs::remove_file(&path);
+                let listener = tokio::net::UnixListener::bind(&path).unwrap();
+                let path_str = path.to_string_lossy().to_string();
+                let (hold_tx, hold_rx) = tokio::sync::oneshot::channel::<()>();
+                tokio::spawn(async move {
+                    let (_stream, _) = listener.accept().await.unwrap();
+                    let _ = hold_rx.await;
+                });
+
+                let module = ModuleEvaluator::eval_js(
+                    ctx.clone(),
+                    "test",
+                    r#"
+                        import { connect } from 'net';
+                        export async function test(path) {
+                            const socket = connect(path);
+                            return new Promise((resolve, reject) => {
+                                socket.on('connect', () => {
+                                    const a = socket.setNoDelay(true);
+                                    const b = socket.setKeepAlive(true, 0);
+                                    resolve(a === socket && b === socket);
+                                });
+                                socket.on('error', reject);
+                            });
+                        }
+                    "#,
+                )
+                .await
+                .unwrap();
+
+                let ok: bool = call_test_delay(&ctx, &module, (path_str,)).await;
+                assert!(ok);
+                let _ = hold_tx.send(());
+                let _ = std::fs::remove_file(&path);
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_connect_listener_throw_still_clears_tcp_control() {
+        test_async_with(|ctx| {
+            Box::pin(async move {
+                buffer::init(&ctx).unwrap();
+                ModuleEvaluator::eval_rust::<NetModule>(ctx.clone(), "net")
+                    .await
+                    .unwrap();
+
+                let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+                let port = listener.local_addr().unwrap().port();
+                tokio::spawn(async move {
+                    let (_stream, _) = listener.accept().await.unwrap();
+                    // Hold until the client destroys / remote EOF completes join.
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                });
+
+                let module = ModuleEvaluator::eval_js(
+                    ctx.clone(),
+                    "test",
+                    r#"
+                        import { Socket } from 'net';
+                        export async function test(port) {
+                            const socket = new Socket();
+                            return new Promise((resolve) => {
+                                socket.on('connect', () => {
+                                    // Join cleanup is scheduled before emit invokes this listener.
+                                    throw new Error('connect listener boom');
+                                });
+                                socket.on('error', () => {
+                                    // Tear down so rw_join completes and clears tcp_control.
+                                    socket.destroy();
+                                });
+                                socket.on('close', () => resolve(socket));
+                                socket.connect(port, '127.0.0.1');
+                            });
+                        }
+                    "#,
+                )
+                .await
+                .unwrap();
+
+                let socket: Class<crate::Socket> = call_test_delay(&ctx, &module, (port,)).await;
+
+                assert!(
+                    socket.borrow().tcp_control.is_none(),
+                    "tcp_control must be cleared even if connect listener throws"
+                );
             })
         })
         .await;

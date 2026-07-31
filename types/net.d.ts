@@ -149,6 +149,24 @@ declare module "net" {
     end(chunk?: string | Buffer, callback?: () => void): this;
 
     /**
+     * Enable/disable the use of Nagle's algorithm.
+     * @param noDelay Default: `true`
+     * @return The socket itself.
+     */
+    setNoDelay(noDelay?: boolean): this;
+
+    /**
+     * Enable/disable keep-alive functionality, and optionally set the initial delay
+     * before the first keepalive probe is sent on an idle socket.
+     *
+     * Only the traditional two-argument form is implemented (no options object).
+     * @param enable Default: `false`
+     * @param initialDelay Default: `0`
+     * @return The socket itself.
+     */
+    setKeepAlive(enable?: boolean, initialDelay?: number): this;
+
+    /**
      * events.EventEmitter
      *   1. close
      *   2. connect
@@ -485,4 +503,19 @@ declare module "net" {
     path: string,
     connectionListener?: () => void
   ): Socket;
+
+  interface NetModule {
+    Socket: typeof Socket;
+    Server: typeof Server;
+    createServer: typeof createServer;
+    createConnection: typeof createConnection;
+    connect: typeof connect;
+  }
+  const net: NetModule;
+  export default net;
+}
+
+declare module "node:net" {
+  export * from "net";
+  export { default } from "net";
 }

@@ -63,10 +63,7 @@ pub fn cert_altname_invalid<'js>(
         ctx,
         ERR_TLS_CERT_ALTNAME_INVALID,
         &format!("Hostname/IP does not match certificate's altnames: {reason}"),
-        &[
-            ("host", host.into_js(ctx)?),
-            ("cert", cert.into_js(ctx)?),
-        ],
+        &[("host", host.into_js(ctx)?), ("cert", cert.into_js(ctx)?)],
     )
 }
 

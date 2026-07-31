@@ -192,7 +192,11 @@ fn get_optional_pem_bytes<'js>(
     } else if list.is_empty() {
         Ok(None)
     } else {
-        Err(throw_invalid_arg_value(ctx, key, "must be a single PEM block"))
+        Err(throw_invalid_arg_value(
+            ctx,
+            key,
+            "must be a single PEM block",
+        ))
     }
 }
 
@@ -227,7 +231,7 @@ pub fn parse_pem_value<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> Result<Vec<Vec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rquickjs::{Runtime, Context};
+    use rquickjs::{Context, Runtime};
 
     fn with_ctx(f: impl FnOnce(&Ctx<'_>)) {
         let rt = Runtime::new().unwrap();

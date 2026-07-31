@@ -29,10 +29,7 @@ pub fn convert_alpn_protocols_export<'js>(
     Ok(())
 }
 
-fn convert_alpn_protocol_array<'js>(
-    ctx: &Ctx<'js>,
-    array: &Array<'js>,
-) -> Result<Vec<u8>> {
+fn convert_alpn_protocol_array<'js>(ctx: &Ctx<'js>, array: &Array<'js>) -> Result<Vec<u8>> {
     let mut lens = Vec::new();
     let mut total = 0usize;
 

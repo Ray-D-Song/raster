@@ -234,6 +234,8 @@ impl<'js> ReadableStreamBYOBReader<'js> {
                 ObjectBytes::I64Array(a) => Some(a.len()),
                 ObjectBytes::F32Array(a) => Some(a.len()),
                 ObjectBytes::F64Array(a) => Some(a.len()),
+                // element length == byte length for clamped u8
+                ObjectBytes::U8ClampedArray(v) => Some(v.byte_length),
                 _ => None,
             };
             if let Some(typed_array_len) = typed_array_len {
@@ -483,6 +485,8 @@ impl<'js> ViewBytes<'js> {
             ObjectBytes::I64Array(_) => 8,
             ObjectBytes::F32Array(_) => 4,
             ObjectBytes::F64Array(_) => 8,
+            ObjectBytes::U8ClampedArray(_) => 1,
+            ObjectBytes::ArrayBuffer(_) => 1,
             ObjectBytes::DataView(_) => 1,
             ObjectBytes::Vec(_) => {
                 panic!("invariant broken; ViewBytes may not contain ObjectBytes::Vec")
@@ -503,6 +507,7 @@ pub(crate) struct ArrayConstructorPrimordials<'js> {
     constructor_int64array: Constructor<'js>,
     constructor_f32array: Constructor<'js>,
     constructor_f64array: Constructor<'js>,
+    constructor_uint8_clamped_array: Constructor<'js>,
     constructor_data_view: Constructor<'js>,
 }
 
@@ -518,6 +523,7 @@ impl<'js> Trace<'js> for ArrayConstructorPrimordials<'js> {
         self.constructor_int64array.trace(tracer);
         self.constructor_f32array.trace(tracer);
         self.constructor_f64array.trace(tracer);
+        self.constructor_uint8_clamped_array.trace(tracer);
         self.constructor_data_view.trace(tracer);
     }
 }
@@ -539,6 +545,7 @@ impl<'js> Primordial<'js> for ArrayConstructorPrimordials<'js> {
             constructor_int64array: globals.get(PredefinedAtom::BigInt64Array)?,
             constructor_f32array: globals.get(PredefinedAtom::Float32Array)?,
             constructor_f64array: globals.get(PredefinedAtom::Float64Array)?,
+            constructor_uint8_clamped_array: globals.get(PredefinedAtom::Uint8ClampedArray)?,
             constructor_data_view: globals.get(PredefinedAtom::DataView)?,
         })
     }
@@ -557,6 +564,8 @@ impl<'js> ArrayConstructorPrimordials<'js> {
             ObjectBytes::I64Array(_) => self.constructor_int64array.clone(),
             ObjectBytes::F32Array(_) => self.constructor_f32array.clone(),
             ObjectBytes::F64Array(_) => self.constructor_f64array.clone(),
+            ObjectBytes::U8ClampedArray(_) => self.constructor_uint8_clamped_array.clone(),
+            ObjectBytes::ArrayBuffer(_) => self.constructor_data_view.clone(),
             ObjectBytes::DataView(_) => self.constructor_data_view.clone(),
             ObjectBytes::Vec(_) => {
                 panic!("invariant broken; ViewBytes may not contain ObjectBytes::Vec")

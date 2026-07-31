@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{verify_tls12_signature, verify_tls13_signature, CryptoProvider};
 use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::TrustAnchor;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::{
@@ -14,7 +15,6 @@ use rustls::{
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 use webpki::{EndEntityCert, KeyUsage};
-use rustls::pki_types::TrustAnchor;
 
 use crate::backend::{
     AcceptOptions, ClientTlsStream, ConnectOptions, ServerTlsStream, TlsConnectionInfo,
@@ -302,7 +302,9 @@ fn get_crypto_provider() -> Arc<CryptoProvider> {
     Arc::new(rustls_graviola::default_provider())
 }
 
-fn parse_cert_chain(chain: &[Vec<u8>]) -> Result<Vec<CertificateDer<'static>>, Box<dyn std::error::Error + Send + Sync>> {
+fn parse_cert_chain(
+    chain: &[Vec<u8>],
+) -> Result<Vec<CertificateDer<'static>>, Box<dyn std::error::Error + Send + Sync>> {
     let der = pem_certs_to_der(chain)?;
     Ok(der.into_iter().map(CertificateDer::from).collect())
 }
@@ -341,7 +343,10 @@ fn build_certified_key(
     let key = parse_private_key(context.key.as_deref())?;
     let provider = get_crypto_provider();
     let signing_key = provider.key_provider.load_private_key(key.clone_key())?;
-    Ok(Arc::new(rustls::sign::CertifiedKey::new(certs, signing_key)))
+    Ok(Arc::new(rustls::sign::CertifiedKey::new(
+        certs,
+        signing_key,
+    )))
 }
 
 fn decode_alpn(buf: &[u8]) -> Vec<Vec<u8>> {
@@ -423,8 +428,7 @@ impl ServerCertVerifier for ChainVerifier {
         _ocsp: &[u8],
         now: UnixTime,
     ) -> Result<ServerCertVerified, Error> {
-        let end = EndEntityCert::try_from(end_entity)
-            .map_err(|e| Error::General(e.to_string()))?;
+        let end = EndEntityCert::try_from(end_entity).map_err(|e| Error::General(e.to_string()))?;
         let algs = self.provider.signature_verification_algorithms.all;
         end.verify_for_usage(
             algs,
@@ -445,7 +449,12 @@ impl ServerCertVerifier for ChainVerifier {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, Error> {
-        verify_tls12_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+        verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
     }
 
     fn verify_tls13_signature(
@@ -454,7 +463,12 @@ impl ServerCertVerifier for ChainVerifier {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, Error> {
-        verify_tls13_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+        verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
@@ -485,14 +499,17 @@ impl ServerCertVerifier for RecordingVerifier {
         ocsp: &[u8],
         now: UnixTime,
     ) -> Result<ServerCertVerified, Error> {
-        match self.inner.verify_server_cert(end_entity, intermediates, server_name, ocsp, now) {
+        match self
+            .inner
+            .verify_server_cert(end_entity, intermediates, server_name, ocsp, now)
+        {
             Ok(assertion) => {
                 if let Ok(mut rec) = self.recorded.lock() {
                     rec.ok = true;
                     rec.error = None;
                 }
                 Ok(assertion)
-            }
+            },
             Err(e) => {
                 let msg = e.to_string();
                 if let Ok(mut rec) = self.recorded.lock() {
@@ -500,7 +517,7 @@ impl ServerCertVerifier for RecordingVerifier {
                     rec.error = Some(msg);
                 }
                 Ok(ServerCertVerified::assertion())
-            }
+            },
         }
     }
 

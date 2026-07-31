@@ -46,10 +46,7 @@ pub fn parse_cert_pem(pem: &[u8]) -> CertResult<CertObject> {
     parse_cert_der(&der)
 }
 
-pub fn cert_object_from_js<'js>(
-    _ctx: &Ctx<'js>,
-    obj: &Object<'js>,
-) -> CertResult<CertObject> {
+pub fn cert_object_from_js<'js>(_ctx: &Ctx<'js>, obj: &Object<'js>) -> CertResult<CertObject> {
     use rquickjs::Object as JsObject;
 
     let subject = if let Ok(subject_obj) = obj.get::<_, JsObject>("subject") {
@@ -116,13 +113,13 @@ fn dn_map_from_js(obj: &rquickjs::Object<'_>) -> CertResult<BTreeMap<String, CnV
                 }
             }
             match values.len() {
-                0 => {}
+                0 => {},
                 1 => {
                     map.insert(key, CnValue::Single(values.remove(0)));
-                }
+                },
                 _ => {
                     map.insert(key, CnValue::Multiple(values));
-                }
+                },
             }
         }
     }
@@ -192,11 +189,11 @@ fn dn_to_map(dn: &X509Name<'_>) -> BTreeMap<String, CnValue> {
                         match existing {
                             CnValue::Single(a) => {
                                 *v = CnValue::Multiple(vec![a, s.to_string()]);
-                            }
+                            },
                             CnValue::Multiple(mut list) => {
                                 list.push(s.to_string());
                                 *v = CnValue::Multiple(list);
-                            }
+                            },
                         }
                     })
                     .or_insert(CnValue::Single(s.to_string()));
@@ -249,8 +246,8 @@ fn extract_subject_alt_name(cert: &X509Certificate<'_>) -> Option<String> {
                         continue;
                     };
                     parts.push(format!("IP Address:{ip_str}"));
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
         if parts.is_empty() {
@@ -304,23 +301,20 @@ fn cert_to_js<'js>(ctx: &Ctx<'js>, cert: &CertObject, detailed: bool) -> Result<
     Ok(obj)
 }
 
-fn dn_map_to_js<'js>(
-    ctx: &Ctx<'js>,
-    map: &BTreeMap<String, CnValue>,
-) -> Result<Object<'js>> {
+fn dn_map_to_js<'js>(ctx: &Ctx<'js>, map: &BTreeMap<String, CnValue>) -> Result<Object<'js>> {
     let obj = Object::new(ctx.clone())?;
     for (key, value) in map {
         match value {
             CnValue::Single(s) => {
                 obj.set(key.as_str(), s.as_str())?;
-            }
+            },
             CnValue::Multiple(list) => {
                 let array = rquickjs::Array::new(ctx.clone())?;
                 for (i, item) in list.iter().enumerate() {
                     array.set(i, item.as_str())?;
                 }
                 obj.set(key.as_str(), array)?;
-            }
+            },
         }
     }
     Ok(obj)
@@ -351,10 +345,7 @@ mod tests {
         let intermediate_fp = chain[1].fingerprint256.clone();
         let root_fp = chain[2].fingerprint256.clone();
 
-        let intermediate_link = chain[0]
-            .issuer_certificate
-            .as_ref()
-            .expect("leaf issuer");
+        let intermediate_link = chain[0].issuer_certificate.as_ref().expect("leaf issuer");
         assert_eq!(intermediate_link.fingerprint256, intermediate_fp);
 
         let root_link = intermediate_link
@@ -417,17 +408,17 @@ mod tests {
             match parsed.subject.get("CN").unwrap() {
                 CnValue::Multiple(values) => {
                     assert!(values.contains(&"localhost".to_string()));
-                }
+                },
                 other => panic!("expected multiple CN values, got {other:?}"),
             }
             assert!(check_server_identity(&ctx, "localhost", &parsed).is_ok());
-            assert!(check_server_identity(&ctx, "localhost", &parsed).unwrap().is_none());
+            assert!(check_server_identity(&ctx, "localhost", &parsed)
+                .unwrap()
+                .is_none());
         });
     }
 
     mod fixtures {
-        pub use raster_runtime_test_tls::fixtures::{
-            CHAIN_LEAF_CERT, INTERMEDIATE_CERT, ROOT_CA,
-        };
+        pub use raster_runtime_test_tls::fixtures::{CHAIN_LEAF_CERT, INTERMEDIATE_CERT, ROOT_CA};
     }
 }

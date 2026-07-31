@@ -7,10 +7,7 @@ use raster_runtime_events::Emitter;
 use raster_runtime_net::{check_network_access, get_hostname, PrefixedTcpStream, Socket};
 use raster_runtime_stream::SteamEvents;
 use raster_runtime_utils::{error::ErrorExtensions, result::ResultExt};
-use rquickjs::{
-    prelude::Rest,
-    Class, Ctx, Error, Exception, Result, Value,
-};
+use rquickjs::{prelude::Rest, Class, Ctx, Error, Exception, Result, Value};
 use tokio::net::TcpStream;
 
 use crate::backend::{connect as tls_connect, ConnectOptions, VerifyRecord};
@@ -31,10 +28,7 @@ fn handle_connect_error<'js>(
     TlsSocket::fail_connect(tls_socket, ctx, err_value)
 }
 
-pub fn connect<'js>(
-    ctx: Ctx<'js>,
-    args: Rest<Value<'js>>,
-) -> Result<Class<'js, TlsSocket<'js>>> {
+pub fn connect<'js>(ctx: Ctx<'js>, args: Rest<Value<'js>>) -> Result<Class<'js, TlsSocket<'js>>> {
     let (options_value, callback) = normalize_connect_args(&ctx, args.0)?;
     let options = parse_connect_options(&ctx, options_value.clone())?;
 
@@ -154,9 +148,9 @@ pub fn connect<'js>(
                     timeout,
                     verify_record: verify_record.clone(),
                 };
-                let tls_stream = tls_connect(io, connect_opts).await.map_err(|e| {
-                    Exception::throw_message(&ctx2, &e.to_string())
-                })?;
+                let tls_stream = tls_connect(io, connect_opts)
+                    .await
+                    .map_err(|e| Exception::throw_message(&ctx2, &e.to_string()))?;
 
                 let tls_stream = match TlsSocket::finish_client_handshake(
                     tls_socket2.clone(),
@@ -172,12 +166,17 @@ pub fn connect<'js>(
                     Err(err_value) => {
                         TlsSocket::fail_connect(tls_socket2.clone(), &ctx2, err_value)?;
                         return Ok(());
-                    }
+                    },
                 };
 
                 let (reader, writer) = tokio::io::split(tls_stream);
-                let (readable_done, writable_done) =
-                    TlsSocket::process_split_io(&tls_socket2, &ctx2, reader, writer, allow_half_open)?;
+                let (readable_done, writable_done) = TlsSocket::process_split_io(
+                    &tls_socket2,
+                    &ctx2,
+                    reader,
+                    writer,
+                    allow_half_open,
+                )?;
 
                 let had_error = rw_join(&ctx2, readable_done, writable_done).await?;
                 TlsSocket::emit_close(tls_socket2, &ctx2, had_error)?;
@@ -197,9 +196,9 @@ pub fn connect<'js>(
                     timeout,
                     verify_record: verify_record.clone(),
                 };
-                let tls_stream = tls_connect(tcp, connect_opts).await.map_err(|e| {
-                    Exception::throw_message(&ctx2, &e.to_string())
-                })?;
+                let tls_stream = tls_connect(tcp, connect_opts)
+                    .await
+                    .map_err(|e| Exception::throw_message(&ctx2, &e.to_string()))?;
 
                 let tls_stream = match TlsSocket::finish_client_handshake(
                     tls_socket2.clone(),
@@ -215,12 +214,17 @@ pub fn connect<'js>(
                     Err(err_value) => {
                         TlsSocket::fail_connect(tls_socket2.clone(), &ctx2, err_value)?;
                         return Ok(());
-                    }
+                    },
                 };
 
                 let (reader, writer) = tokio::io::split(tls_stream);
-                let (readable_done, writable_done) =
-                    TlsSocket::process_split_io(&tls_socket2, &ctx2, reader, writer, allow_half_open)?;
+                let (readable_done, writable_done) = TlsSocket::process_split_io(
+                    &tls_socket2,
+                    &ctx2,
+                    reader,
+                    writer,
+                    allow_half_open,
+                )?;
 
                 let had_error = rw_join(&ctx2, readable_done, writable_done).await?;
                 TlsSocket::emit_close(tls_socket2, &ctx2, had_error)?;

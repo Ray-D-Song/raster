@@ -8,7 +8,7 @@ Partial support for the Node TLS core API:
 
 - **Client:** `connect()`, `TLSSocket`, `createSecureContext()`, `checkServerIdentity()`
 - **Server:** `createServer()`, `Server` (`listen`, `close`, `addContext`, `setSecureContext`)
-- **STARTTLS:** `connect({ socket: netSocket, ... })` upgrades an existing TCP `net.Socket` (mysql2 transport path). Full mysql2 compatibility still requires additional `net.Socket` APIs such as `setNoDelay` and `setKeepAlive`.
+- **STARTTLS:** `connect({ socket: netSocket, ... })` upgrades an existing TCP `net.Socket` (mysql2 transport path). `net.Socket.setNoDelay` / `setKeepAlive` are implemented on the plain TCP socket; control-handle transfer to `TLSSocket` is not required for the default non-SSL mysql fixture.
 - **TLS versions:** TLS 1.2 and 1.3 only
 - **Backends:** `tls-ring` (default), `tls-aws-lc`, `tls-graviola`, `tls-openssl`
 

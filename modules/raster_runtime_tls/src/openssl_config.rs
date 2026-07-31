@@ -5,7 +5,9 @@ use std::sync::OnceLock;
 use once_cell::sync::Lazy;
 use openssl::ssl::{SslConnectorBuilder, SslMethod, SslVerifyMode};
 
-use crate::root_ca::{get_extra_ca_certs_openssl, load_openssl_ca_store, set_extra_ca_certs_openssl};
+use crate::root_ca::{
+    get_extra_ca_certs_openssl, load_openssl_ca_store, set_extra_ca_certs_openssl,
+};
 
 pub use crate::root_ca::set_extra_ca_certs_bytes as set_extra_ca_certs;
 

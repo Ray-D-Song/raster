@@ -454,6 +454,393 @@ describe("copy", () => {
     expect(bufSrc.copy(bufDest, 5, 10, 9)).toEqual(0);
     expect(bufDest.toString()).toEqual("**************************");
   });
+
+  it("should clamp when source is longer than remaining target space (mysql packet shape)", () => {
+    const src = Buffer.from([1, 2, 3, 4, 5, 6, 7, 8]);
+    const dest = Buffer.alloc(4, 0xff);
+    expect(src.copy(dest, 0, 0, 8)).toEqual(4);
+    expect([...dest]).toEqual([1, 2, 3, 4]);
+  });
+
+  it("should return 0 when targetStart == target.length", () => {
+    const src = Buffer.from([1, 2, 3]);
+    const dest = Buffer.from([9, 9, 9]);
+    expect(src.copy(dest, dest.length)).toEqual(0);
+    expect([...dest]).toEqual([9, 9, 9]);
+  });
+
+  it("should return 0 when targetStart > target.length", () => {
+    const src = Buffer.from([1, 2, 3]);
+    const dest = Buffer.from([9, 9, 9]);
+    expect(src.copy(dest, dest.length + 1)).toEqual(0);
+    expect([...dest]).toEqual([9, 9, 9]);
+  });
+
+  it("should return 0 when sourceStart == source.length", () => {
+    const src = Buffer.from([1, 2, 3]);
+    const dest = Buffer.from([9, 9, 9]);
+    expect(src.copy(dest, 0, src.length)).toEqual(0);
+  });
+
+  it("should throw when sourceStart > source.length", () => {
+    const src = Buffer.from([1, 2, 3]);
+    const dest = Buffer.from([9, 9, 9]);
+    expect(() => src.copy(dest, 0, src.length + 1)).toThrow(RangeError);
+  });
+
+  it("should clamp sourceEnd greater than source.length", () => {
+    const src = Buffer.from([1, 2, 3]);
+    const dest = Buffer.alloc(3, 0);
+    expect(src.copy(dest, 0, 0, 100)).toEqual(3);
+    expect([...dest]).toEqual([1, 2, 3]);
+  });
+
+  it("should throw RangeError for negative indices", () => {
+    const src = Buffer.from([1, 2, 3]);
+    const dest = Buffer.alloc(3);
+    expect(() => src.copy(dest, -1)).toThrow(RangeError);
+    expect(() => src.copy(dest, 0, -1)).toThrow(RangeError);
+    expect(() => src.copy(dest, 0, 0, -1)).toThrow(RangeError);
+  });
+
+  it("should floor fractional indices (Node Math.floor)", () => {
+    const src = Buffer.from([10, 20, 30, 40]);
+    const dest = Buffer.alloc(4, 0);
+    // floor(1.9)=1, floor(0.5)=0, floor(2.7)=2
+    expect(src.copy(dest, 1.9 as unknown as number, 0.5 as unknown as number, 2.7 as unknown as number)).toEqual(2);
+    expect([...dest]).toEqual([0, 10, 20, 0]);
+  });
+
+  it("should copy with non-zero byteOffset subarrays", () => {
+    const backing = Buffer.from([0, 1, 2, 3, 4, 5, 6, 7]);
+    const src = backing.subarray(2, 6); // [2,3,4,5]
+    const destBacking = Buffer.from([9, 9, 9, 9, 9, 9]);
+    const dest = destBacking.subarray(1, 5); // 4 bytes
+    expect(src.copy(dest, 1, 1, 3)).toEqual(2);
+    expect([...dest]).toEqual([9, 3, 4, 9]);
+    expect([...destBacking]).toEqual([9, 9, 3, 4, 9, 9]);
+  });
+
+  it("should handle forward and backward overlapping copies on the same Buffer", () => {
+    const buf = Buffer.from([1, 2, 3, 4, 5, 6]);
+    expect(buf.copy(buf, 2, 0, 3)).toEqual(3); // forward overlap
+    expect([...buf]).toEqual([1, 2, 1, 2, 3, 6]);
+
+    const buf2 = Buffer.from([1, 2, 3, 4, 5, 6]);
+    expect(buf2.copy(buf2, 0, 2, 5)).toEqual(3); // backward overlap
+    expect([...buf2]).toEqual([3, 4, 5, 4, 5, 6]);
+  });
+
+  it("should handle overlapping subarrays that share a backing ArrayBuffer", () => {
+    const backing = Buffer.from([1, 2, 3, 4, 5, 6]);
+    const a = backing.subarray(0, 4);
+    const b = backing.subarray(2, 6);
+    expect(a.copy(b, 0, 0, 3)).toEqual(3);
+    expect([...backing]).toEqual([1, 2, 1, 2, 3, 6]);
+  });
+
+  it("should leave bytes outside the target view unchanged", () => {
+    const dest = Buffer.from([1, 2, 3, 4, 5, 6]);
+    const view = dest.subarray(2, 5);
+    const src = Buffer.from([7, 8, 9]);
+    src.copy(view);
+    expect([...dest]).toEqual([1, 2, 7, 8, 9, 6]);
+  });
+
+  it("should coerce non-number indices via ToNumber (Node style)", () => {
+    const src = Buffer.from([1, 2, 3, 4]);
+    const dest = Buffer.alloc(4, 0);
+
+    // null → 0 for sourceEnd → no copy
+    expect(src.copy(dest, 0, 0, null as unknown as number)).toEqual(0);
+    expect([...dest]).toEqual([0, 0, 0, 0]);
+
+    // true → 1 for sourceEnd → copy one byte
+    expect(src.copy(dest, 0, 0, true as unknown as number)).toEqual(1);
+    expect(dest[0]).toEqual(1);
+
+    // string "1" → 1 for targetStart
+    const dest2 = Buffer.alloc(4, 0);
+    expect(src.copy(dest2, "1" as unknown as number, 0, 1)).toEqual(1);
+    expect([...dest2]).toEqual([0, 1, 0, 0]);
+
+    // invalid string → NaN → toInteger default 0 for sourceEnd → no copy
+    const dest3 = Buffer.alloc(4, 0xff);
+    expect(src.copy(dest3, 0, 0, "nope" as unknown as number)).toEqual(0);
+    expect([...dest3]).toEqual([0xff, 0xff, 0xff, 0xff]);
+  });
+
+  it("matches Node toInteger for NaN, Infinity, 2**53, and negative fractions", () => {
+    const src = Buffer.from([1, 2, 3, 4]);
+
+    // sourceEnd = NaN/Infinity → toInteger(..., 0) → 0 bytes
+    const dest = Buffer.alloc(4, 0xff);
+    expect(src.copy(dest, 0, 0, Number.NaN)).toEqual(0);
+    expect([...dest]).toEqual([0xff, 0xff, 0xff, 0xff]);
+
+    const dest2 = Buffer.alloc(4, 0xff);
+    expect(src.copy(dest2, 0, 0, Number.POSITIVE_INFINITY)).toEqual(0);
+    expect([...dest2]).toEqual([0xff, 0xff, 0xff, 0xff]);
+
+    // targetStart = 2**53 (integer kept) → >= length → 0 bytes
+    const dest3 = Buffer.alloc(4, 0xff);
+    expect(src.copy(dest3, 2 ** 53, 0, 4)).toEqual(0);
+    expect([...dest3]).toEqual([0xff, 0xff, 0xff, 0xff]);
+
+    // sourceStart = 2**53 → RangeError
+    expect(() => src.copy(Buffer.alloc(4), 0, 2 ** 53)).toThrow(RangeError);
+
+    // sourceEnd = 2**53 (integer kept) → clamped to source.length → full copy
+    const dest4 = Buffer.alloc(4, 0);
+    expect(src.copy(dest4, 0, 0, 2 ** 53)).toEqual(4);
+    expect([...dest4]).toEqual([1, 2, 3, 4]);
+
+    // -0.5 uses Math.floor → -1 → RangeError (not trunc → 0)
+    expect(() => src.copy(Buffer.alloc(4), -0.5 as unknown as number)).toThrow(
+      RangeError
+    );
+    expect(() => src.copy(Buffer.alloc(4), 0, -0.5 as unknown as number)).toThrow(
+      RangeError
+    );
+    expect(() =>
+      src.copy(Buffer.alloc(4), 0, 0, -0.5 as unknown as number)
+    ).toThrow(RangeError);
+
+    // NaN on targetStart → toInteger 0 → copy from 0
+    const dest5 = Buffer.alloc(4, 0);
+    expect(src.copy(dest5, Number.NaN, 0, 2)).toEqual(2);
+    expect([...dest5]).toEqual([1, 2, 0, 0]);
+
+    // Infinity on sourceStart → toInteger 0 → copy from 0 (not a RangeError)
+    const dest6 = Buffer.alloc(4, 0);
+    expect(src.copy(dest6, 0, Number.POSITIVE_INFINITY, 2)).toEqual(2);
+    expect([...dest6]).toEqual([1, 2, 0, 0]);
+
+    // String / valueOf forms of 2**53 are NOT NumberIsInteger on the original value:
+    // they go through ToNumber → toInteger(..., 0).
+    const huge = "9007199254740992"; // 2**53
+    const dest7 = Buffer.alloc(4, 0xff);
+    expect(src.copy(dest7, huge as unknown as number, 0, 2)).toEqual(2);
+    expect([...dest7]).toEqual([1, 2, 0xff, 0xff]);
+
+    const dest8 = Buffer.alloc(4, 0);
+    expect(
+      src.copy(dest8, 0, huge as unknown as number, 4)
+    ).toEqual(4); // sourceStart coerced → 0
+    expect([...dest8]).toEqual([1, 2, 3, 4]);
+
+    const dest9 = Buffer.alloc(4, 0xff);
+    expect(
+      src.copy(dest9, 0, 0, huge as unknown as number)
+    ).toEqual(0); // sourceEnd coerced → 0
+    expect([...dest9]).toEqual([0xff, 0xff, 0xff, 0xff]);
+
+    const viaValueOf = { valueOf: () => 2 ** 53 };
+    const dest10 = Buffer.alloc(4, 0xff);
+    expect(src.copy(dest10, viaValueOf as unknown as number, 0, 2)).toEqual(2);
+    expect([...dest10]).toEqual([1, 2, 0xff, 0xff]);
+  });
+
+  it("checks indices in Node order (does not evaluate later args after RangeError)", () => {
+    const src = Buffer.from([1, 2, 3, 4]);
+    const dst = Buffer.alloc(4, 9);
+
+    // targetStart fails first — Symbol as sourceStart must not produce TypeError
+    expect(() =>
+      src.copy(dst, -1, Symbol("skip") as unknown as number)
+    ).toThrow(RangeError);
+
+    // sourceStart out of range — Symbol as sourceEnd must not produce TypeError
+    expect(() =>
+      src.copy(dst, 0, src.length + 1, Symbol("skip") as unknown as number)
+    ).toThrow(RangeError);
+
+    // sourceStart out of range after valueOf must not call sourceEnd.valueOf()
+    let sourceEndCalled = false;
+    const ab = new ArrayBuffer(4);
+    const src2 = Buffer.from(ab);
+    src2.set([1, 2, 3, 4]);
+    const sourceStart = {
+      valueOf() {
+        // @ts-expect-error transfer may be present
+        ab.transfer();
+        return 1; // > detached length 0 → RangeError
+      },
+    };
+    const sourceEnd = {
+      valueOf() {
+        sourceEndCalled = true;
+        return 4;
+      },
+    };
+    expect(() =>
+      src2.copy(
+        Buffer.alloc(4),
+        0,
+        sourceStart as unknown as number,
+        sourceEnd as unknown as number
+      )
+    ).toThrow(RangeError);
+    expect(sourceEndCalled).toEqual(false);
+  });
+
+  it("returns 0 when index valueOf detaches or resizes the backing buffer", () => {
+    // targetStart.valueOf() detaches source
+    {
+      const ab = new ArrayBuffer(4);
+      const src = Buffer.from(ab);
+      src.set([1, 2, 3, 4]);
+      const dst = Buffer.alloc(4, 9);
+      const index = {
+        valueOf() {
+          // @ts-expect-error transfer may be present
+          ab.transfer();
+          return 0;
+        },
+      };
+      expect(src.copy(dst, index as unknown as number, 0, 4)).toEqual(0);
+      expect([...dst]).toEqual([9, 9, 9, 9]);
+    }
+
+    // sourceStart conversion detaches target
+    {
+      const ab = new ArrayBuffer(4);
+      const src = Buffer.from([1, 2, 3, 4]);
+      const dst = Buffer.from(ab);
+      dst.fill(9);
+      const index = {
+        valueOf() {
+          // @ts-expect-error transfer may be present
+          ab.transfer();
+          return 0;
+        },
+      };
+      expect(src.copy(dst, 0, index as unknown as number, 4)).toEqual(0);
+    }
+
+    // resizable source: only wrap construction; assertions stay outside catch
+    let abZero: ArrayBuffer | undefined;
+    try {
+      abZero = new ArrayBuffer(4, { maxByteLength: 16 });
+    } catch {
+      abZero = undefined;
+    }
+    if (abZero) {
+      const src = Buffer.from(abZero);
+      src.set([1, 2, 3, 4]);
+      const dst = Buffer.alloc(4, 9);
+      const ab = abZero;
+      const index = {
+        valueOf() {
+          // @ts-expect-error resize may be present
+          ab.resize(0);
+          return 0;
+        },
+      };
+      expect(src.copy(dst, index as unknown as number, 0, 4)).toEqual(0);
+      expect([...dst]).toEqual([9, 9, 9, 9]);
+    }
+
+    // resizable source shrunk so the fixed-length Buffer view is no longer valid:
+    // as_raw() fails → copy returns 0 (safe; no UAF). Node may track length and copy 2.
+    let abShrink: ArrayBuffer | undefined;
+    try {
+      abShrink = new ArrayBuffer(8, { maxByteLength: 16 });
+    } catch {
+      abShrink = undefined;
+    }
+    if (abShrink) {
+      const src = Buffer.from(abShrink);
+      src.set([1, 2, 3, 4, 5, 6, 7, 8]);
+      const dst = Buffer.alloc(8, 9);
+      const ab = abShrink;
+      const index = {
+        valueOf() {
+          // @ts-expect-error resize may be present
+          ab.resize(2);
+          return 0;
+        },
+      };
+      expect(src.copy(dst, index as unknown as number, 0, 4)).toEqual(0);
+      expect([...dst]).toEqual([9, 9, 9, 9, 9, 9, 9, 9]);
+    }
+
+    // resize then grow again: must use post-coercion pointer/length (not UAF)
+    let abGrow: ArrayBuffer | undefined;
+    try {
+      abGrow = new ArrayBuffer(4, { maxByteLength: 16 });
+    } catch {
+      abGrow = undefined;
+    }
+    if (abGrow) {
+      const src = Buffer.from(abGrow);
+      src.set([1, 2, 3, 4]);
+      const dst = Buffer.alloc(4, 9);
+      const ab = abGrow;
+      const index = {
+        valueOf() {
+          // @ts-expect-error resize may be present
+          ab.resize(0);
+          // @ts-expect-error resize may be present
+          ab.resize(4);
+          new Uint8Array(ab).set([5, 6, 7, 8]);
+          return 0;
+        },
+      };
+      expect(src.copy(dst, index as unknown as number, 0, 4)).toEqual(4);
+      expect([...dst]).toEqual([5, 6, 7, 8]);
+    }
+  });
+
+  it("ignores shadowed byteOffset on subarray for copy and numeric write", () => {
+    const backing = Buffer.from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    const view = backing.subarray(2, 5); // [3,4,5]
+    Object.defineProperty(view, "byteOffset", { value: 0, configurable: true });
+
+    const dest = Buffer.alloc(3, 0);
+    expect(view.copy(dest)).toEqual(3);
+    expect([...dest]).toEqual([3, 4, 5]);
+
+    // subarray with shadowed offset/length still crops from the real view
+    const view3 = Buffer.from([1, 2, 3, 4, 5, 6, 7, 8]).subarray(4, 8);
+    Object.defineProperty(view3, "byteOffset", { value: 0, configurable: true });
+    Object.defineProperty(view3, "byteLength", { value: 100, configurable: true });
+    Object.defineProperty(view3, "length", { value: 100, configurable: true });
+    const sub = view3.subarray(0, 2);
+    expect(sub.length).toEqual(2);
+    expect([...sub]).toEqual([5, 6]);
+
+    // Numeric write must hit the real view range (offset 2), not backing start.
+    const writeBacking = Buffer.alloc(12, 0xaa);
+    const view2 = writeBacking.subarray(2, 10); // 8 bytes
+    Object.defineProperty(view2, "byteOffset", { value: 0, configurable: true });
+    expect(view2.writeDoubleLE(1.5, 0)).toEqual(8);
+    expect(writeBacking[0]).toEqual(0xaa); // first byte of backing unchanged
+    expect(writeBacking[1]).toEqual(0xaa);
+    expect(view2.readDoubleLE(0)).toEqual(1.5);
+  });
+});
+
+describe("equals", () => {
+  it("should return true for equal buffers", () => {
+    expect(Buffer.from("abc").equals(Buffer.from("abc"))).toEqual(true);
+  });
+
+  it("should return false for unequal content or length", () => {
+    expect(Buffer.from("abc").equals(Buffer.from("abd"))).toEqual(false);
+    expect(Buffer.from("abc").equals(Buffer.from("ab"))).toEqual(false);
+  });
+
+  it("should return true for empty buffers", () => {
+    expect(Buffer.alloc(0).equals(Buffer.alloc(0))).toEqual(true);
+  });
+
+  it("should accept Uint8Array and reject invalid args", () => {
+    expect(Buffer.from([1, 2]).equals(new Uint8Array([1, 2]))).toEqual(true);
+    expect(() => Buffer.from([1]).equals("nope" as unknown as Uint8Array)).toThrow(
+      TypeError
+    );
+  });
 });
 
 describe("subarray", () => {
@@ -761,6 +1148,30 @@ describe("writeDoubleLE", () => {
       const buf = Buffer.alloc(16);
       buf.writeDoubleLE(123.456, 9);
     }).toThrow(RangeError);
+  });
+
+  it("should accept integer Number values (mysql bind path writeDoubleLE(7))", () => {
+    const buf = Buffer.alloc(8);
+    expect(buf.writeDoubleLE(7)).toEqual(8);
+    expect(buf.readDoubleLE(0)).toEqual(7);
+  });
+
+  it("should accept fractional Number values writeDoubleLE(7.5)", () => {
+    const buf = Buffer.alloc(8);
+    expect(buf.writeDoubleLE(7.5)).toEqual(8);
+    expect(buf.readDoubleLE(0)).toEqual(7.5);
+  });
+
+  it("should read and write floats with non-zero byteOffset subarray", () => {
+    const backing = Buffer.alloc(16, 0xaa);
+    const view = backing.subarray(4, 12);
+    expect(view.writeDoubleLE(3.5)).toEqual(8);
+    expect(view.readDoubleLE(0)).toEqual(3.5);
+    // Bytes outside the view stay 0xaa
+    expect(backing[0]).toEqual(0xaa);
+    expect(backing[3]).toEqual(0xaa);
+    expect(backing[12]).toEqual(0xaa);
+    expect(backing[15]).toEqual(0xaa);
   });
 });
 

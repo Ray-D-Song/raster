@@ -330,42 +330,225 @@ fn is_encoding(value: Value) -> Result<bool> {
     Ok(false)
 }
 
+/// Number.MAX_SAFE_INTEGER (2^53 - 1) / Number.MIN_SAFE_INTEGER.
+const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+const MIN_SAFE_INTEGER: f64 = -9_007_199_254_740_991.0;
+
+/// ECMAScript `IsIntegralNumber`.
+fn is_integral_number(n: f64) -> bool {
+    n.is_finite() && n.fract() == 0.0
+}
+
+/// Node `buffer.js` `toInteger(n, defaultVal)` with defaultVal always `0` for copy indices.
+fn to_integer_default_zero(n: f64) -> i64 {
+    if n.is_nan() || !n.is_finite() || n < MIN_SAFE_INTEGER || n > MAX_SAFE_INTEGER {
+        return 0;
+    }
+    // Math.floor (not trunc): -0.5 → -1.
+    n.floor() as i64
+}
+
+fn preserve_integral_number(n: f64) -> i64 {
+    if n >= i64::MAX as f64 {
+        return i64::MAX;
+    }
+    if n <= i64::MIN as f64 {
+        return i64::MIN;
+    }
+    n as i64
+}
+
+/// Normalize a Buffer.copy index following Node `copyImpl`.
+///
+/// - `undefined` → positional default (`0` / `0` / `source.length`)
+/// - **raw** JS Number that is already integral (incl. `2**53`) → keep as-is
+///   (`NumberIsInteger` on the original value, *before* ToNumber coercion)
+/// - otherwise ToNumber + `toInteger(n, 0)`: NaN / ±Infinity / out-of-safe-range → `0`;
+///   other non-integers use `Math.floor`
+fn normalize_copy_index(
+    _ctx: &Ctx<'_>,
+    value: Option<Value<'_>>,
+    default_if_undefined: i64,
+) -> Result<i64> {
+    let Some(value) = value else {
+        return Ok(default_if_undefined);
+    };
+    if value.is_undefined() {
+        return Ok(default_if_undefined);
+    }
+    // Node: NumberIsInteger on the *original* value first.
+    // Strings / objects with valueOf go through ToNumber → toInteger(..., 0).
+    if let Some(n) = value.as_number() {
+        if is_integral_number(n) {
+            return Ok(preserve_integral_number(n));
+        }
+    }
+    // ToNumber coercion (null→0, true→1, "1"→1, Symbol throws).
+    let n = value.get::<rquickjs::Coerced<f64>>()?.0;
+    Ok(to_integer_default_zero(n))
+}
+
 // Prototype Methods
 fn copy<'js>(
     this: This<Object<'js>>,
     ctx: Ctx<'js>,
-    target: ObjectBytes<'js>,
-    args: Rest<usize>,
+    target: Value<'js>,
+    target_start: Opt<Value<'js>>,
+    source_start: Opt<Value<'js>>,
+    source_end: Opt<Value<'js>>,
 ) -> Result<usize> {
-    let mut args_iter = args.0.into_iter();
-    let target_start = args_iter.next().unwrap_or_default();
-    let source_start = args_iter.next().unwrap_or_default();
-    let source_end = args_iter.next().unwrap_or_else(|| this.0.len());
+    // Resolve TypedArray objects only. Index coercion may run user valueOf() which
+    // can transfer/resize/detach backing buffers; raw pointers must not span that.
+    // Validation order matches Node `copyImpl`: convert + check each arg immediately
+    // so later args (e.g. Symbol) are not evaluated after an earlier RangeError.
+    let source_view = TypedArray::<u8>::from_object(this.0.clone()).or_throw(&ctx)?;
 
-    let mut copyable_length = 0;
+    let target_obj = target
+        .as_object()
+        .ok_or_else(|| Exception::throw_type(&ctx, "Target must be a Uint8Array or Buffer"))?
+        .clone();
+    let target_view = TypedArray::<u8>::from_object(target_obj).or_throw(&ctx)?;
 
-    if source_start >= source_end {
-        return Ok(copyable_length);
+    // 1) targetStart — convert then immediately check negative.
+    let target_start = normalize_copy_index(&ctx, target_start.0, 0)?;
+    if target_start < 0 {
+        return Err(Exception::throw_range(
+            &ctx,
+            "The value of \"targetStart\" is out of range.",
+        ));
     }
 
-    let source_bytes = ObjectBytes::from(&ctx, this.0.as_inner())?;
-    let source_bytes = source_bytes.as_bytes(&ctx)?;
-
-    if let Some((array_buffer, _, _)) = target.get_array_buffer()? {
-        let raw = array_buffer
-            .as_raw()
-            .ok_or(ERROR_MSG_ARRAY_BUFFER_DETACHED)
-            .or_throw(&ctx)?;
-
-        let target_bytes = unsafe { slice::from_raw_parts_mut(raw.ptr.as_ptr(), raw.len) };
-
-        copyable_length = (source_end - source_start).min(raw.len - target_start);
-
-        target_bytes[target_start..target_start + copyable_length]
-            .copy_from_slice(&source_bytes[source_start..source_start + copyable_length]);
+    // 2) sourceStart — convert then check against *current* source length.
+    let source_start = normalize_copy_index(&ctx, source_start.0, 0)?;
+    // Length only (no retained raw pointer across further JS).
+    let source_length_for_check = source_view.as_raw().map(|r| r.len).unwrap_or(0);
+    if source_start < 0 || source_start > source_length_for_check as i64 {
+        return Err(Exception::throw_range(
+            &ctx,
+            "The value of \"sourceStart\" is out of range.",
+        ));
     }
 
-    Ok(copyable_length)
+    // 3) sourceEnd — convert or default; check negative immediately.
+    //    Default uses length observed after sourceStart (Node: source.byteLength).
+    let source_end = match source_end.0 {
+        Some(value) if !value.is_undefined() => {
+            let e = normalize_copy_index(&ctx, Some(value), 0)?;
+            if e < 0 {
+                return Err(Exception::throw_range(
+                    &ctx,
+                    "The value of \"sourceEnd\" is out of range.",
+                ));
+            }
+            e
+        },
+        _ => source_length_for_check as i64,
+    };
+
+    // Re-acquire view-local regions after all JS-executing conversions.
+    // Detached (or otherwise unreadable) buffers: Node-compatible Ok(0) for
+    // the final copy step when length checks would no-op, or when as_raw fails.
+    let Some(source_raw) = source_view.as_raw() else {
+        return Ok(0);
+    };
+    let Some(target_raw) = target_view.as_raw() else {
+        return Ok(0);
+    };
+
+    let source_length = source_raw.len;
+    let target_length = target_raw.len;
+
+    // Safe to cast: negatives already rejected.
+    let target_start_u = target_start as u64;
+    let source_start_u = source_start as u64;
+    let source_end_u = source_end as u64;
+    let source_length_u = source_length as u64;
+    let target_length_u = target_length as u64;
+
+    // Final gates (Node: targetStart >= target.byteLength || sourceStart >= sourceEnd).
+    if source_start_u >= source_end_u {
+        return Ok(0);
+    }
+    if target_start_u >= target_length_u {
+        return Ok(0);
+    }
+
+    // Clamp sourceEnd to current source length (Node _copyActual).
+    let source_end_u = source_end_u.min(source_length_u);
+    if source_end_u <= source_start_u {
+        return Ok(0);
+    }
+
+    let target_start = target_start_u as usize;
+    let source_start = source_start_u as usize;
+    let source_end = source_end_u as usize;
+
+    let copyable = (source_end - source_start)
+        .min(source_length - source_start)
+        .min(target_length - target_start);
+    if copyable == 0 {
+        return Ok(0);
+    }
+
+    if source_start
+        .checked_add(copyable)
+        .map(|end| end > source_raw.len)
+        .unwrap_or(true)
+        || target_start
+            .checked_add(copyable)
+            .map(|end| end > target_raw.len)
+            .unwrap_or(true)
+    {
+        return Ok(0);
+    }
+
+    // View-local pointers from post-coercion as_raw(); ptr::copy is memmove-safe for overlap.
+    unsafe {
+        let src = source_raw.ptr.as_ptr().add(source_start);
+        let dst = target_raw.ptr.as_ptr().add(target_start);
+        std::ptr::copy(src, dst, copyable);
+    }
+
+    // Keep views live across the unsafe copy.
+    let _ = (source_view, target_view);
+
+    Ok(copyable)
+}
+
+fn equals<'js>(this: This<Object<'js>>, ctx: Ctx<'js>, other: Value<'js>) -> Result<bool> {
+    let this_view = TypedArray::<u8>::from_object(this.0.clone()).map_err(|_| {
+        Exception::throw_type(
+            &ctx,
+            "The receiver must be an instance of Buffer or Uint8Array",
+        )
+    })?;
+
+    if *this.0.as_value() == other {
+        return Ok(true);
+    }
+
+    let other_obj = other.as_object().ok_or_else(|| {
+        Exception::throw_type(
+            &ctx,
+            "The \"otherBuffer\" argument must be an instance of Buffer or Uint8Array",
+        )
+    })?;
+    let other_view = TypedArray::<u8>::from_object(other_obj.clone()).map_err(|_| {
+        Exception::throw_type(
+            &ctx,
+            "The \"otherBuffer\" argument must be an instance of Buffer or Uint8Array",
+        )
+    })?;
+
+    let this_bytes: &[u8] = this_view.as_ref();
+    let other_bytes: &[u8] = other_view.as_ref();
+    if this_bytes.len() != other_bytes.len() {
+        return Ok(false);
+    }
+    if this_bytes.is_empty() {
+        return Ok(true);
+    }
+    Ok(this_bytes == other_bytes)
 }
 
 fn subarray<'js>(
@@ -377,8 +560,25 @@ fn subarray<'js>(
     let view = TypedArray::<u8>::from_object(this.0.clone())?;
 
     let array_buffer = view.arraybuffer()?;
-    let view_offset = this.0.get::<_, isize>("byteOffset")?;
-    let view_length = this.0.get::<_, isize>("byteLength")?;
+    // Use internal TypedArray region (len + as_raw) — not shadowed byteOffset/byteLength.
+    let view_raw = view
+        .as_raw()
+        .ok_or(ERROR_MSG_ARRAY_BUFFER_DETACHED)
+        .or_throw(&ctx)?;
+    let ab_raw = array_buffer
+        .as_raw()
+        .ok_or(ERROR_MSG_ARRAY_BUFFER_DETACHED)
+        .or_throw(&ctx)?;
+    let view_offset = unsafe { view_raw.ptr.as_ptr().offset_from(ab_raw.ptr.as_ptr()) };
+    if view_offset < 0 {
+        return Err(Exception::throw_message(
+            &ctx,
+            ERROR_MSG_ARRAY_BUFFER_DETACHED,
+        ));
+    }
+    let view_offset = view_offset as isize;
+    // Prefer as_raw().len (internal) over JS "length" which can be shadowed.
+    let view_length = view_raw.len as isize;
 
     let start_index = start.map_or(0, |s| {
         if s < 0 {
@@ -623,7 +823,8 @@ fn write_buf<'js>(
             return Err(Exception::throw_type(ctx, "Uint64 is not supported"));
         },
         NumberKind::Float32 => {
-            let Some(float_val) = value.as_float() else {
+            // Accept both int-tagged and float-tagged JS Numbers (e.g. 7 and 7.5).
+            let Some(float_val) = value.as_number() else {
                 return Err(Exception::throw_type(ctx, "Expected number"));
             };
             match endian {
@@ -632,7 +833,7 @@ fn write_buf<'js>(
             }
         },
         NumberKind::Float64 => {
-            let Some(float_val) = value.as_float() else {
+            let Some(float_val) = value.as_number() else {
                 return Err(Exception::throw_type(ctx, "Expected number"));
             };
             match endian {
@@ -670,29 +871,45 @@ fn write_buf<'js>(
         },
     };
 
-    if offset >= this.0.len() || offset + byte_count > this.0.len() {
+    let target = ObjectBytes::from(ctx, this.0.as_inner())?;
+    let Some((array_buffer, view_length, view_offset)) = target.get_array_buffer()? else {
+        return Err(Exception::throw_message(ctx, ERROR_MSG_NOT_ARRAY_BUFFER));
+    };
+
+    if offset
+        .checked_add(byte_count)
+        .map(|end| end > view_length)
+        .unwrap_or(true)
+    {
         return Err(Exception::throw_range(
             ctx,
             "The specified offset is out of range",
         ));
     }
 
-    let target = ObjectBytes::from(ctx, this.0.as_inner())?;
-    let mut writable_length = 0;
+    let raw = array_buffer
+        .as_raw()
+        .ok_or(ERROR_MSG_ARRAY_BUFFER_DETACHED)
+        .or_throw(ctx)?;
 
-    if let Some((array_buffer, _, _)) = target.get_array_buffer()? {
-        let raw = array_buffer
-            .as_raw()
-            .ok_or(ERROR_MSG_ARRAY_BUFFER_DETACHED)
-            .or_throw(ctx)?;
-
-        let target_bytes = unsafe { slice::from_raw_parts_mut(raw.ptr.as_ptr(), raw.len) };
-
-        writable_length = offset + bytes.len();
-        target_bytes[offset..writable_length].copy_from_slice(&bytes);
+    if view_offset
+        .checked_add(view_length)
+        .map(|end| end > raw.len)
+        .unwrap_or(true)
+    {
+        return Err(Exception::throw_range(
+            ctx,
+            "The specified offset is out of range",
+        ));
     }
 
-    Ok(writable_length)
+    let abs_start = view_offset + offset;
+    let abs_end = abs_start + byte_count;
+    let target_bytes = unsafe { slice::from_raw_parts_mut(raw.ptr.as_ptr(), raw.len) };
+    target_bytes[abs_start..abs_end].copy_from_slice(&bytes);
+
+    // Return the next offset relative to the view, not the backing buffer.
+    Ok(offset + byte_count)
 }
 
 fn read_buf<'js>(
@@ -702,9 +919,9 @@ fn read_buf<'js>(
     endian: Endian,
     kind: NumberKind,
 ) -> Result<Value<'js>> {
-    // Retrieve the array buffer
+    // Retrieve the array buffer with the TypedArray view bounds.
     let target = ObjectBytes::from(ctx, this.0.as_inner())?;
-    let Some((array_buffer, _, _)) = target.get_array_buffer()? else {
+    let Some((array_buffer, view_length, view_offset)) = target.get_array_buffer()? else {
         return Err(Exception::throw_message(ctx, ERROR_MSG_NOT_ARRAY_BUFFER));
     };
     let raw = array_buffer
@@ -713,17 +930,33 @@ fn read_buf<'js>(
         .or_throw(ctx)?;
     let target_bytes = unsafe { slice::from_raw_parts_mut(raw.ptr.as_ptr(), raw.len) };
 
-    // Enforce the bounds
-    let start = offset.0.unwrap_or_default();
-    let end = start + (kind.bits() / 8) as usize;
-    if end > raw.len {
+    if view_offset
+        .checked_add(view_length)
+        .map(|end| end > raw.len)
+        .unwrap_or(true)
+    {
         return Err(Exception::throw_range(
             ctx,
             "The value of \"offset\" is out of range",
         ));
     }
 
-    let bytes = &target_bytes[start..end];
+    // Enforce bounds relative to the view, not the backing buffer.
+    let start = offset.0.unwrap_or_default();
+    let byte_count = (kind.bits() / 8) as usize;
+    let end = start
+        .checked_add(byte_count)
+        .ok_or_else(|| Exception::throw_range(ctx, "The value of \"offset\" is out of range"))?;
+    if end > view_length {
+        return Err(Exception::throw_range(
+            ctx,
+            "The value of \"offset\" is out of range",
+        ));
+    }
+
+    let abs_start = view_offset + start;
+    let abs_end = abs_start + byte_count;
+    let bytes = &target_bytes[abs_start..abs_end];
 
     let value = match kind {
         NumberKind::BigInt => {
@@ -843,6 +1076,7 @@ pub(crate) fn set_prototype<'js>(ctx: &Ctx<'js>, constructor: Object<'js>) -> Re
 
     let prototype: &Object = &constructor.get(PredefinedAtom::Prototype)?;
     prototype.set("copy", Func::from(copy))?;
+    prototype.set("equals", Func::from(equals))?;
     prototype.set("subarray", Func::from(subarray))?;
     prototype.set(PredefinedAtom::ToString, Func::from(to_string))?;
     prototype.set("write", Func::from(write))?;

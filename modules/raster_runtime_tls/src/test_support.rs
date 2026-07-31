@@ -7,7 +7,7 @@ use raster_runtime_buffer as buffer;
 use raster_runtime_events::EventsModule;
 use raster_runtime_net::NetModule;
 use raster_runtime_test::{call_test, test_async_with, ModuleEvaluator};
-use rquickjs::{Ctx, Module, module::Evaluated};
+use rquickjs::{module::Evaluated, Ctx, Module};
 
 use crate::TlsModule;
 
@@ -24,19 +24,14 @@ pub async fn init_tls_modules(ctx: &Ctx<'_>) {
         .expect("tls");
 }
 
-pub async fn eval_tls_test<'js, T, A>(
-    ctx: &Ctx<'js>,
-    source: &str,
-    args: A,
-) -> T
+pub async fn eval_tls_test<'js, T, A>(ctx: &Ctx<'js>, source: &str, args: A) -> T
 where
     T: rquickjs::FromJs<'js>,
     A: rquickjs::function::IntoArgs<'js>,
 {
-    let module: Module<'js, Evaluated> =
-        ModuleEvaluator::eval_js(ctx.clone(), "test", source)
-            .await
-            .expect("eval test module");
+    let module: Module<'js, Evaluated> = ModuleEvaluator::eval_js(ctx.clone(), "test", source)
+        .await
+        .expect("eval test module");
     call_test(ctx, &module, args).await
 }
 

@@ -220,10 +220,7 @@ where
         Ok(())
     }
 
-    fn request_flush_barrier(
-        this: Class<'js, Self>,
-        ctx: &Ctx<'js>,
-    ) -> Result<Receiver<()>> {
+    fn request_flush_barrier(this: Class<'js, Self>, ctx: &Ctx<'js>) -> Result<Receiver<()>> {
         let (tx, rx) = oneshot::channel();
         this.borrow()
             .inner()
@@ -241,10 +238,7 @@ where
         let mut borrow = this.borrow_mut();
         let inner = borrow.inner_mut();
         *inner.handoff_waiter.lock().unwrap() = Some(Box::new(tx));
-        inner
-            .command_tx
-            .send(WriteCommand::Handoff)
-            .or_throw(ctx)?;
+        inner.command_tx.send(WriteCommand::Handoff).or_throw(ctx)?;
         drop(borrow);
         Ok(rx)
     }

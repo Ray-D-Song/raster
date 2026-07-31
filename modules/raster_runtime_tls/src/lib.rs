@@ -67,7 +67,9 @@ pub use error::{
 };
 pub use identity::{canonicalize_ip, check_server_identity, CnValue};
 pub use module::TlsModule;
-pub use options::{parse_connect_options, parse_pem_value, parse_server_options, parse_tls_options, TlsOptions};
+pub use options::{
+    parse_connect_options, parse_pem_value, parse_server_options, parse_tls_options, TlsOptions,
+};
 pub use secure_context::{create_secure_context, JsSecureContext, SecureContext};
 pub use sni::SniRegistry;
 pub use version::{TlsVersion, DEFAULT_MAX_VERSION, DEFAULT_MIN_VERSION};

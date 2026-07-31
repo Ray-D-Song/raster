@@ -56,3 +56,19 @@ it("uses Raster stream instances for encoding stream sides", () => {
   expect(encoder.writable).toBeInstanceOf(WritableStream);
   expect(new TextDecoderStream().encoding).toBe("utf-8");
 });
+
+it("BYOB read preserves Uint8ClampedArray type and content", async () => {
+  const stream = new ReadableStream({
+    type: "bytes",
+    start(controller) {
+      controller.enqueue(new Uint8Array([1, 2, 3, 4, 5]));
+      controller.close();
+    },
+  });
+  const reader = stream.getReader({ mode: "byob" });
+  const { value, done } = await reader.read(new Uint8ClampedArray(3));
+  expect(done).toEqual(false);
+  expect(value).toBeInstanceOf(Uint8ClampedArray);
+  expect([...value!]).toEqual([1, 2, 3]);
+  await reader.cancel();
+});

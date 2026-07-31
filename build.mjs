@@ -99,6 +99,8 @@ const ES_BUILD_OPTIONS = {
     "node:timers/promises",
     "inspector",
     "node:inspector",
+    "tls",
+    "node:tls",
     "tty",
     "node:tty",
     "url",

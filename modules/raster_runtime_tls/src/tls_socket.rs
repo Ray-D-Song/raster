@@ -278,10 +278,7 @@ impl<'js> TlsSocket<'js> {
         obj.into_js(&ctx)
     }
 
-    pub fn get_certificate(
-        this: This<Class<'js, Self>>,
-        ctx: Ctx<'js>,
-    ) -> Result<Value<'js>> {
+    pub fn get_certificate(this: This<Class<'js, Self>>, ctx: Ctx<'js>) -> Result<Value<'js>> {
         let borrow = this.borrow();
         if let Some(der) = &borrow.local_cert_der {
             if let Ok(cert) = parse_cert_der(der) {
@@ -389,11 +386,7 @@ impl<'js> TlsSocket<'js> {
         }
     }
 
-    pub fn fail_connect(
-        this: Class<'js, Self>,
-        ctx: &Ctx<'js>,
-        error: Value<'js>,
-    ) -> Result<()> {
+    pub fn fail_connect(this: Class<'js, Self>, ctx: &Ctx<'js>, error: Value<'js>) -> Result<()> {
         {
             let mut borrow = this.borrow_mut();
             borrow.secure_connecting = false;
@@ -450,18 +443,11 @@ impl<'js> TlsSocket<'js> {
         IO: AsyncRead + AsyncWrite + Send + Unpin + 'js,
     {
         let info = inspect_server_connection(&stream, reject_unauthorized, &selected_local_cert);
-        Self::complete_handshake(
-            this,
-            &ctx,
-            info,
-            None,
-            reject_unauthorized,
-            TlsRole::Server,
-        )
-        .map_err(|err| {
-            err.into_value(&ctx)
-                .unwrap_or_else(|_| Undefined.into_value(ctx.clone()))
-        })?;
+        Self::complete_handshake(this, &ctx, info, None, reject_unauthorized, TlsRole::Server)
+            .map_err(|err| {
+                err.into_value(&ctx)
+                    .unwrap_or_else(|_| Undefined.into_value(ctx.clone()))
+            })?;
         Ok(stream)
     }
 
@@ -562,11 +548,12 @@ impl<'js> TlsSocket<'js> {
     {
         let this2 = this.clone();
         let this3 = this.clone();
-        let readable_done = ReadableStream::process_callback(this.clone(), ctx, reader, move || {
-            if !allow_half_open {
-                WritableStream::end(This(this3));
-            }
-        })?;
+        let readable_done =
+            ReadableStream::process_callback(this.clone(), ctx, reader, move || {
+                if !allow_half_open {
+                    WritableStream::end(This(this3));
+                }
+            })?;
         let writable_done = WritableStream::process(this2, ctx, writer)?;
         Ok((readable_done, writable_done))
     }

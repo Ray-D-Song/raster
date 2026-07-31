@@ -24,9 +24,8 @@ pub fn check_server_identity<'js>(
 
     if let Some(alt_names) = &cert.subjectaltname {
         let split = if alt_names.contains('"') {
-            split_escaped_alt_names(alt_names).map_err(|_| {
-                rquickjs::Exception::throw_message(ctx, ERR_TLS_CERT_ALTNAME_FORMAT)
-            })?
+            split_escaped_alt_names(alt_names)
+                .map_err(|_| rquickjs::Exception::throw_message(ctx, ERR_TLS_CERT_ALTNAME_FORMAT))?
         } else {
             alt_names.split(", ").map(str::to_string).collect()
         };
@@ -225,7 +224,9 @@ fn parse_json_string_literal(input: &str) -> std::result::Result<(String, usize)
             return Ok((out, i + 2));
         }
         if c == '\\' {
-            let (_, esc) = chars.next().ok_or(crate::error::ERR_TLS_CERT_ALTNAME_FORMAT)?;
+            let (_, esc) = chars
+                .next()
+                .ok_or(crate::error::ERR_TLS_CERT_ALTNAME_FORMAT)?;
             match esc {
                 '"' | '\\' | '/' => out.push(esc),
                 'b' => out.push('\x08'),
@@ -234,20 +235,19 @@ fn parse_json_string_literal(input: &str) -> std::result::Result<(String, usize)
                 'r' => out.push('\r'),
                 't' => out.push('\t'),
                 'u' => {
-                    let hex: String = input[i + 2..]
-                        .chars()
-                        .take(4)
-                        .collect();
+                    let hex: String = input[i + 2..].chars().take(4).collect();
                     if hex.len() != 4 {
                         return Err(crate::error::ERR_TLS_CERT_ALTNAME_FORMAT);
                     }
                     let code = u32::from_str_radix(&hex, 16)
                         .map_err(|_| crate::error::ERR_TLS_CERT_ALTNAME_FORMAT)?;
-                    out.push(char::from_u32(code).ok_or(crate::error::ERR_TLS_CERT_ALTNAME_FORMAT)?);
+                    out.push(
+                        char::from_u32(code).ok_or(crate::error::ERR_TLS_CERT_ALTNAME_FORMAT)?,
+                    );
                     for _ in 0..3 {
                         chars.next();
                     }
-                }
+                },
                 _ => return Err(crate::error::ERR_TLS_CERT_ALTNAME_FORMAT),
             }
         } else if c.is_control() {
@@ -313,10 +313,7 @@ mod tests {
         let mut subject = BTreeMap::new();
         subject.insert(
             "CN".to_string(),
-            CnValue::Multiple(vec![
-                "a.example.com".to_string(),
-                "localhost".to_string(),
-            ]),
+            CnValue::Multiple(vec!["a.example.com".to_string(), "localhost".to_string()]),
         );
         let cert = CertObject {
             subject,
@@ -338,8 +335,8 @@ mod tests {
                 .is_none());
             match check_server_identity(&ctx, "missing.example.com", &cert) {
                 Ok(None) => panic!("expected identity mismatch"),
-                Ok(Some(_)) => {}
-                Err(_) => {}
+                Ok(Some(_)) => {},
+                Err(_) => {},
             }
         });
     }

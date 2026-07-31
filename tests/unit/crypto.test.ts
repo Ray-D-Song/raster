@@ -15,12 +15,23 @@ const {
   randomFill,
   getRandomValues,
   webcrypto,
+  publicEncrypt,
+  constants,
 } = defaultImport;
 
 describe("crypto object/module", () => {
   it("should have a createHash()", () => {
     expect(crypto.createHash).toBeDefined();
     expect(createHash).toBeDefined();
+  });
+
+  it("should export publicEncrypt and constants", () => {
+    expect(typeof publicEncrypt).toEqual("function");
+    expect(typeof defaultImport.publicEncrypt).toEqual("function");
+    expect(publicEncrypt).toBe(defaultImport.publicEncrypt);
+    expect(legacyImport.publicEncrypt).toBe(defaultImport.publicEncrypt);
+    expect(constants.RSA_PKCS1_OAEP_PADDING).toEqual(4);
+    expect(defaultImport.constants.RSA_PKCS1_OAEP_PADDING).toEqual(4);
   });
   it("should have a createHmac()", () => {
     expect(globalThis.crypto.createHmac).toBeDefined();
@@ -76,6 +87,162 @@ describe("Hashing", () => {
     expect(hash).toEqual(
       "6e9ef29b75fffc5b7abae527d58fdadb2fe42e7219011976917343065f58ed4a"
     );
+  });
+});
+
+describe("publicEncrypt", () => {
+  const LIMITED_CRYPTO = process.env.RASTER_RUNTIME_LIMITED_CRYPTO === "1";
+
+  // Static 2048-bit RSA public key (SPKI PEM).
+  const SPKI_PEM = `-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu1SU1LfVLPHCozMxH2Mo
+4lgOEePzNm0tRgeLezV6ffAt0gunVTLw7onLRnrq0/IzW7yWR7QkrmBL7jTKEn5u
++qKhbwKfBstIs+bMY2Zkp18gnTxKLxoS2tFczGkPLPgizskuemMghRniWaoLcyeh
+kd3qqGElvW/VDL5AaWTg0nLVkjRo9z+40RQzuVaE8AkAFmxZzow3x+VJYKdjykkJ
+0iT9wCS0DRTXu269V264Vf/3jvredZiKRkgwlL9xNAwxXFg0x/XFw005UWVRIkdg
+cKWTjpBP2dPwVZ4WWC+9aGVd+Gyn1o0CLelf4rEjGoXbAAEgAqeGUxrcIlbjXfbc
+mwIDAQAB
+-----END PUBLIC KEY-----`;
+
+  it("module shape: default has publicEncrypt and Node-compatible subtle", () => {
+    expect(typeof defaultImport.publicEncrypt).toEqual("function");
+    expect(typeof defaultImport.randomUUID).toEqual("function");
+    expect(defaultImport.crypto.subtle).toBeDefined();
+    expect(defaultImport.webcrypto.subtle).toBeDefined();
+    expect(defaultImport.crypto).toBe(defaultImport.webcrypto);
+    // Node: top-level subtle === webcrypto.subtle
+    expect(defaultImport.subtle).toBe(defaultImport.webcrypto.subtle);
+  });
+
+  it("should accept mysql2-style options object via module export", () => {
+    if (LIMITED_CRYPTO) {
+      expect(() =>
+        publicEncrypt(
+          {
+            key: SPKI_PEM,
+            oaepHash: "sha1",
+            padding: constants.RSA_PKCS1_OAEP_PADDING,
+          },
+          Buffer.from("password")
+        )
+      ).toThrow(/not supported by the active crypto provider/i);
+      return;
+    }
+    const out = publicEncrypt(
+      {
+        key: SPKI_PEM,
+        oaepHash: "sha1",
+        padding: constants.RSA_PKCS1_OAEP_PADDING,
+      },
+      Buffer.from("password")
+    );
+    expect(Buffer.isBuffer(out)).toBeTruthy();
+    expect(out.length).toEqual(256);
+  });
+
+  it("should encrypt only DataView view range for data and label", () => {
+    if (LIMITED_CRYPTO) return;
+    // Plaintext with sentinels outside the view: only middle "pw" is encrypted.
+    const dataBacking = new ArrayBuffer(6);
+    const dataBytes = new Uint8Array(dataBacking);
+    dataBytes.set([0xaa, 0xbb, 0x70, 0x77, 0xcc, 0xdd]); // .. 'p','w' ..
+    const dataView = new DataView(dataBacking, 2, 2);
+    // Prove the view bytes are 0x70 0x77 before encrypting.
+    expect([...Buffer.from(dataView.buffer, dataView.byteOffset, dataView.byteLength)]).toEqual([
+      0x70, 0x77,
+    ]);
+    expect([...new Uint8Array(dataView.buffer, dataView.byteOffset, dataView.byteLength)]).toEqual([
+      0x70, 0x77,
+    ]);
+
+    const out = publicEncrypt(
+      {
+        key: SPKI_PEM,
+        oaepHash: "sha1",
+        padding: constants.RSA_PKCS1_OAEP_PADDING,
+      },
+      dataView
+    );
+    expect(out.length).toEqual(256);
+
+    // Label with sentinels: only the view range is used.
+    const labelBacking = new ArrayBuffer(4);
+    new Uint8Array(labelBacking).set([0x11, 0x22, 0x33, 0x44]);
+    const labelView = new DataView(labelBacking, 1, 2);
+    const out2 = publicEncrypt(
+      {
+        key: SPKI_PEM,
+        oaepHash: "sha1",
+        padding: constants.RSA_PKCS1_OAEP_PADDING,
+        oaepLabel: labelView,
+      },
+      Buffer.from("x")
+    );
+    expect(out2.length).toEqual(256);
+  });
+
+  it("should ignore poisoned global DataView and shadowed own properties", () => {
+    if (LIMITED_CRYPTO) return;
+    const backing = new ArrayBuffer(6);
+    new Uint8Array(backing).set([0xaa, 0xbb, 0x70, 0x77, 0xcc, 0xdd]);
+    const dataView = new DataView(backing, 2, 2); // "pw"
+
+    // Shadow own properties (must not change internal-slot reads).
+    Object.defineProperty(dataView, "byteOffset", { value: 0 });
+    Object.defineProperty(dataView, "byteLength", { value: 6 });
+    Object.defineProperty(dataView, "buffer", {
+      value: new Uint8Array([9, 9, 9, 9]).buffer,
+    });
+
+    // Replace global constructor (must not coerce DataView via ToString).
+    const RealDataView = globalThis.DataView;
+    // @ts-expect-error intentional pollution
+    globalThis.DataView = function () {
+      throw new Error("global DataView should not be used");
+    };
+
+    try {
+      const out = publicEncrypt(
+        {
+          key: SPKI_PEM,
+          oaepHash: "sha1",
+          padding: constants.RSA_PKCS1_OAEP_PADDING,
+        },
+        dataView
+      );
+      expect(out.length).toEqual(256);
+    } finally {
+      globalThis.DataView = RealDataView;
+    }
+
+    // Forged plain object is not a view.
+    const fake = {
+      buffer: backing,
+      byteOffset: 2,
+      byteLength: 2,
+    };
+    expect(() =>
+      publicEncrypt(
+        {
+          key: SPKI_PEM,
+          oaepHash: "sha1",
+          padding: constants.RSA_PKCS1_OAEP_PADDING,
+        },
+        fake as unknown as DataView
+      )
+    ).toThrow();
+  });
+
+  it("should reject unsupported padding", () => {
+    expect(() =>
+      publicEncrypt(
+        {
+          key: SPKI_PEM,
+          padding: 1,
+        },
+        Buffer.from("x")
+      )
+    ).toThrow();
   });
 });
 

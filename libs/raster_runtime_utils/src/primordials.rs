@@ -19,6 +19,7 @@ pub struct BasePrimordials<'js> {
     pub constructor_regexp: Constructor<'js>,
     pub constructor_uint8array: Constructor<'js>,
     pub constructor_array_buffer: Constructor<'js>,
+    pub constructor_data_view: Constructor<'js>,
     pub constructor_proxy: Constructor<'js>,
     pub constructor_object: Constructor<'js>,
     pub constructor_bool: Constructor<'js>,
@@ -32,6 +33,7 @@ pub struct BasePrimordials<'js> {
     pub prototype_set: Object<'js>,
     pub prototype_map: Object<'js>,
     pub prototype_error: Object<'js>,
+    pub prototype_data_view: Object<'js>,
 
     // Functions
     pub function_array_from: Function<'js>,
@@ -39,6 +41,16 @@ pub struct BasePrimordials<'js> {
     pub function_get_own_property_descriptor: Function<'js>,
     pub function_parse_int: Function<'js>,
     pub function_parse_float: Function<'js>,
+
+    /// Native DataView.prototype getters captured at init (immune to own-property shadowing).
+    pub data_view_get_buffer: Function<'js>,
+    pub data_view_get_byte_offset: Function<'js>,
+    pub data_view_get_byte_length: Function<'js>,
+
+    /// Native TypedArray.prototype getters (shared by all typed arrays, including clamped).
+    pub typed_array_get_buffer: Function<'js>,
+    pub typed_array_get_byte_offset: Function<'js>,
+    pub typed_array_get_byte_length: Function<'js>,
 }
 
 pub trait Primordial<'js>
@@ -108,6 +120,47 @@ impl<'js> Primordial<'js> for BasePrimordials<'js> {
         let constructor_array_buffer: Object = globals.get(PredefinedAtom::ArrayBuffer)?;
         let function_array_buffer_is_view: Function = constructor_array_buffer.get("isView")?;
 
+        let constructor_data_view: Constructor = globals.get(PredefinedAtom::DataView)?;
+        let prototype_data_view: Object = constructor_data_view.get(PredefinedAtom::Prototype)?;
+
+        // Capture native DataView.prototype accessors before any user code can replace them.
+        let data_view_get_buffer: Function = {
+            let desc: Object = function_get_own_property_descriptor
+                .call((prototype_data_view.clone(), "buffer"))?;
+            desc.get("get")?
+        };
+        let data_view_get_byte_offset: Function = {
+            let desc: Object = function_get_own_property_descriptor
+                .call((prototype_data_view.clone(), "byteOffset"))?;
+            desc.get("get")?
+        };
+        let data_view_get_byte_length: Function = {
+            let desc: Object = function_get_own_property_descriptor
+                .call((prototype_data_view.clone(), "byteLength"))?;
+            desc.get("get")?
+        };
+
+        // %TypedArray%.prototype accessors (parent of Uint8Array.prototype).
+        let prototype_uint8array: Object = constructor_uint8array.get(PredefinedAtom::Prototype)?;
+        let object_get_prototype_of: Function = constructor_object.get("getPrototypeOf")?;
+        let prototype_typed_array: Object =
+            object_get_prototype_of.call((prototype_uint8array,))?;
+        let typed_array_get_buffer: Function = {
+            let desc: Object = function_get_own_property_descriptor
+                .call((prototype_typed_array.clone(), "buffer"))?;
+            desc.get("get")?
+        };
+        let typed_array_get_byte_offset: Function = {
+            let desc: Object = function_get_own_property_descriptor
+                .call((prototype_typed_array.clone(), "byteOffset"))?;
+            desc.get("get")?
+        };
+        let typed_array_get_byte_length: Function = {
+            let desc: Object = function_get_own_property_descriptor
+                .call((prototype_typed_array.clone(), "byteLength"))?;
+            desc.get("get")?
+        };
+
         let constructor_bool: Constructor = globals.get(PredefinedAtom::Boolean)?;
 
         let constructor_number: Constructor = globals.get(PredefinedAtom::Number)?;
@@ -127,6 +180,7 @@ impl<'js> Primordial<'js> for BasePrimordials<'js> {
             constructor_regexp,
             constructor_uint8array,
             constructor_array_buffer: constructor_arraybuffer,
+            constructor_data_view,
             constructor_object,
             constructor_bool,
             constructor_number,
@@ -137,11 +191,18 @@ impl<'js> Primordial<'js> for BasePrimordials<'js> {
             prototype_set,
             prototype_map,
             prototype_error,
+            prototype_data_view,
             function_array_from,
             function_array_buffer_is_view,
             function_get_own_property_descriptor,
             function_parse_float,
             function_parse_int,
+            data_view_get_buffer,
+            data_view_get_byte_offset,
+            data_view_get_byte_length,
+            typed_array_get_buffer,
+            typed_array_get_byte_offset,
+            typed_array_get_byte_length,
         })
     }
 }

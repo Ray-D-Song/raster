@@ -43,6 +43,34 @@ declare module "crypto" {
    * (e.g., 512 bits for SHA-256).
    */
   function createHmac(algorithm: string, key: BinaryLike): Hmac;
+
+  interface RsaPublicKey {
+    key: string | QuickJS.ArrayBufferView;
+    /**
+     * Only `constants.RSA_PKCS1_OAEP_PADDING` (4) is supported.
+     * @default constants.RSA_PKCS1_OAEP_PADDING
+     */
+    padding?: number;
+    /**
+     * @default 'sha1'
+     */
+    oaepHash?: string;
+    oaepLabel?: BinaryLike;
+  }
+
+  /**
+   * Encrypts the given data with the given public key using RSA-OAEP.
+   * Only OAEP padding is supported.
+   */
+  function publicEncrypt(
+    key: RsaPublicKey | string | QuickJS.ArrayBufferView,
+    buffer: BinaryLike
+  ): Buffer;
+
+  const constants: {
+    readonly RSA_PKCS1_OAEP_PADDING: 4;
+  };
+
   /**
    * The `Hash` class is a utility for creating hash digests of data.
    *
@@ -851,4 +879,53 @@ declare module "crypto" {
       ): Promise<ArrayBuffer>;
     }
   }
+
+  /**
+   * Shape of `globalThis.crypto` / `require("crypto").crypto` /
+   * `require("crypto").webcrypto`. This is not the Node crypto module itself.
+   */
+  interface RuntimeCryptoGlobal {
+    createHash: typeof createHash;
+    createHmac: typeof createHmac;
+    randomBytes: typeof randomBytes;
+    randomInt: typeof randomInt;
+    randomUUID: typeof randomUUID;
+    randomFillSync: typeof randomFillSync;
+    randomFill: typeof randomFill;
+    getRandomValues: typeof getRandomValues;
+    subtle: webcrypto.SubtleCrypto;
+  }
+
+  /**
+   * Shape of the Node-compatible crypto module object
+   * (`require("crypto")` / default import).
+   * Its top-level `subtle` aliases `webcrypto.subtle`.
+   */
+  interface NodeCryptoModule {
+    createHash: typeof createHash;
+    createHmac: typeof createHmac;
+    publicEncrypt: typeof publicEncrypt;
+    constants: typeof constants;
+    randomBytes: typeof randomBytes;
+    randomInt: typeof randomInt;
+    randomUUID: typeof randomUUID;
+    randomFillSync: typeof randomFillSync;
+    randomFill: typeof randomFill;
+    getRandomValues: typeof getRandomValues;
+    /** Alias of `webcrypto.subtle` (Node-compatible). */
+    subtle: webcrypto.SubtleCrypto;
+    crypto: RuntimeCryptoGlobal;
+    webcrypto: RuntimeCryptoGlobal;
+  }
+
+  /** Named export: same object as `globalThis.crypto`. */
+  const crypto: RuntimeCryptoGlobal;
+
+  const _default: NodeCryptoModule;
+  export default _default;
+}
+
+declare module "node:crypto" {
+  export * from "crypto";
+  export { default } from "crypto";
 }

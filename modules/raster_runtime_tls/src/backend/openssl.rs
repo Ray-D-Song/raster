@@ -1,8 +1,11 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
-use std::sync::{Arc, Mutex, RwLock};
-use openssl::ssl::{Ssl, SslAcceptor, SslAcceptorBuilder, SslConnector, SslMethod, SslRef, SslVerifyMode, SniError, NameType};
+use openssl::ssl::{
+    NameType, SniError, Ssl, SslAcceptor, SslAcceptorBuilder, SslConnector, SslMethod, SslRef,
+    SslVerifyMode,
+};
 use openssl::x509::X509;
+use std::sync::{Arc, Mutex, RwLock};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::backend::{
@@ -149,7 +152,8 @@ fn apply_secure_context_to_ssl(ssl: &mut SslRef, context: &SecureContext) -> Res
     }
     for extra in context.cert_chain.iter().skip(1) {
         let chain_cert = X509::from_pem(extra).map_err(|_| SniError::NOACK)?;
-        ssl.add_chain_cert(chain_cert).map_err(|_| SniError::NOACK)?;
+        ssl.add_chain_cert(chain_cert)
+            .map_err(|_| SniError::NOACK)?;
     }
     Ok(())
 }
@@ -187,8 +191,7 @@ fn set_server_alpn(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let server_protos = alpn.to_vec();
     builder.set_alpn_select_callback(move |_, client| {
-        select_alpn_from_client(&server_protos, client)
-            .ok_or(openssl::ssl::AlpnError::NOACK)
+        select_alpn_from_client(&server_protos, client).ok_or(openssl::ssl::AlpnError::NOACK)
     });
     Ok(())
 }
@@ -363,12 +366,7 @@ pub fn extract_peer_chain<IO>(stream: &tokio_openssl::SslStream<IO>) -> Vec<Vec<
     stream
         .ssl()
         .peer_cert_chain()
-        .map(|chain| {
-            chain
-                .iter()
-                .filter_map(|c| c.to_der().ok())
-                .collect()
-        })
+        .map(|chain| chain.iter().filter_map(|c| c.to_der().ok()).collect())
         .unwrap_or_default()
 }
 

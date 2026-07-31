@@ -6,7 +6,7 @@ use once_cell::sync::Lazy;
 use rustls::{ClientConfig, SupportedProtocolVersion};
 
 use crate::no_verification::NoCertificateVerification;
-use crate::root_ca::{load_rustls_root_store};
+use crate::root_ca::load_rustls_root_store;
 
 pub use crate::root_ca::set_extra_ca_certs_bytes as set_extra_ca_certs;
 

@@ -80,7 +80,10 @@ impl NetStream {
                 Socket::process_unix_stream(socket, ctx, stream, allow_half_open)
             },
         }?;
-        let had_error = rw_join(ctx, readable_done, writable_done).await?;
+        let join_result = rw_join(ctx, readable_done, writable_done).await;
+        // Always release the control clone, including when join fails.
+        socket.borrow_mut().tcp_control = None;
+        let had_error = join_result?;
         Ok(had_error)
     }
 }

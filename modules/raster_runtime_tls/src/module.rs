@@ -96,17 +96,23 @@ impl ModuleDef for TlsModule {
             default.set("createServer", Func::from(create_server))?;
             default.set(
                 "createSecureContext",
-                Func::from(|ctx: Ctx<'js>, options: Value<'js>| create_js_secure_context(&ctx, options)),
+                Func::from(|ctx: Ctx<'js>, options: Value<'js>| {
+                    create_js_secure_context(&ctx, options)
+                }),
             )?;
-            default.set("checkServerIdentity", Func::from(check_server_identity_export))?;
-            default.set("getCiphers", Func::from(|_ctx: Ctx<'js>| supported_ciphers()))?;
+            default.set(
+                "checkServerIdentity",
+                Func::from(check_server_identity_export),
+            )?;
+            default.set(
+                "getCiphers",
+                Func::from(|_ctx: Ctx<'js>| supported_ciphers()),
+            )?;
             default.set(
                 "convertALPNProtocols",
-                Func::from(
-                    |ctx: Ctx<'js>, protocols: Value<'js>, out: Object<'js>| {
-                        convert_alpn_protocols_export(&ctx, protocols, &out)
-                    },
-                ),
+                Func::from(|ctx: Ctx<'js>, protocols: Value<'js>, out: Object<'js>| {
+                    convert_alpn_protocols_export(&ctx, protocols, &out)
+                }),
             )?;
 
             default.set("CLIENT_RENEG_LIMIT", CLIENT_RENEG_LIMIT)?;

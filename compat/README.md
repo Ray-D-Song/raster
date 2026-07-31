@@ -9,11 +9,11 @@ Each fixture installs its own locked dependencies. **Vite+** still runs the upst
 | better-sqlite3 sync API            | better-sqlite3 11.9.1      | Node `test.cjs` baseline → Raster runs `test.cjs` → stdout contains `better-sqlite3 compat OK`                                                                    | **Green** with `cargo build --features v8-compat` (Node 24.3.0 / ABI 137 V8 shim). Requires `make compat-better-sqlite3`.                                                                                                                                                                                                                             |
 | v8-hello native addon              | node-addon-api 8.3.1       | `npm run build` (node-gyp) → Node `test.cjs` baseline → Raster runs `test.cjs` → stdout contains `v8-hello compat OK`                                             | **Green** with `cargo build --features v8-compat`. Requires `make compat-v8`.                                                                                                                                                                                                                                                                         |
 | N-API hello addon                  | node-addon-api 8.3.1       | `yarn build` (node-gyp) → Node `test.cjs` baseline → Raster (`--features napi`) runs `test.cjs` → stdout contains `napi-hello compat OK`                          | **Green** when built with `cargo build --features napi` on a dynamically linked target (macOS / glibc). Requires `make compat-napi`.                                                                                                                                                                                                                  |
-| mysql2 async API                   | mysql2 3.23.2, MySQL 8.4   | Docker `mysql:8.4` temp container → Node `test.cjs` baseline → Raster runs `test.cjs` → stdout contains `mysql2 compat OK`                                        | **Observing**: CI job `mysql-compat` is non-blocking (`continue-on-error: true`). Requires Docker and `make compat-mysql`.                                                                                                                                                                                                                            |
+| mysql2 async API                   | mysql2 3.23.2, MySQL 8.4   | Docker `mysql:8.4` temp container → Node `test.cjs` baseline → Raster runs `test.cjs` → stdout contains `mysql2 compat OK`                                        | **Green** for default non-SSL MySQL 8.4 (`caching_sha2_password` + Promise/callback/pool). CI job `mysql-compat` is blocking. Requires Docker and `make compat-mysql`.                                                                                                                                                                                |
 
 Run `make compat-next`, `make compat-vite-plus`, `make compat-better-sqlite3`, `make compat-mysql`, `make compat-v8`, or `make compat-napi` after building Raster. V8-native fixtures (`better-sqlite3`, `v8-hello`) require `cargo build --features v8-compat` (the Makefile targets build this automatically). Upgrade a fixture only in a dedicated change that updates its exact dependency versions and lockfile.
 
-**Local `make compat`:** V8 fixtures pin **Node 24.3.0** for ABI 137 (`nvm use 24.3.0`). **Next** and **vite-plus** install steps expect **Node 22.18.0** (CI default) or **≥24.11.0** per upstream engine fields; with only 24.3.0 active, `yarn install` in `compat/vite-plus` may fail on engine checks. **vite-plus** build under Raster still requires `node:readline` (not yet implemented) — see Vite+ row above. **`make compat` includes `compat-mysql`**, which requires a running Docker daemon and will fail on Raster until mysql2 compatibility gaps are closed. The **mysql2** fixture baseline uses **Node 22.18.0** (fixture `engines` accept **≥22.18.0**).
+**Local `make compat`:** V8 fixtures pin **Node 24.3.0** for ABI 137 (`nvm use 24.3.0`). **Next** and **vite-plus** install steps expect **Node 22.18.0** (CI default) or **≥24.11.0** per upstream engine fields; with only 24.3.0 active, `yarn install` in `compat/vite-plus` may fail on engine checks. **vite-plus** build under Raster still requires `node:readline` (not yet implemented) — see Vite+ row above. **`make compat` includes `compat-mysql`**, which requires a running Docker daemon. The **mysql2** fixture baseline uses **Node 22.18.0** (fixture `engines` accept **≥22.18.0**).
 
 **V8 C++ shim platform support:** Linux (x64, arm64) and macOS (Apple Silicon and Intel) are tested in CI. **Windows is not supported** for `v8-compat` — the C++ shim is Unix-only (`build.rs` links a static archive; no `rstr.dll` proxy path). Use WSL or a Linux/macOS host for V8-native addons (`better-sqlite3`, `v8-hello`).
 
@@ -118,20 +118,21 @@ Diagnostics land in `compat/napi-hello/compat.log`.
 
 The fixture keeps mysql2's default `enableKeepAlive: true` and default authentication flow. It does **not** disable keepalive, switch to legacy auth plugins, or use MariaDB to bypass compatibility gaps.
 
-**Current Raster gaps (expected), in order:**
+**Covered by this fixture (default non-SSL):**
 
-1. `net.Socket.setNoDelay()`.
-2. `net.Socket.setKeepAlive()`.
-3. RSA `publicEncrypt` for first-time non-TLS `caching_sha2_password` authentication on MySQL 8.4. Node baseline success is followed by `FLUSH PRIVILEGES` before Raster runs so the auth cache does not mask this gap.
+1. `net.Socket.setNoDelay()` / `setKeepAlive(true, 0)` (mysql2 default keepalive).
+2. `Buffer.copy` / `Buffer.equals` / float write coercion used by the protocol codec.
+3. RSA-OAEP `crypto.publicEncrypt` for first-time non-TLS `caching_sha2_password` authentication on MySQL 8.4. Node baseline success is followed by `FLUSH PRIVILEGES` before Raster runs so the auth cache does not mask a regression.
+4. Promise connection/execute/transaction/error, callback connection/query/end, and two-connection pool execute/query/end.
 
-The `node:tls` module is now loadable (mysql2's unconditional `require("tls")` at import time is satisfied). SSL/TLS connections from mysql2 are not exercised by this fixture's default non-SSL config.
+The `node:tls` module is loadable (mysql2's unconditional `require("tls")` at import time). SSL/TLS connections from mysql2, `net.isIP` helpers, and TLSSocket option handoff are **not** covered by this fixture.
 
-**CI:** The `mysql-compat` job calls `make compat-mysql` on Ubuntu (Docker is available on the runner). It uses `continue-on-error: true` while Raster gaps are being closed — failures are recorded and `compat/mysql2/compat.log` is uploaded, but the job does not block merges. Remove `continue-on-error` only when Raster reliably prints `mysql2 compat OK`.
+**CI:** The `mysql-compat` job calls `make compat-mysql` on Ubuntu (Docker is available on the runner) and is **blocking**. Failures upload `compat/mysql2/compat.log`.
 
 Diagnostics land in `compat/mysql2/compat.log` (Docker image/container/port, health transitions, container logs on failure, database host/port/database/user, Node baseline and Raster run stdout/stderr, container stop result). Passwords are never logged.
 
 ## Failures and CI
 
-Most compatibility failures block merges. The workflow runs `better-sqlite3` and `v8-hello` on Ubuntu and macOS with Node 24.3.0. The **`mysql-compat` job is an exception**: it is non-blocking (`continue-on-error: true`) until Raster passes the full fixture.
+Most compatibility failures block merges. The workflow runs `better-sqlite3` and `v8-hello` on Ubuntu and macOS with Node 24.3.0. The **`mysql-compat` job is blocking** and must print `mysql2 compat OK`.
 
 When a child exits `0` but produces no expected artifact (or HTTP checks fail), `compat/run.mjs` fails with an explicit diagnosis (see `compat/*/compat.log`). On CI failure, `compat.log` and `.next` / `dist` are uploaded as artifacts.
