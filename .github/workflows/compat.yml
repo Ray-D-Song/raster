@@ -29,10 +29,10 @@ jobs:
           node-version: 24.3.0
           cache: yarn
       - run: yarn install --frozen-lockfile
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@master
         with:
-          components: rust-src
-      - run: rustup target add x86_64-unknown-linux-gnu --toolchain nightly
+          toolchain: ${{ matrix.sanitizer == 'address' && 'nightly' || 'stable' }}
+          targets: x86_64-unknown-linux-gnu
       - name: Run sanitizer gate
         run: bash v8_compat/tools/run_sanitizer_ci.sh ${{ matrix.sanitizer }}
 
@@ -73,9 +73,9 @@ jobs:
           cache: yarn
       - run: yarn install --frozen-lockfile
       - run: make js JS_MINIFY=0
-      - run: rustup toolchain install nightly
+      - uses: dtolnay/rust-toolchain@stable
       - name: Build raster_runtime
-        run: cargo +nightly build
+        run: cargo build
       - run: make compat-mysql
       - if: always()
         uses: actions/upload-artifact@v4
@@ -95,9 +95,9 @@ jobs:
           cache: yarn
       - run: yarn install --frozen-lockfile
       - run: make js JS_MINIFY=0
-      - run: rustup toolchain install nightly
+      - uses: dtolnay/rust-toolchain@stable
       - name: Build raster_runtime
-        run: cargo +nightly build
+        run: cargo build
       - run: make compat-node-postgres
       - if: always()
         uses: actions/upload-artifact@v4
@@ -141,13 +141,13 @@ jobs:
           cache: yarn
       - run: yarn install --frozen-lockfile
       - run: make js JS_MINIFY=0
-      - run: rustup toolchain install nightly
+      - uses: dtolnay/rust-toolchain@stable
       - name: Build raster_runtime
         run: |
           FEATURES=""
           if [ "${{ matrix.case }}" = "napi-hello" ]; then FEATURES="--features napi"; fi
           if [ "${{ matrix.case }}" = "better-sqlite3" ] || [ "${{ matrix.case }}" = "v8-hello" ]; then FEATURES="--features v8-compat"; fi
-          cargo +nightly build $FEATURES
+          cargo build $FEATURES
       - run: make compat-${{ matrix.case }}
       - if: always()
         run: |

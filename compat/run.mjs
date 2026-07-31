@@ -981,13 +981,13 @@ async function assertRasterExecutable(rasterPath, logParts) {
     if (code === "ENOENT" || code === "ENOTDIR") {
       throw new Error(
         `Raster runtime not found: ${rasterPath}\n` +
-          "Build it first with: cargo +nightly build"
+          "Build it first with: cargo build"
       );
     }
     if (code === "EACCES") {
       throw new Error(
         `Raster runtime is not executable: ${rasterPath}\n` +
-          "Build it first with: cargo +nightly build"
+          "Build it first with: cargo build"
       );
     }
     throw err;

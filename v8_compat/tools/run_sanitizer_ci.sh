@@ -12,9 +12,17 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${ROOT}"
 
 TARGET="${TARGET:-x86_64-unknown-linux-gnu}"
-TOOLCHAIN="${TOOLCHAIN:-+nightly}"
+if [[ "${SANITIZER}" == "address" ]]; then
+  TOOLCHAIN="${TOOLCHAIN:-+nightly}"
+else
+  TOOLCHAIN="${TOOLCHAIN:-}"
+fi
 export CARGO_TARGET_DIR="${ROOT}/target-sanitizer-${SANITIZER}"
-CARGO=(env -u CARGO_TARGET_DIR CARGO_TARGET_DIR="${CARGO_TARGET_DIR}" cargo "${TOOLCHAIN}")
+if [[ -n "${TOOLCHAIN}" ]]; then
+  CARGO=(env -u CARGO_TARGET_DIR CARGO_TARGET_DIR="${CARGO_TARGET_DIR}" cargo "${TOOLCHAIN}")
+else
+  CARGO=(env -u CARGO_TARGET_DIR CARGO_TARGET_DIR="${CARGO_TARGET_DIR}" cargo)
+fi
 
 V8_HELLO_ADDON="${ROOT}/compat/v8-hello/build/Release/v8_hello.node"
 NAPI_HELLO_ADDON="${ROOT}/compat/napi-hello/build/Release/hello.node"
@@ -136,10 +144,10 @@ run_better_sqlite3_compat() {
 if [[ "${SANITIZER}" == "address" ]]; then
   set_addon_sanitizer_flags
   echo "[sanitizer:address] rustc unit tests (v8_compat)"
-  "${CARGO[@]}" test -p v8_compat --lib -Zbuild-std --target "${TARGET}"
+  "${CARGO[@]}" test -p v8_compat --lib --target "${TARGET}"
 
   echo "[sanitizer:address] rustc unit tests (raster_runtime_napi)"
-  "${CARGO[@]}" test -p raster_runtime_napi --lib -Zbuild-std --target "${TARGET}"
+  "${CARGO[@]}" test -p raster_runtime_napi --lib --target "${TARGET}"
   clear_addon_sanitizer_flags
 else
   echo "[sanitizer:undefined] rustc unit tests (v8_compat shim only)"
@@ -153,7 +161,7 @@ echo "[sanitizer:${SANITIZER}] build raster_runtime (v8-compat)"
 make js JS_MINIFY=0
 if [[ "${SANITIZER}" == "address" ]]; then
   set_addon_sanitizer_flags
-  "${CARGO[@]}" build -p raster_runtime --features v8-compat -Zbuild-std --target "${TARGET}"
+  "${CARGO[@]}" build -p raster_runtime --features v8-compat --target "${TARGET}"
   clear_addon_sanitizer_flags
 else
   "${CARGO[@]}" build -p raster_runtime --features v8-compat --target "${TARGET}"

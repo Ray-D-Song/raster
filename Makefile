@@ -4,7 +4,7 @@ TARGET_darwin_x86_64 = x86_64-apple-darwin
 TARGET_darwin_arm64 = aarch64-apple-darwin
 TARGET_windows_x86_64 = x86_64-pc-windows-gnu
 TARGET_windows_arm64 = aarch64-is-not-yet-supported
-RUST_VERSION = nightly
+RUST_VERSION = stable
 TOOLCHAIN = +$(RUST_VERSION)
 BUILD_ARG = $(TOOLCHAIN) build -r
 BUILD_DIR = ./target/release
@@ -245,10 +245,10 @@ test-ci: export TEST_SUB_DIR = unit
 test-ci: export RASTER_RUNTIME_ASYNC_HOOKS = 1
 test-ci: clean-js | toolchain js types-pack-check types-smoke
 ifdef CARGO_FEATURES
-	cargo $(TOOLCHAIN) -Z build-std -Z build-std-features test --target $(CURRENT_TARGET) $(CARGO_FEATURES) -- --nocapture --show-output
+	cargo $(TOOLCHAIN) test --target $(CURRENT_TARGET) $(CARGO_FEATURES) -- --nocapture --show-output
 	cargo $(TOOLCHAIN) run -r --target $(CURRENT_TARGET) $(CARGO_FEATURES) -- test -d bundle/js/__tests__/$(TEST_SUB_DIR)
 else
-	cargo $(TOOLCHAIN) -Z build-std -Z build-std-features test --target $(CURRENT_TARGET) -- --nocapture --show-output
+	cargo $(TOOLCHAIN) test --target $(CURRENT_TARGET) -- --nocapture --show-output
 	cargo $(TOOLCHAIN) run -r --target $(CURRENT_TARGET) -- test -d bundle/js/__tests__/$(TEST_SUB_DIR)
 endif
 
