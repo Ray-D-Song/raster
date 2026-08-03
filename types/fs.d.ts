@@ -555,4 +555,43 @@ declare module "fs" {
    * Errors other than existence (including permission errors) also yield `false`.
    */
   export function existsSync(path: PathLike): boolean;
+
+  /**
+   * Options for {@link createReadStream}.
+   *
+   * Unsupported and rejected at runtime: `fd`, AbortSignal, custom `fs`
+   * providers, and `autoClose: false` (no ReadStream.close()/fd surface).
+   */
+  export interface CreateReadStreamOptions {
+    flags?: string | undefined;
+    encoding?: BufferEncoding | null | undefined;
+    /** Inclusive start byte offset. */
+    start?: number | undefined;
+    /** Inclusive end byte offset. */
+    end?: number | undefined;
+    highWaterMark?: number | undefined;
+    /**
+     * Must be `true` or omitted. `false` is rejected: Raster returns a plain
+     * `stream.Readable` without Node's `ReadStream.close()`/`fd` API.
+     */
+    autoClose?: true | undefined;
+  }
+
+  /**
+   * Creates a readable stream for `path` backed by `stream.Readable.from` and
+   * `fs/promises` FileHandle chunked reads. Default `highWaterMark` is 64 KiB.
+   *
+   * `path` accepts string, Buffer, or file: URL (same as {@link realpath}).
+   * Returns a `stream.Readable` with a `path` property. Open/read errors are
+   * emitted on the stream's `error` event.
+   */
+  export function createReadStream(
+    path: RealpathPathLike,
+    options?: BufferEncoding | CreateReadStreamOptions
+  ): import("stream").Readable;
+}
+
+declare module "node:fs" {
+  export * from "fs";
+  export { default } from "fs";
 }

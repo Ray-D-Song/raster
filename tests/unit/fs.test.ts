@@ -31,6 +31,7 @@ const {
   existsSync,
   watch,
   FSWatcher,
+  createReadStream,
   promises,
 } = defaultImport;
 
@@ -747,6 +748,36 @@ describe("realpath", () => {
     rmdirSync(tmpDir, { recursive: true });
   });
 
+  it("realpathSync accepts broad ArrayBufferView inputs (not CRS-restricted)", () => {
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), "realpath-"));
+    const filePath = path.join(tmpDir, "file.txt");
+    writeFileSync(filePath, "data");
+    const expected = realpathSync(filePath);
+    const bytes = Buffer.from(filePath, "utf8");
+    const ab = bytes.buffer.slice(
+      bytes.byteOffset,
+      bytes.byteOffset + bytes.byteLength
+    );
+
+    // UTF-8 path bytes via ArrayBuffer / DataView / Int8Array must resolve.
+    expect(realpathSync(ab)).toBe(expected);
+    expect(realpathSync(new DataView(ab))).toBe(expected);
+    expect(realpathSync(new Int8Array(bytes))).toBe(expected);
+
+    // Uint16Array is accepted (enters FS resolution); must not sync-TypeError.
+    // Content is raw LE u16 bytes, so ENOENT is expected — not TypeError.
+    try {
+      realpathSync(new Uint16Array([0x2f]));
+    } catch (err: any) {
+      expect(err).not.toBeInstanceOf(TypeError);
+      expect(String(err.message || err)).not.toMatch(
+        /must be of type string or an instance of Buffer or URL/i
+      );
+    }
+
+    rmdirSync(tmpDir, { recursive: true });
+  });
+
   it("should reject non-file URLs and invalid UTF-8 Buffer", async () => {
     expect(() => realpathSync(new URL("https://example.com/x"))).toThrow(
       /scheme file/i
@@ -1011,6 +1042,136 @@ describe("callback access/stat/lstat and existsSync", () => {
     expect(() => accessCb("fixtures/hello.txt", 1.5, () => {})).toThrow(
       /out of range|mode/
     );
+  });
+});
+
+describe("createReadStream", () => {
+  it("reads a small file fully", async () => {
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), "raster-crs-"));
+    const filePath = path.join(tmpDir, "small.txt");
+    writeFileSync(filePath, "hello-createReadStream");
+    try {
+      const stream = createReadStream(filePath);
+      expect(stream.path).toBe(filePath);
+      const chunks: Buffer[] = [];
+      for await (const chunk of stream) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+      expect(Buffer.concat(chunks).toString()).toBe("hello-createReadStream");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reads multiple chunks for large highWaterMark-limited files", async () => {
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), "raster-crs-"));
+    const filePath = path.join(tmpDir, "large.bin");
+    const payload = Buffer.alloc(200, 0x61);
+    writeFileSync(filePath, payload);
+    try {
+      const stream = createReadStream(filePath, { highWaterMark: 64 });
+      const chunks: Buffer[] = [];
+      for await (const chunk of stream) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+      expect(chunks.length).toBeGreaterThan(1);
+      expect(Buffer.concat(chunks).equals(payload)).toBe(true);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("supports start/end range and encoding", async () => {
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), "raster-crs-"));
+    const filePath = path.join(tmpDir, "range.txt");
+    writeFileSync(filePath, "0123456789");
+    try {
+      const stream = createReadStream(filePath, {
+        start: 2,
+        end: 5,
+        encoding: "utf8",
+      });
+      let body = "";
+      for await (const chunk of stream) {
+        body += chunk;
+      }
+      expect(body).toBe("2345");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("emits error for missing files", async () => {
+    const stream = createReadStream(path.join(os.tmpdir(), "no-such-raster-crs-file"));
+    await expect(
+      (async () => {
+        for await (const _ of stream) {
+          // drain
+        }
+      })()
+    ).rejects.toBeTruthy();
+  });
+
+  it("rejects unsupported fd option", () => {
+    expect(() =>
+      createReadStream("fixtures/hello.txt", { fd: 3 } as any)
+    ).toThrow(/fd is not supported/);
+  });
+
+  it("rejects autoClose:false (no close()/fd surface)", () => {
+    expect(() =>
+      createReadStream("fixtures/hello.txt", { autoClose: false } as any)
+    ).toThrow(/autoClose:false is not supported/);
+  });
+
+  it("accepts Buffer and file URL paths", async () => {
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), "raster-crs-"));
+    const filePath = path.join(tmpDir, "pathlike.txt");
+    writeFileSync(filePath, "pathlike-ok");
+    try {
+      const fromBuffer = createReadStream(Buffer.from(filePath, "utf8"));
+      let body = "";
+      for await (const chunk of fromBuffer) {
+        body += Buffer.isBuffer(chunk) ? chunk.toString() : String(chunk);
+      }
+      expect(body).toBe("pathlike-ok");
+
+      const { pathToFileURL } = await import("node:url");
+      const fromUrl = createReadStream(pathToFileURL(filePath));
+      body = "";
+      for await (const chunk of fromUrl) {
+        body += Buffer.isBuffer(chunk) ? chunk.toString() : String(chunk);
+      }
+      expect(body).toBe("pathlike-ok");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects invalid UTF-8 Buffer and non-Uint8 ArrayBufferViews", () => {
+    expect(() => createReadStream(Buffer.from([0xff]))).toThrow(
+      /invalid UTF-8|Uint8Array|Buffer or URL/i
+    );
+    expect(() => createReadStream(new Uint16Array([0x2f]) as any)).toThrow(
+      /string or an instance of Buffer or URL/i
+    );
+    expect(() => createReadStream(new DataView(new ArrayBuffer(1)) as any)).toThrow(
+      /string or an instance of Buffer or URL/i
+    );
+  });
+
+  it("rejects detached Uint8Array and Buffer without panicking", () => {
+    const ab = new ArrayBuffer(8);
+    const u8 = new Uint8Array(ab);
+    ab.transfer();
+    expect(() => createReadStream(u8)).toThrow(TypeError);
+
+    // Buffer sharing a transferable ArrayBuffer
+    const ab2 = new ArrayBuffer(32);
+    const buf = Buffer.from(ab2);
+    buf.write("hello-path");
+    ab2.transfer();
+    expect(() => createReadStream(buf)).toThrow(TypeError);
   });
 });
 

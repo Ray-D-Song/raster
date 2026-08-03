@@ -136,6 +136,18 @@ impl<'js> ReadableStreamInner<'js> {
             handoff_notify,
         }
     }
+
+    /// Whether the readable side has reached EOF / end-of-stream.
+    #[inline]
+    pub fn is_ended(&self) -> bool {
+        self.is_ended
+    }
+
+    /// Whether the readable side has been destroyed.
+    #[inline]
+    pub fn is_destroyed(&self) -> bool {
+        self.is_destroyed
+    }
 }
 
 #[rquickjs::class]

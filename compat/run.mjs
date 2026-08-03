@@ -791,25 +791,64 @@ async function runPostgresScriptCompat(
     }
     logParts.push(`docker-server: ${dockerVersion.stdout.trim()}`);
 
+    // Separate short-lived CA + leaf server cert so:
+    // - rustls can trust the CA (BasicConstraints CA:TRUE) via ssl.ca
+    // - the leaf is a valid end-entity cert (not CaUsedAsEndEntity)
+    // - Node and Raster both verify with the exported CA file
     const postgresBootstrap = `
 set -eu
 umask 077
 
+# Root CA (trust anchor exported to the host as PG_CA_FILE)
 openssl req \\
   -x509 \\
   -newkey rsa:2048 \\
   -sha256 \\
   -nodes \\
   -days 1 \\
+  -subj /CN=RasterCompatCA \\
+  -addext basicConstraints=critical,CA:TRUE,pathlen:0 \\
+  -addext keyUsage=critical,keyCertSign,cRLSign \\
+  -keyout /tmp/raster-ca.key \\
+  -out /tmp/raster-ca.crt
+
+# Server leaf key + CSR
+openssl req \\
+  -newkey rsa:2048 \\
+  -sha256 \\
+  -nodes \\
   -subj /CN=localhost \\
-  -addext subjectAltName=DNS:localhost,IP:127.0.0.1 \\
   -keyout /tmp/raster-postgres.key \\
+  -out /tmp/raster-postgres.csr
+
+printf '%s\\n' \\
+  'subjectAltName=DNS:localhost,IP:127.0.0.1' \\
+  'basicConstraints=CA:FALSE' \\
+  'keyUsage=digitalSignature,keyEncipherment' \\
+  'extendedKeyUsage=serverAuth' \\
+  > /tmp/raster-server-ext.cnf
+
+# Sign leaf with CA
+openssl x509 \\
+  -req \\
+  -in /tmp/raster-postgres.csr \\
+  -CA /tmp/raster-ca.crt \\
+  -CAkey /tmp/raster-ca.key \\
+  -CAcreateserial \\
+  -days 1 \\
+  -sha256 \\
+  -extfile /tmp/raster-server-ext.cnf \\
   -out /tmp/raster-postgres.crt
+
+# Publish CA at the path the host copies for client verification
+cp /tmp/raster-ca.crt /tmp/raster-postgres-ca.crt
 
 chown postgres:postgres \\
   /tmp/raster-postgres.key \\
-  /tmp/raster-postgres.crt
-chmod 600 /tmp/raster-postgres.key
+  /tmp/raster-postgres.crt \\
+  /tmp/raster-ca.crt \\
+  /tmp/raster-postgres-ca.crt
+chmod 600 /tmp/raster-postgres.key /tmp/raster-ca.key
 
 exec docker-entrypoint.sh postgres \\
   -c ssl=on \\
@@ -891,6 +930,20 @@ exec docker-entrypoint.sh postgres \\
     const caPath = path.join(certDir, "postgres-ca.crt");
     await copyPostgresCa(containerId, caPath, logParts);
 
+    // libpq-style password file for pgpass / PGPASSFILE tests.
+    // Format: hostname:port:database:username:password
+    const pgpassPath = path.join(certDir, ".pgpass");
+    const pgpassLine = [
+      POSTGRES_DOCKER_HOST,
+      port,
+      "raster_compat",
+      "raster",
+      "raster-compat-secret",
+    ].join(":");
+    await fs.writeFile(pgpassPath, `${pgpassLine}\n`, { mode: 0o600 });
+    // Ensure mode even when umask interfered with writeFile mode on some hosts.
+    await fs.chmod(pgpassPath, 0o600);
+
     const testEnv = {
       ...process.env,
       PGHOST: POSTGRES_DOCKER_HOST,
@@ -899,9 +952,10 @@ exec docker-entrypoint.sh postgres \\
       PGUSER: "raster",
       PGPASSWORD: "raster-compat-secret",
       PG_CA_FILE: caPath,
+      PGPASSFILE: pgpassPath,
     };
     logParts.push(
-      `\n# Database config\nhost: ${POSTGRES_DOCKER_HOST}\nport: ${port}\ndatabase: raster_compat\nuser: raster\nca: ${caPath}`
+      `\n# Database config\nhost: ${POSTGRES_DOCKER_HOST}\nport: ${port}\ndatabase: raster_compat\nuser: raster\nca: ${caPath}\npgpass: ${pgpassPath}`
     );
 
     const scripts = testCase.scripts ?? [
@@ -1083,9 +1137,10 @@ async function resetPostgresSchema(containerId, logParts) {
 }
 
 async function copyPostgresCa(containerId, caPath, logParts) {
+  // Prefer the dedicated CA path; fall back to legacy single-cert layout.
   const copyArgs = [
     "cp",
-    `${containerId}:/tmp/raster-postgres.crt`,
+    `${containerId}:/tmp/raster-postgres-ca.crt`,
     caPath,
   ];
   logParts.push(

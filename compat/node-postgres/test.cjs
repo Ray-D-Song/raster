@@ -264,7 +264,9 @@ function isCertificateError(error) {
   }
 
   const message = String(error?.message || "");
-  return /self[- ]signed|unknown ca|unable to verify|issuer certificate|certificate verification/i.test(
+  // Narrow message match: known OpenSSL / rustls verification wording only.
+  // Do not accept bare "certificate", "TLS", or "ssl" (avoids PG-021 false positives).
+  return /self[- ]signed|unknown ca|unable to verify|issuer certificate|certificate verification|CaUsedAsEndEntity|UnknownIssuer|InvalidCertificate|unable to get local issuer|DEPTH_ZERO_SELF_SIGNED|SELF_SIGNED_CERT/i.test(
     message
   );
 }
@@ -815,6 +817,40 @@ test("PG-020", "TLS channel binding", async () => {
 });
 
 test("PG-021", "TLS unknown CA", async () => {
+  // Guard rails: keep isCertificateError narrow (no bare certificate/TLS/ssl).
+  assertEqual(
+    isCertificateError({ message: "certificate" }),
+    false,
+    "bare 'certificate' must not match"
+  );
+  assertEqual(
+    isCertificateError({
+      message: "There was an error establishing an SSL connection",
+    }),
+    false,
+    "generic SSL connection error must not match"
+  );
+  assertEqual(
+    isCertificateError({ message: "TLS socket closed" }),
+    false,
+    "generic TLS close must not match"
+  );
+  assertEqual(
+    isCertificateError({ message: "self-signed certificate" }),
+    true,
+    "OpenSSL self-signed wording must match"
+  );
+  assertEqual(
+    isCertificateError({ code: "SELF_SIGNED_CERT_IN_CHAIN" }),
+    true,
+    "known cert error code must match"
+  );
+  assertEqual(
+    isCertificateError({ message: "UnknownIssuer" }),
+    true,
+    "rustls UnknownIssuer must match"
+  );
+
   const client = createClient({
     ssl: {
       servername: "localhost",
@@ -943,6 +979,35 @@ test("PG-024", "clean shutdown without residual handles", async () => {
     },
     { strict: true }
   );
+});
+
+test("PG-025", ".pgpass authentication via PGPASSFILE", async () => {
+  assert(
+    process.env.PGPASSFILE,
+    "PGPASSFILE must be set by the compat runner"
+  );
+
+  // Force the pgpass path: clear env password and pass null so Client
+  // does not fall back to process.env.PGPASSWORD from baseConfig.
+  const savedPassword = process.env.PGPASSWORD;
+  delete process.env.PGPASSWORD;
+
+  let client;
+  try {
+    client = createClient({ password: null });
+    await client.connect();
+    const result = await client.query("SELECT 1 AS value");
+    assertEqual(result.rows[0].value, 1);
+  } finally {
+    if (savedPassword === undefined) {
+      delete process.env.PGPASSWORD;
+    } else {
+      process.env.PGPASSWORD = savedPassword;
+    }
+    if (client) {
+      await closeClient(client, { strict: true });
+    }
+  }
 });
 
 async function main() {

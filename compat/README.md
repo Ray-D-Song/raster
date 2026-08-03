@@ -156,10 +156,11 @@ Diagnostics land in `compat/mysql2/compat.log` (Docker image/container/port, hea
 | `PGUSER`      | `raster`                 |
 | `PGPASSWORD`  | `raster-compat-secret`   |
 | `PG_CA_FILE`  | (required for TLS cases) |
+| `PGPASSFILE`  | (required for PG-025)    |
 
 `make compat-node-postgres` overrides these with values from its temporary container.
 
-`test.cjs` exercises (24 cases, PG-001 … PG-024):
+`test.cjs` exercises (25 cases, PG-001 … PG-025):
 
 - CommonJS module surface (`Client`, `Pool`, `types`)
 - Plain SCRAM-SHA-256 connect/query/`end`
@@ -171,6 +172,7 @@ Diagnostics land in `compat/mysql2/compat.log` (Docker image/container/port, hea
 - Auth failure (`28P01`), statement timeout, `pg_cancel_backend`
 - TLS (`rejectUnauthorized: false`, CA verification, channel binding / SCRAM-SHA-256-PLUS, unknown CA rejection)
 - Forced disconnect + pool recovery, LISTEN/NOTIFY, clean shutdown
+- `.pgpass` / `PGPASSFILE` authentication (password cleared; Client uses password file)
 
 **Out of scope:** `pg-native` (libpq bindings).
 

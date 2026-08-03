@@ -174,6 +174,33 @@ impl<'js> TlsSocket<'js> {
         self.pending
     }
 
+    /// Same semantics as `net.Socket.readable`.
+    #[qjs(get, enumerable)]
+    pub fn readable(&self) -> bool {
+        !self.destroyed && !self.readable_stream_inner.is_ended()
+    }
+
+    /// Same semantics as `net.Socket.writable`.
+    #[qjs(get, enumerable)]
+    pub fn writable(&self) -> bool {
+        !self.destroyed && !self.writable_stream_inner.is_finished()
+    }
+
+    #[qjs(get, enumerable)]
+    pub fn destroyed(&self) -> bool {
+        self.destroyed
+    }
+
+    #[qjs(get, enumerable)]
+    pub fn readable_ended(&self) -> bool {
+        self.readable_stream_inner.is_ended()
+    }
+
+    #[qjs(get, enumerable)]
+    pub fn writable_ended(&self) -> bool {
+        self.writable_stream_inner.is_finished() && !self.writable_stream_inner.is_destroyed()
+    }
+
     #[qjs(get, enumerable)]
     pub fn remote_address(&self) -> Option<String> {
         self.remote_address.clone()
@@ -207,6 +234,18 @@ impl<'js> TlsSocket<'js> {
     #[qjs(get, enumerable)]
     pub fn ready_state(&self) -> String {
         self.ready_state.to_string()
+    }
+
+    /// Same as `net.Socket.ref` — currently a successful no-op.
+    #[qjs(rename = "ref")]
+    pub fn js_ref(this: This<Class<'js, Self>>) -> Class<'js, Self> {
+        this.0
+    }
+
+    /// Same as `net.Socket.unref` — currently a successful no-op.
+    #[qjs(rename = "unref")]
+    pub fn js_unref(this: This<Class<'js, Self>>) -> Class<'js, Self> {
+        this.0
     }
 
     pub fn write(

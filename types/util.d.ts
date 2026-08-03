@@ -78,7 +78,21 @@ declare module "util" {
     function isTypedArray(value: unknown): boolean;
     function isDataView(value: unknown): boolean;
     function isUint8Array(value: unknown): boolean;
+    /**
+     * Returns `true` if the value is a [`Date`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) object.
+     * Uses `Object.prototype.toString` so it works across realms.
+     */
+    function isDate(value: unknown): value is Date;
   }
+  /**
+   * Marks `fn` as deprecated. Currently returns `fn` unchanged (no runtime
+   * warning is emitted). Non-function arguments throw `TypeError`.
+   */
+  export function deprecate<T extends Function>(
+    fn: T,
+    message?: string,
+    code?: string
+  ): T;
   /**
    * Usage of `util.inherits()` is discouraged. Please use the ES6 `class` and `extends` keywords to get language level inheritance support. Also note
    * that the two styles are [semantically incompatible](https://github.com/nodejs/node/issues/4179).
@@ -283,6 +297,23 @@ declare module "util" {
       : typeof _TextEncoder;
   }
 }
-declare module "util" {
+
+declare module "util/types" {
+  export function isProxy(value: unknown): boolean;
+  export function isPromise(value: unknown): boolean;
+  export function isArrayBuffer(value: unknown): boolean;
+  export function isAnyArrayBuffer(value: unknown): boolean;
+  export function isSharedArrayBuffer(value: unknown): boolean;
+  export function isTypedArray(value: unknown): boolean;
+  export function isDataView(value: unknown): boolean;
+  export function isUint8Array(value: unknown): boolean;
+  export function isDate(value: unknown): value is Date;
+}
+
+declare module "node:util/types" {
+  export * from "util/types";
+}
+
+declare module "node:util" {
   export * from "util";
 }

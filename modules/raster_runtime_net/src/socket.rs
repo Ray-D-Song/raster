@@ -156,6 +156,34 @@ impl<'js> Socket<'js> {
         self.pending
     }
 
+    /// Node-compatible: `!destroyed && !readableEnded`.
+    #[qjs(get, enumerable)]
+    pub fn readable(&self) -> bool {
+        !self.destroyed && !self.readable_stream_inner.is_ended()
+    }
+
+    /// Node-compatible: `!destroyed && !writableFinished`.
+    #[qjs(get, enumerable)]
+    pub fn writable(&self) -> bool {
+        !self.destroyed && !self.writable_stream_inner.is_finished()
+    }
+
+    #[qjs(get, enumerable)]
+    pub fn destroyed(&self) -> bool {
+        self.destroyed
+    }
+
+    #[qjs(get, enumerable)]
+    pub fn readable_ended(&self) -> bool {
+        self.readable_stream_inner.is_ended()
+    }
+
+    /// Node duplex semantics: finished write side that was not force-destroyed.
+    #[qjs(get, enumerable)]
+    pub fn writable_ended(&self) -> bool {
+        self.writable_stream_inner.is_finished() && !self.writable_stream_inner.is_destroyed()
+    }
+
     #[qjs(get, enumerable)]
     pub fn remote_address(&self) -> Option<String> {
         self.remote_address.clone()
@@ -252,6 +280,21 @@ impl<'js> Socket<'js> {
         this.borrow_mut().destroyed = true;
         ReadableStream::destroy(This(this.clone()), Opt(None));
         WritableStream::destroy(This(this.clone()), error);
+        this.0
+    }
+
+    /// Node-compatible `socket.ref()` — keep the event loop alive while the socket is open.
+    /// Raster currently treats this as a successful no-op so libraries that call
+    /// `stream.ref()` (e.g. node-postgres Pool) do not throw.
+    #[qjs(rename = "ref")]
+    pub fn js_ref(this: This<Class<'js, Self>>) -> Class<'js, Self> {
+        this.0
+    }
+
+    /// Node-compatible `socket.unref()` — allow the process to exit if the socket is
+    /// the only remaining handle. Currently a successful no-op (see `ref`).
+    #[qjs(rename = "unref")]
+    pub fn js_unref(this: This<Class<'js, Self>>) -> Class<'js, Self> {
         this.0
     }
 

@@ -12,6 +12,24 @@ it("should require a file (absolute path)", () => {
   expect(hello).toEqual("hello world!");
 });
 
+it("relative ./stream is not hijacked by the builtin stream module", () => {
+  const connection = _require(`${CWD}/fixtures/relative-stream/connection.js`);
+  const builtin = _require("stream");
+  const localResolved = _require.resolve(
+    `${CWD}/fixtures/relative-stream/stream.js`
+  );
+
+  expect(connection.localKind).toBe("local-stream");
+  expect(connection.localStream.value).toBe(42);
+  expect(connection.localIsBuiltin).toBe(false);
+  expect(connection.builtinStream).toBe(builtin);
+  expect(localResolved.replace(/\\/g, "/")).toContain(
+    "fixtures/relative-stream/stream.js"
+  );
+  // Distinct require caches for local file vs bare builtin.
+  expect(_require.cache[localResolved]).toBeDefined();
+  expect(_require.cache[localResolved].exports).toBe(connection.localStream);
+});
 it("should require a json file (absolute path)", () => {
   const a = _require(`${CWD}/package.json`);
 

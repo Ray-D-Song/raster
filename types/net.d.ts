@@ -141,6 +141,23 @@ declare module "net" {
     readonly remotePort?: number | undefined;
 
     /**
+     * This property shows the number of characters buffered for writing. The buffer
+     * may contain strings whose length after encoding is not yet known. So this number
+     * is only an approximation of the number of bytes in the buffer.
+     *
+     * `net.Socket` has the property that `socket.write()` always works. This is to
+     * help users get up and running quickly. The computer cannot always keep up
+     * with the amount of data that is written to a socket. The network connection
+     * simply might be too slow. Node.js will internally queue up the data written to a
+     * socket and send it out over the wire when it is possible.
+     */
+    readonly readable: boolean;
+    readonly writable: boolean;
+    readonly destroyed: boolean;
+    readonly readableEnded: boolean;
+    readonly writableEnded: boolean;
+
+    /**
      * Half-closes the socket. i.e., it sends a FIN packet. It is possible the server will still send some data.
      *
      * @param callback Optional callback for when the socket is finished.
@@ -504,14 +521,23 @@ declare module "net" {
     connectionListener?: () => void
   ): Socket;
 
+  /**
+   * Returns `4` or `6` if `input` is a valid IPv4 or IPv6 address, respectively.
+   * Returns `0` otherwise. Non-strings, empty strings, and strings containing
+   * whitespace always return `0`. Zone IDs (e.g. `fe80::1%lo0`) are accepted.
+   */
+  function isIP(input: unknown): 0 | 4 | 6;
+
   interface NetModule {
     Socket: typeof Socket;
     Server: typeof Server;
     createServer: typeof createServer;
     createConnection: typeof createConnection;
     connect: typeof connect;
+    isIP: typeof isIP;
   }
   const net: NetModule;
+  export { isIP };
   export default net;
 }
 

@@ -32,6 +32,44 @@ it("supports debuglog and util.types predicates", () => {
   expect(types.isDataView(new DataView(new ArrayBuffer(1)))).toBe(true);
 });
 
+describe("util.types / util/types", () => {
+  const _require = require;
+
+  it("loads via util, util/types, and node:util/types with one shared object", () => {
+    const fromUtil = defaultImport.types;
+    const fromSub = _require("util/types");
+    const fromNodeSub = _require("node:util/types");
+    expect(fromUtil).toBe(fromSub);
+    expect(fromUtil).toBe(fromNodeSub);
+  });
+
+  it("isDate covers Date, plain objects, and forged tags", () => {
+    expect(types.isDate(new Date())).toBe(true);
+    expect(types.isDate({})).toBe(false);
+    expect(types.isDate({ [Symbol.toStringTag]: "Date" })).toBe(false);
+    expect(types.isDate(null)).toBe(false);
+    expect(types.isDate("2020-01-01")).toBe(false);
+  });
+});
+
+describe("util.deprecate", () => {
+  it("returns the same function identity and preserves call semantics", () => {
+    const { deprecate } = defaultImport;
+    const fn = function sample(this: { n: number }, x: number) {
+      return this.n + x;
+    };
+    const wrapped = deprecate(fn, "use other", "DEP0000");
+    expect(wrapped).toBe(fn);
+    expect(wrapped.call({ n: 1 }, 2)).toBe(3);
+  });
+
+  it("throws TypeError for non-function arguments", () => {
+    const { deprecate } = defaultImport;
+    expect(() => deprecate(null as any)).toThrow(TypeError);
+    expect(() => deprecate(1 as any)).toThrow(/fn|function/i);
+  });
+});
+
 it("formatWithOptions formats multiple values", () => {
   expect(formatWithOptions({}, "a", "b")).toBe("a b");
   expect(formatWithOptions({ colors: true }, "%s:%s", "foo")).toBe("foo:%s");

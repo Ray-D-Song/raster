@@ -140,10 +140,18 @@ fn create_debuglog<'js>(ctx: &Ctx<'js>) -> Result<Function<'js>> {
     )
 }
 
-fn create_types_object<'js>(ctx: &Ctx<'js>) -> Result<Object<'js>> {
+/// Shared `util.types` / `util/types` object, cached once per isolate via a
+/// non-enumerable `Symbol.for` key so all entry points return the same object.
+fn get_or_create_types_object<'js>(ctx: &Ctx<'js>) -> Result<Object<'js>> {
+    install_type_predicates(ctx)?;
     ctx.eval(
         r#"(function () {
-  return {
+  const KEY = Symbol.for("nodejs.util.types");
+  if (Object.prototype.hasOwnProperty.call(globalThis, KEY) && globalThis[KEY]) {
+    return globalThis[KEY];
+  }
+
+  const types = {
     isProxy(value) {
       return typeof value === "object" && value !== null && globalThis.__rasterIsProxy
         ? globalThis.__rasterIsProxy(value)
@@ -174,6 +182,43 @@ fn create_types_object<'js>(ctx: &Ctx<'js>) -> Result<Object<'js>> {
     isUint8Array(value) {
       return Object.prototype.toString.call(value) === "[object Uint8Array]";
     },
+    // Date brand check: works across realms, rejects plain objects and
+    // Symbol.toStringTag forgeries (unlike Object.prototype.toString alone).
+    isDate(value) {
+      if (typeof value !== "object" || value === null) {
+        return false;
+      }
+      try {
+        Date.prototype.getTime.call(value);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  };
+
+  Object.defineProperty(globalThis, KEY, {
+    value: types,
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  });
+  return types;
+})()"#,
+    )
+}
+
+fn create_deprecate<'js>(ctx: &Ctx<'js>) -> Result<Function<'js>> {
+    // Phase 1: identity wrapper with Node-compatible TypeError on bad args.
+    // Runtime deprecation warnings are intentionally not emitted yet.
+    ctx.eval(
+        r#"(function () {
+  return function deprecate(fn, message, code) {
+    if (typeof fn !== "function") {
+      throw new TypeError('The "fn" argument must be of type function. Received type ' + typeof fn);
+    }
+    // Keep this, arguments, return value, and function identity unchanged.
+    return fn;
   };
 })()"#,
     )
@@ -254,6 +299,7 @@ impl ModuleDef for UtilModule {
         declare.declare("debug")?;
         declare.declare("toUSVString")?;
         declare.declare("types")?;
+        declare.declare("deprecate")?;
         declare.declare("default")?;
         Ok(())
     }
@@ -268,7 +314,8 @@ impl ModuleDef for UtilModule {
             let promisify = create_promisify(ctx)?;
             let to_usv_string = create_to_usv_string(ctx)?;
             let debuglog = create_debuglog(ctx)?;
-            let types = create_types_object(ctx)?;
+            let types = get_or_create_types_object(ctx)?;
+            let deprecate = create_deprecate(ctx)?;
 
             default.set(stringify!(TextEncoder), encoder)?;
             default.set(stringify!(TextDecoder), decoder)?;
@@ -281,6 +328,7 @@ impl ModuleDef for UtilModule {
             default.set("debug", debuglog)?;
             default.set("toUSVString", to_usv_string)?;
             default.set("types", types)?;
+            default.set("deprecate", deprecate)?;
             let inspect_symbol =
                 Symbol::new_global(ctx.clone(), CUSTOM_INSPECT_SYMBOL_DESCRIPTION)?;
             let inspect_value: Value = default.get("inspect")?;
@@ -298,6 +346,48 @@ impl From<UtilModule> for ModuleInfo<UtilModule> {
     fn from(val: UtilModule) -> Self {
         ModuleInfo {
             name: "util",
+            module: val,
+        }
+    }
+}
+
+/// `require("util/types")` / `require("node:util/types")` — same object as `util.types`.
+pub struct UtilTypesModule;
+
+impl ModuleDef for UtilTypesModule {
+    fn declare(declare: &Declarations) -> Result<()> {
+        declare.declare("isProxy")?;
+        declare.declare("isPromise")?;
+        declare.declare("isArrayBuffer")?;
+        declare.declare("isAnyArrayBuffer")?;
+        declare.declare("isSharedArrayBuffer")?;
+        declare.declare("isTypedArray")?;
+        declare.declare("isDataView")?;
+        declare.declare("isUint8Array")?;
+        declare.declare("isDate")?;
+        declare.declare("default")?;
+        Ok(())
+    }
+
+    fn evaluate<'js>(ctx: &Ctx<'js>, exports: &Exports<'js>) -> Result<()> {
+        // Export the shared types object as `default` so CJS `require("util/types")`
+        // returns the same object as `require("util").types` (builtin interop merges
+        // named exports onto the default object when it is an object).
+        let types = get_or_create_types_object(ctx)?;
+        for key in types.keys::<String>() {
+            let key = key?;
+            let value: Value = types.get(&key)?;
+            exports.export(key.as_str(), value)?;
+        }
+        exports.export("default", types)?;
+        Ok(())
+    }
+}
+
+impl From<UtilTypesModule> for ModuleInfo<UtilTypesModule> {
+    fn from(val: UtilTypesModule) -> Self {
+        ModuleInfo {
+            name: "util/types",
             module: val,
         }
     }

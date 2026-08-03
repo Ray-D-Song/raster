@@ -64,6 +64,18 @@ impl<'js> WritableStreamInner<'js> {
             handoff_waiter: Arc::new(Mutex::new(None)),
         }
     }
+
+    /// Whether the writable side has finished (end() completed).
+    #[inline]
+    pub fn is_finished(&self) -> bool {
+        self.is_finished
+    }
+
+    /// Whether the writable side has been destroyed.
+    #[inline]
+    pub fn is_destroyed(&self) -> bool {
+        self.is_destroyed
+    }
 }
 
 #[derive(Debug)]

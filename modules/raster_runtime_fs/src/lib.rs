@@ -8,6 +8,7 @@ mod mkdir;
 mod open;
 mod read_dir;
 mod read_file;
+mod read_stream;
 mod realpath;
 mod rename;
 mod rm;
@@ -32,6 +33,7 @@ use self::mkdir::{mkdir, mkdir_sync, mkdtemp, mkdtemp_sync};
 use self::open::open;
 use self::read_dir::{read_dir, read_dir_sync, Dirent};
 use self::read_file::{read_file, read_file_sync};
+use self::read_stream::create_create_read_stream;
 use self::realpath::{realpath, realpath_promises, realpath_sync};
 use self::rename::{rename, rename_sync};
 use self::rm::{rmdir, rmdir_sync, rmfile, rmfile_sync};
@@ -125,6 +127,7 @@ impl ModuleDef for FsModule {
         declare.declare("realpathSync")?;
         declare.declare("realpath")?;
         declare.declare("existsSync")?;
+        declare.declare("createReadStream")?;
 
         declare.declare("default")?;
 
@@ -173,6 +176,7 @@ impl ModuleDef for FsModule {
             default.set("renameSync", Func::from(rename_sync))?;
             default.set("symlinkSync", Func::from(symlink_sync))?;
             default.set("existsSync", Func::from(exists_sync))?;
+            default.set("createReadStream", create_create_read_stream(ctx)?)?;
 
             let realpath_sync_fn = Function::new(ctx.clone(), realpath_sync)?;
             let realpath_sync_native = Function::new(ctx.clone(), realpath_sync)?;

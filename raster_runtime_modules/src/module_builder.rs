@@ -208,7 +208,8 @@ impl Default for ModuleBuilder {
         {
             builder = builder
                 .with_global(crate::modules::util::init)
-                .with_module(crate::modules::util::UtilModule);
+                .with_module(crate::modules::util::UtilModule)
+                .with_module(crate::modules::util::UtilTypesModule);
         }
         #[cfg(feature = "v8")]
         {

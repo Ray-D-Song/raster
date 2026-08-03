@@ -80,7 +80,17 @@ fn parse_options<'js>(ctx: &Ctx<'js>, value: Option<Value<'js>>) -> Result<Realp
     }
 }
 
-fn path_from_value<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> Result<String> {
+/// Coerce a path-like value to a filesystem string (Node-style broad accept list).
+///
+/// Used by `realpath` / `realpathSync`. Accepts:
+/// - `string`
+/// - any `ArrayBuffer` / TypedArray / DataView byte view via [`ObjectBytes`]
+///   with **strict** UTF-8 (invalid sequences throw; no U+FFFD replacement)
+/// - `URL` with `file:` protocol via [`file_path_from_url`]
+///
+/// For `createReadStream`, use [`path_from_value_create_read_stream`] which
+/// additionally rejects non-Uint8Array views (Node CRS parity).
+pub(crate) fn path_from_value<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> Result<String> {
     if let Ok(url) = Class::<URL>::from_value(&value) {
         return file_path_from_url(ctx, &url.borrow().inner());
     }
@@ -94,6 +104,67 @@ fn path_from_value<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> Result<String> {
                     "The argument 'path' must be a string, Uint8Array, or URL without invalid UTF-8",
                 )
             });
+        }
+    }
+
+    if let Some(string) = value.as_string() {
+        return Ok(string.to_string()?);
+    }
+
+    Err(Exception::throw_type(
+        ctx,
+        "The \"path\" argument must be of type string or an instance of Buffer or URL",
+    ))
+}
+
+/// Strict path coercion for `fs.createReadStream` only.
+///
+/// Same UTF-8 / URL rules as [`path_from_value`], but only `string`, `URL`, and
+/// `Buffer`/`Uint8Array` (`ObjectBytes::U8Array`) are accepted. Other TypedArray /
+/// DataView / bare ArrayBuffer values throw a type error (Node CRS parity).
+///
+/// Detached buffers are mapped to a catchable JS TypeError via
+/// [`ObjectBytes::as_bytes`] — never panic on `TypedArray::as_ref()`.
+pub(crate) fn path_from_value_create_read_stream<'js>(
+    ctx: &Ctx<'js>,
+    value: Value<'js>,
+) -> Result<String> {
+    if let Ok(url) = Class::<URL>::from_value(&value) {
+        return file_path_from_url(ctx, &url.borrow().inner());
+    }
+
+    if let Some(obj) = value.as_object() {
+        if let Some(bytes) = ObjectBytes::from_array_buffer_view(obj)? {
+            match bytes {
+                ObjectBytes::U8Array(typed_array) => {
+                    // Never use TypedArray::as_ref() — it panics when detached.
+                    // as_bytes() returns None for detached buffers; map to TypeError.
+                    let raw = typed_array
+                        .as_bytes()
+                        .ok_or_else(|| Exception::throw_type(ctx, "ArrayBuffer is detached"))?;
+                    return String::from_utf8(raw.to_vec()).map_err(|_| {
+                        Exception::throw_type(
+                            ctx,
+                            "The argument 'path' must be a string, Uint8Array, or URL without invalid UTF-8",
+                        )
+                    });
+                },
+                // DataView, Int8Array, Uint16Array, Uint8ClampedArray, etc.
+                _ => {
+                    return Err(Exception::throw_type(
+                        ctx,
+                        "The \"path\" argument must be of type string or an instance of Buffer or URL",
+                    ));
+                },
+            }
+        }
+
+        // Bare ArrayBuffer is not a view and is rejected for createReadStream.
+        if ObjectBytes::from_array_buffer(obj)?.is_some() {
+            return Err(Exception::throw_type(
+                ctx,
+                "The \"path\" argument must be of type string or an instance of Buffer or URL",
+            ));
         }
     }
 

@@ -1,6 +1,10 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
-use std::{net::SocketAddr, result::Result as StdResult};
+use std::{
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    result::Result as StdResult,
+    str::FromStr,
+};
 
 use raster_runtime_events::Emitter;
 use raster_runtime_utils::{
@@ -10,7 +14,7 @@ use raster_runtime_utils::{
 use rquickjs::{
     module::{Declarations, Exports, ModuleDef},
     prelude::{Func, This},
-    Class, Ctx, IntoJs, Result,
+    Class, Ctx, IntoJs, Result, Value,
 };
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
@@ -139,6 +143,68 @@ async fn rw_join(
     Ok(had_error)
 }
 
+/// Node-compatible scope / zone-id character set for `ip%zone`.
+///
+/// Empirically Node accepts ASCII alphanumerics plus `.`, `:`, and `-`
+/// (`fe80::1%lo0`, `fe80::1%a:b`, `fe80::1%a.b`, `fe80::1%a-b`) and rejects
+/// `_`, `/`, and non-ASCII (e.g. `fe80::1%🚀`).
+fn is_valid_ipv6_zone_id(zone: &str) -> bool {
+    !zone.is_empty()
+        && zone
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b':' | b'-'))
+}
+
+/// Node-compatible `net.isIP(input)` → `0 | 4 | 6`.
+///
+/// Non-strings, empty strings, strings with whitespace, and illegal addresses
+/// return `0`. IPv6 zone IDs (`fe80::1%lo0`) are accepted only when:
+/// - there is exactly one `%`
+/// - the zone id is non-empty and uses the allowed character set
+/// - the host part is a valid IPv6 address (IPv4 must not carry a zone id)
+pub fn is_ip(value: Value<'_>) -> i32 {
+    let Some(js_string) = value.as_string() else {
+        return 0;
+    };
+    let Ok(input) = js_string.to_string() else {
+        return 0;
+    };
+    if input.is_empty() || input.chars().any(|c| c.is_whitespace()) {
+        return 0;
+    }
+
+    if !input.contains('%') {
+        if Ipv4Addr::from_str(&input).is_ok() {
+            return 4;
+        }
+        if Ipv6Addr::from_str(&input).is_ok() {
+            return 6;
+        }
+        return 0;
+    }
+
+    // Zone ID form: only IPv6%zone with a single non-empty zone segment.
+    let mut parts = input.split('%');
+    let Some(host) = parts.next() else {
+        return 0;
+    };
+    let Some(zone) = parts.next() else {
+        return 0;
+    };
+    // Reject empty zone (`fe80::1%`) and multiple `%` (`fe80::1%a%b`).
+    if parts.next().is_some() || !is_valid_ipv6_zone_id(zone) {
+        return 0;
+    }
+    // IPv4 with zone is never valid (Node returns 0 for `127.0.0.1%x`).
+    if Ipv4Addr::from_str(host).is_ok() {
+        return 0;
+    }
+    if Ipv6Addr::from_str(host).is_ok() {
+        return 6;
+    }
+    0
+}
+
 pub struct NetModule;
 
 impl ModuleDef for NetModule {
@@ -146,6 +212,7 @@ impl ModuleDef for NetModule {
         declare.declare("createConnection")?;
         declare.declare("connect")?;
         declare.declare("createServer")?;
+        declare.declare("isIP")?;
         declare.declare(stringify!(Socket))?;
         declare.declare(stringify!(Server))?;
         declare.declare("default")?;
@@ -171,6 +238,7 @@ impl ModuleDef for NetModule {
 
             default.set("createConnection", connect.clone())?;
             default.set("connect", connect)?;
+            default.set("isIP", Func::from(is_ip))?;
             default.set(
                 "createServer",
                 Func::from(|ctx, args| {
