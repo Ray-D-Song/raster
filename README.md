@@ -79,6 +79,7 @@ The test runner also has support for filters. Using filters is as simple as addi
 | node:tty                                         | ✔︎       | ✔︎⚠️            |
 | node:url                                         | ✔︎       | ✔︎⚠️            |
 | node:util                                        | ✔︎       | ✔︎⚠️            |
+| node:util/types                                  | ✔︎       | ✔︎⚠️            |
 | node:v8                                          | ✔︎       | ✔︎⚠️            |
 | node:vm                                          | ✔︎       | ✔︎⚠️            |
 | node:wasi                                        | ✔︎       | ✘              |
@@ -119,6 +120,15 @@ The test runner also has support for filters. Using filters is as simple as addi
 | cjs            | ✔︎              |
 | Intl           | ✔︎⚠️            |
 | Temporal       | ✔︎⚠️            |
+
+### Database driver compatibility
+
+| Package | Tested versions | Local acceptance | CI policy |
+| ------- | --------------- | ---------------- | --------- |
+| `mysql2` | mysql2 3.23.2 / MySQL 8.4 | Node and Raster pass the Promise, callback, transaction, error, and pool fixture | Blocking |
+| `pg` (node-postgres) | pg 8.22.0 / PostgreSQL 16.14 | Node and Raster pass all 25 SCRAM, query, pool, transaction, TLS, cancellation, recovery, notification, shutdown, and `.pgpass` cases | Node baseline and infrastructure are blocking; Raster failures currently emit warnings |
+
+See [`compat/README.md`](compat/README.md) for exact fixture scope, commands, exclusions, and diagnostics.
 
 _⚠️ = partially supported in RASTER_RUNTIME_<br />
 _⏱ = planned partial support_<br />
