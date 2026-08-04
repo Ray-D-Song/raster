@@ -3,19 +3,13 @@ use std::os::raw::{c_int, c_void};
 use std::ptr::{self, NonNull};
 use std::rc::{Rc, Weak};
 
-use rquickjs::qjs;
-use rquickjs::prelude::Rest;
-use rquickjs::{
-    class::Trace,
-    function::Function,
-    Ctx, Error, Object, Persistent, Result, Value,
-};
 use rquickjs::class::Tracer;
+use rquickjs::prelude::Rest;
+use rquickjs::qjs;
+use rquickjs::{class::Trace, function::Function, Ctx, Error, Object, Persistent, Result, Value};
 
 use crate::database::DatabaseInner;
-use crate::error::{
-    throw_invalid_arg_type, throw_sqlite_error, throw_type_error,
-};
+use crate::error::{throw_invalid_arg_type, throw_sqlite_error, throw_type_error};
 use crate::ffi::{
     self, sqlite3_context, sqlite3_value, SQLITE_DETERMINISTIC, SQLITE_DIRECTONLY, SQLITE_UTF8,
 };
@@ -32,11 +26,7 @@ fn record_callback_error<'js>(
         db.set_pending_exception(ctx.catch());
     }
     unsafe {
-        ffi::sqlite3_result_error(
-            sqlite_ctx,
-            c"JavaScript callback failed".as_ptr(),
-            -1,
-        );
+        ffi::sqlite3_result_error(sqlite_ctx, c"JavaScript callback failed".as_ptr(), -1);
     }
 }
 
@@ -76,7 +66,7 @@ impl<'js> ScalarUdf<'js> {
             None => {
                 ffi::sqlite3_result_error(sqlite_ctx, ptr::null(), 0);
                 return;
-            }
+            },
         };
 
         let func = match self_ref.function.clone().restore(&ctx) {
@@ -84,7 +74,7 @@ impl<'js> ScalarUdf<'js> {
             Err(_) => {
                 ffi::sqlite3_result_error(sqlite_ctx, ptr::null(), 0);
                 return;
-            }
+            },
         };
 
         let mut js_args = Vec::with_capacity(argc as usize);
@@ -96,11 +86,11 @@ impl<'js> ScalarUdf<'js> {
                     db.set_pending_exception(ctx.catch());
                     ffi::sqlite3_result_error(sqlite_ctx, ptr::null(), 0);
                     return;
-                }
+                },
                 Err(_) => {
                     ffi::sqlite3_result_error(sqlite_ctx, ptr::null(), 0);
                     return;
-                }
+                },
             }
         }
 
@@ -169,7 +159,7 @@ impl<'js> AggregateUdf<'js> {
                 Err(Error::Exception) => {
                     db.set_pending_exception(ctx.catch());
                     return None;
-                }
+                },
                 Err(_) => return None,
             }
         }
@@ -199,7 +189,7 @@ impl<'js> AggregateUdf<'js> {
             None => {
                 ffi::sqlite3_result_error(sqlite_ctx, ptr::null(), 0);
                 return;
-            }
+            },
         };
 
         if !Self::ensure_state(&ctx, &db, sqlite_ctx, &self_ref.start).is_some() {
@@ -212,7 +202,7 @@ impl<'js> AggregateUdf<'js> {
             Err(_) => {
                 ffi::sqlite3_result_error(sqlite_ctx, ptr::null(), 0);
                 return;
-            }
+            },
         };
 
         Self::invoke_step_with_start(
@@ -255,7 +245,7 @@ impl<'js> AggregateUdf<'js> {
                     ffi::sqlite3_result_error(sqlite_ctx, ptr::null(), 0);
                 }
                 return;
-            }
+            },
         };
 
         let mut js_args = vec![acc_value];
@@ -269,23 +259,23 @@ impl<'js> AggregateUdf<'js> {
                         ffi::sqlite3_result_error(sqlite_ctx, ptr::null(), 0);
                     }
                     return;
-                }
+                },
                 Err(_) => {
                     unsafe {
                         ffi::sqlite3_result_error(sqlite_ctx, ptr::null(), 0);
                     }
                     return;
-                }
+                },
             }
         }
 
         match step_fn.call((Rest(js_args),)) {
             Ok(result) => {
                 db.aggregate_values.borrow_mut().insert(id, result);
-            }
+            },
             Err(e) => {
                 record_callback_error(ctx, db, sqlite_ctx, e);
-            }
+            },
         }
     }
 
@@ -305,7 +295,7 @@ impl<'js> AggregateUdf<'js> {
             None => {
                 ffi::sqlite3_result_error(sqlite_ctx, ptr::null(), 0);
                 return;
-            }
+            },
         };
 
         let inverse = match self_ref.inverse.as_ref() {
@@ -314,7 +304,7 @@ impl<'js> AggregateUdf<'js> {
                 Err(_) => {
                     ffi::sqlite3_result_error(sqlite_ctx, ptr::null(), 0);
                     return;
-                }
+                },
             },
             None => return,
         };
@@ -376,7 +366,7 @@ impl<'js> AggregateUdf<'js> {
                         Self::destroy_state(&db, sqlite_ctx);
                     }
                     return;
-                }
+                },
             };
             let result_fn = match result_p.clone().restore(&ctx) {
                 Ok(f) => f,
@@ -386,7 +376,7 @@ impl<'js> AggregateUdf<'js> {
                         Self::destroy_state(&db, sqlite_ctx);
                     }
                     return;
-                }
+                },
             };
             match result_fn.call((acc,)) {
                 Ok(v) => v,
@@ -397,14 +387,14 @@ impl<'js> AggregateUdf<'js> {
                         Self::destroy_state(&db, sqlite_ctx);
                     }
                     return;
-                }
+                },
                 Err(_) => {
                     ffi::sqlite3_result_error(sqlite_ctx, ptr::null(), 0);
                     if is_final {
                         Self::destroy_state(&db, sqlite_ctx);
                     }
                     return;
-                }
+                },
             }
         } else {
             match db.aggregate_values.borrow().get(&id) {
@@ -415,7 +405,7 @@ impl<'js> AggregateUdf<'js> {
                         Self::destroy_state(&db, sqlite_ctx);
                     }
                     return;
-                }
+                },
             }
         };
 
@@ -464,29 +454,32 @@ fn read_function_options<'js>(
 
     if options.contains_key("deterministic")? {
         let v: Value = options.get("deterministic")?;
-        deterministic = v
-            .as_bool()
-            .ok_or_else(|| throw_invalid_arg_type(ctx, "options.deterministic", "boolean", &js_type_name(&v)))?;
+        deterministic = v.as_bool().ok_or_else(|| {
+            throw_invalid_arg_type(ctx, "options.deterministic", "boolean", &js_type_name(&v))
+        })?;
     }
     if options.contains_key("directOnly")? {
         let v: Value = options.get("directOnly")?;
-        direct_only = v
-            .as_bool()
-            .ok_or_else(|| throw_invalid_arg_type(ctx, "options.directOnly", "boolean", &js_type_name(&v)))?;
+        direct_only = v.as_bool().ok_or_else(|| {
+            throw_invalid_arg_type(ctx, "options.directOnly", "boolean", &js_type_name(&v))
+        })?;
     }
     if options.contains_key("varargs")? {
         let v: Value = options.get("varargs")?;
-        varargs = v
-            .as_bool()
-            .ok_or_else(|| throw_invalid_arg_type(ctx, "options.varargs", "boolean", &js_type_name(&v)))?;
+        varargs = v.as_bool().ok_or_else(|| {
+            throw_invalid_arg_type(ctx, "options.varargs", "boolean", &js_type_name(&v))
+        })?;
     }
     if options.contains_key("useBigIntArguments")? {
         let v: Value = options.get("useBigIntArguments")?;
-        use_bigint_args = v
-            .as_bool()
-            .ok_or_else(|| {
-                throw_invalid_arg_type(ctx, "options.useBigIntArguments", "boolean", &js_type_name(&v))
-            })?;
+        use_bigint_args = v.as_bool().ok_or_else(|| {
+            throw_invalid_arg_type(
+                ctx,
+                "options.useBigIntArguments",
+                "boolean",
+                &js_type_name(&v),
+            )
+        })?;
     }
 
     Ok((deterministic, direct_only, varargs, use_bigint_args))
@@ -499,7 +492,8 @@ pub fn register_scalar_function<'js>(
     options: Object<'js>,
     func: Function<'js>,
 ) -> Result<()> {
-    let (deterministic, direct_only, varargs, use_bigint_args) = read_function_options(ctx, &options)?;
+    let (deterministic, direct_only, varargs, use_bigint_args) =
+        read_function_options(ctx, &options)?;
 
     let c_name = CString::new(name).map_err(|_| Error::Unknown)?;
     let argc = if varargs {
@@ -565,36 +559,35 @@ pub fn register_aggregate<'js>(
     }
 
     let step_v: Value = options.get("step")?;
-    let step = step_v
-        .as_function()
-        .cloned()
-        .ok_or_else(|| throw_invalid_arg_type(ctx, "options.step", "function", &js_type_name(&step_v)))?;
+    let step = step_v.as_function().cloned().ok_or_else(|| {
+        throw_invalid_arg_type(ctx, "options.step", "function", &js_type_name(&step_v))
+    })?;
 
     let result_v: Value = options.get("result")?;
     let result = if result_v.is_undefined() {
         None
     } else {
-        Some(
-            result_v
-                .as_function()
-                .cloned()
-                .ok_or_else(|| throw_invalid_arg_type(ctx, "options.result", "function", &js_type_name(&result_v)))?,
-        )
+        Some(result_v.as_function().cloned().ok_or_else(|| {
+            throw_invalid_arg_type(ctx, "options.result", "function", &js_type_name(&result_v))
+        })?)
     };
 
     let inverse_v: Value = options.get("inverse")?;
     let inverse = if inverse_v.is_undefined() {
         None
     } else {
-        Some(
-            inverse_v
-                .as_function()
-                .cloned()
-                .ok_or_else(|| throw_invalid_arg_type(ctx, "options.inverse", "function", &js_type_name(&inverse_v)))?,
-        )
+        Some(inverse_v.as_function().cloned().ok_or_else(|| {
+            throw_invalid_arg_type(
+                ctx,
+                "options.inverse",
+                "function",
+                &js_type_name(&inverse_v),
+            )
+        })?)
     };
 
-    let (deterministic, direct_only, varargs, use_bigint_args) = read_function_options(ctx, &options)?;
+    let (deterministic, direct_only, varargs, use_bigint_args) =
+        read_function_options(ctx, &options)?;
 
     let mut roots = vec![start_v.clone(), step.clone().into_value()];
     if let Some(r) = &result {

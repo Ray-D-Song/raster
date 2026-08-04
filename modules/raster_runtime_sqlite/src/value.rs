@@ -2,7 +2,10 @@ use raster_runtime_utils::bytes::ObjectBytes;
 use rquickjs::{Array, Ctx, Function, IntoJs, Object, Result, Value};
 
 use crate::error::{throw_invalid_arg_type, throw_out_of_range, throw_sqlite_error};
-use crate::ffi::{self, sqlite3_context, sqlite3_stmt, sqlite3_value, SQLITE_BLOB, SQLITE_FLOAT, SQLITE_INTEGER, SQLITE_NULL, SQLITE_TEXT};
+use crate::ffi::{
+    self, sqlite3_context, sqlite3_stmt, sqlite3_value, SQLITE_BLOB, SQLITE_FLOAT, SQLITE_INTEGER,
+    SQLITE_NULL, SQLITE_TEXT,
+};
 use crate::path::{copy_buffer_to_uint8array, null_prototype_object};
 
 pub const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
@@ -46,11 +49,9 @@ pub fn sqlite_value_to_js<'js>(
                 }
                 Err(throw_out_of_range(
                     ctx,
-                    format!(
-                        "Value is too large to be represented as a JavaScript number: {val}"
-                    ),
+                    format!("Value is too large to be represented as a JavaScript number: {val}"),
                 ))
-            }
+            },
             SQLITE_FLOAT => Ok(Value::new_float(
                 ctx.clone(),
                 ffi::sqlite3_value_double(value),
@@ -64,20 +65,29 @@ pub fn sqlite_value_to_js<'js>(
                 let s = std::str::from_utf8(&bytes[..end])
                     .map_err(|_| throw_invalid_arg_type(ctx, "value", "string", "invalid utf8"))?;
                 s.into_js(ctx)
-            }
+            },
             SQLITE_BLOB => {
                 let len = ffi::sqlite3_value_bytes(value) as usize;
                 let ptr = ffi::sqlite3_value_blob(value) as *const u8;
                 let data = sqlite_bytes(ptr, len)
                     .map_err(|_| throw_invalid_arg_type(ctx, "value", "blob", "invalid"))?;
                 copy_buffer_to_uint8array(ctx, data).map(|v| v.into_value())
-            }
-            _ => Err(throw_invalid_arg_type(ctx, "value", "sqlite value", "unknown")),
+            },
+            _ => Err(throw_invalid_arg_type(
+                ctx,
+                "value",
+                "sqlite value",
+                "unknown",
+            )),
         }
     }
 }
 
-pub fn js_to_sqlite_result<'js>(ctx: &Ctx<'js>, sqlite_ctx: *mut sqlite3_context, value: Value<'js>) {
+pub fn js_to_sqlite_result<'js>(
+    ctx: &Ctx<'js>,
+    sqlite_ctx: *mut sqlite3_context,
+    value: Value<'js>,
+) {
     unsafe {
         if value.is_null() || value.is_undefined() {
             ffi::sqlite3_result_null(sqlite_ctx);
@@ -99,14 +109,10 @@ pub fn js_to_sqlite_result<'js>(ctx: &Ctx<'js>, sqlite_ctx: *mut sqlite3_context
                         );
                         return;
                     }
-                }
-                Err(_) => {}
+                },
+                Err(_) => {},
             }
-            ffi::sqlite3_result_error(
-                sqlite_ctx,
-                c"invalid string".as_ptr(),
-                -1,
-            );
+            ffi::sqlite3_result_error(sqlite_ctx, c"invalid string".as_ptr(), -1);
             return;
         }
         if value.is_big_int() {
@@ -170,11 +176,9 @@ pub fn column_to_js<'js>(
                 }
                 Err(throw_out_of_range(
                     ctx,
-                    format!(
-                        "Value is too large to be represented as a JavaScript number: {val}"
-                    ),
+                    format!("Value is too large to be represented as a JavaScript number: {val}"),
                 ))
-            }
+            },
             SQLITE_FLOAT => Ok(Value::new_float(
                 ctx.clone(),
                 ffi::sqlite3_column_double(stmt, column),
@@ -188,15 +192,20 @@ pub fn column_to_js<'js>(
                 let s = std::str::from_utf8(&bytes[..end])
                     .map_err(|_| throw_invalid_arg_type(ctx, "value", "string", "invalid utf8"))?;
                 s.into_js(ctx)
-            }
+            },
             SQLITE_BLOB => {
                 let len = ffi::sqlite3_column_bytes(stmt, column) as usize;
                 let ptr = ffi::sqlite3_column_blob(stmt, column) as *const u8;
                 let data = sqlite_bytes(ptr, len)
                     .map_err(|_| throw_invalid_arg_type(ctx, "value", "blob", "invalid"))?;
                 copy_buffer_to_uint8array(ctx, data).map(|v| v.into_value())
-            }
-            _ => Err(throw_invalid_arg_type(ctx, "value", "sqlite value", "unknown")),
+            },
+            _ => Err(throw_invalid_arg_type(
+                ctx,
+                "value",
+                "sqlite value",
+                "unknown",
+            )),
         }
     }
 }
@@ -260,21 +269,20 @@ pub fn bind_js_value<'js>(
             let text = s.to_string()?;
             let bytes = text.as_bytes();
             let len = checked_sqlite_len(ctx, bytes.len())?;
-            let r = ffi::raster_sqlite3_bind_text_transient(
-                stmt,
-                index,
-                bytes.as_ptr().cast(),
-                len,
-            );
+            let r =
+                ffi::raster_sqlite3_bind_text_transient(stmt, index, bytes.as_ptr().cast(), len);
             if r != ffi::SQLITE_OK {
                 return Err(throw_sqlite_error(ctx, ptr::null_mut()));
             }
             return Ok(());
         }
         if value.is_big_int() {
-            let v = value.as_big_int().unwrap().clone().to_i64().map_err(|_| {
-                throw_out_of_range(ctx, "BigInt value is too large for SQLite")
-            })?;
+            let v = value
+                .as_big_int()
+                .unwrap()
+                .clone()
+                .to_i64()
+                .map_err(|_| throw_out_of_range(ctx, "BigInt value is too large for SQLite"))?;
             let r = ffi::sqlite3_bind_int64(stmt, index, v);
             if r != ffi::SQLITE_OK {
                 return Err(throw_sqlite_error(ctx, ptr::null_mut()));
@@ -285,12 +293,8 @@ pub fn bind_js_value<'js>(
             if let Ok(Some(bytes)) = ObjectBytes::from_array_buffer_view(obj) {
                 let data = bytes.as_bytes(ctx)?;
                 let len = checked_sqlite_len(ctx, data.len())?;
-                let r = ffi::raster_sqlite3_bind_blob_transient(
-                    stmt,
-                    index,
-                    data.as_ptr().cast(),
-                    len,
-                );
+                let r =
+                    ffi::raster_sqlite3_bind_blob_transient(stmt, index, data.as_ptr().cast(), len);
                 if r != ffi::SQLITE_OK {
                     return Err(throw_sqlite_error(ctx, ptr::null_mut()));
                 }
@@ -313,7 +317,11 @@ pub fn is_plain_named_params<'js>(value: &Value<'js>) -> bool {
         if obj.is_array() {
             return false;
         }
-        if ObjectBytes::from_array_buffer_view(obj).ok().flatten().is_some() {
+        if ObjectBytes::from_array_buffer_view(obj)
+            .ok()
+            .flatten()
+            .is_some()
+        {
             return false;
         }
         return true;

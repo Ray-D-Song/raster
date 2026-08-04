@@ -53,12 +53,8 @@ pub type sqlite3_session = c_void;
 pub type sqlite3_backup = c_void;
 pub type sqlite3_int64 = i64;
 
-pub type xFunc = Option<
-    unsafe extern "C" fn(*mut sqlite3_context, c_int, *mut *mut sqlite3_value),
->;
-pub type xStep = Option<
-    unsafe extern "C" fn(*mut sqlite3_context, c_int, *mut *mut sqlite3_value),
->;
+pub type xFunc = Option<unsafe extern "C" fn(*mut sqlite3_context, c_int, *mut *mut sqlite3_value)>;
+pub type xStep = Option<unsafe extern "C" fn(*mut sqlite3_context, c_int, *mut *mut sqlite3_value)>;
 pub type xFinal = Option<unsafe extern "C" fn(*mut sqlite3_context)>;
 pub type xDestroy = Option<unsafe extern "C" fn(*mut c_void)>;
 
@@ -231,10 +227,7 @@ extern "C" {
     ) -> c_int;
     pub fn sqlite3session_delete(p_session: *mut sqlite3_session);
     pub fn sqlite3session_enable(p_session: *mut sqlite3_session, b_enable: c_int) -> c_int;
-    pub fn sqlite3session_attach(
-        p_session: *mut sqlite3_session,
-        z_tab: *const c_char,
-    ) -> c_int;
+    pub fn sqlite3session_attach(p_session: *mut sqlite3_session, z_tab: *const c_char) -> c_int;
     pub fn sqlite3session_changeset(
         p_session: *mut sqlite3_session,
         pn_changeset: *mut c_int,
@@ -250,15 +243,9 @@ extern "C" {
         db: *mut sqlite3,
         n_changeset: c_int,
         p_changeset: *mut c_void,
-        x_filter: Option<
-            unsafe extern "C" fn(*mut c_void, *const c_char) -> c_int,
-        >,
+        x_filter: Option<unsafe extern "C" fn(*mut c_void, *const c_char) -> c_int>,
         x_conflict: Option<
-            unsafe extern "C" fn(
-                *mut c_void,
-                c_int,
-                *mut sqlite3_changeset_iter,
-            ) -> c_int,
+            unsafe extern "C" fn(*mut c_void, c_int, *mut sqlite3_changeset_iter) -> c_int,
         >,
         p_ctx: *mut c_void,
     ) -> c_int;

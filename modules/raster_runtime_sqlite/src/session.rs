@@ -7,16 +7,16 @@ use std::rc::{Rc, Weak};
 use rquickjs::class::Trace;
 use rquickjs::function::Opt;
 use rquickjs::qjs;
-use rquickjs::{Class, Ctx, Error, Function, IntoJs, JsLifetime, Object, Persistent, Result, TypedArray, Value};
+use rquickjs::{
+    Class, Ctx, Error, Function, IntoJs, JsLifetime, Object, Persistent, Result, TypedArray, Value,
+};
 
 use crate::database::DatabaseInner;
 use crate::error::{
     throw_illegal_constructor, throw_invalid_arg_type, throw_invalid_state, throw_sqlite_error,
     throw_type_error_code,
 };
-use crate::ffi::{
-    self, sqlite3_session, SQLITE_ABORT, SQLITE_CHANGESET_ABORT, SQLITE_OK,
-};
+use crate::ffi::{self, sqlite3_session, SQLITE_ABORT, SQLITE_CHANGESET_ABORT, SQLITE_OK};
 use crate::path::js_type_name;
 use crate::value::{checked_sqlite_len, sqlite_bytes};
 
@@ -64,9 +64,8 @@ fn has_own_property(ctx: &Ctx<'_>, object: &Object<'_>, key: &str) -> Result<boo
         getter: qjs::JS_UNDEFINED,
         setter: qjs::JS_UNDEFINED,
     };
-    let rc = unsafe {
-        qjs::JS_GetOwnProperty(ctx.as_raw().as_ptr(), &mut desc, object.as_raw(), atom)
-    };
+    let rc =
+        unsafe { qjs::JS_GetOwnProperty(ctx.as_raw().as_ptr(), &mut desc, object.as_raw(), atom) };
     unsafe {
         qjs::JS_FreeAtom(ctx.as_raw().as_ptr(), atom);
     }
@@ -136,9 +135,7 @@ pub fn create_session<'js>(
 
     let c_db = CString::new(db_name).map_err(|_| rquickjs::Error::Unknown)?;
     let mut session_ptr: *mut sqlite3_session = ptr::null_mut();
-    let r = unsafe {
-        ffi::sqlite3session_create(db.connection(), c_db.as_ptr(), &mut session_ptr)
-    };
+    let r = unsafe { ffi::sqlite3session_create(db.connection(), c_db.as_ptr(), &mut session_ptr) };
     if r != SQLITE_OK {
         return Err(throw_sqlite_error(ctx, db.connection()));
     }
@@ -252,7 +249,7 @@ impl<'js> ChangesetCallbackContext<'js> {
             Err(Error::Exception) => {
                 db.set_pending_exception(ctx.catch());
                 0
-            }
+            },
             Err(_) => 0,
         }
     }
@@ -286,7 +283,7 @@ impl<'js> ChangesetCallbackContext<'js> {
             Err(Error::Exception) => {
                 db.set_pending_exception(ctx.catch());
                 SQLITE_CHANGESET_ABORT
-            }
+            },
             Err(_) => -1,
         }
     }
@@ -341,31 +338,21 @@ pub fn apply_changeset<'js>(
                     if value.is_null() { "null" } else { "undefined" },
                 ));
             }
-            filter_fn = Some(
-                value
-                    .as_function()
-                    .cloned()
-                    .ok_or_else(|| {
-                        throw_invalid_arg_type(ctx, "options.filter", "function", &js_type_name(&value))
-                    })?,
-            );
+            filter_fn = Some(value.as_function().cloned().ok_or_else(|| {
+                throw_invalid_arg_type(ctx, "options.filter", "function", &js_type_name(&value))
+            })?);
         }
 
         let on_conflict_value: Value = object.get("onConflict")?;
         if !on_conflict_value.is_undefined() {
-            on_conflict_fn = Some(
-                on_conflict_value
-                    .as_function()
-                    .cloned()
-                    .ok_or_else(|| {
-                        throw_invalid_arg_type(
-                            ctx,
-                            "options.onConflict",
-                            "function",
-                            &js_type_name(&on_conflict_value),
-                        )
-                    })?,
-            );
+            on_conflict_fn = Some(on_conflict_value.as_function().cloned().ok_or_else(|| {
+                throw_invalid_arg_type(
+                    ctx,
+                    "options.onConflict",
+                    "function",
+                    &js_type_name(&on_conflict_value),
+                )
+            })?);
         }
     }
 
@@ -377,15 +364,32 @@ pub fn apply_changeset<'js>(
     };
 
     let x_filter = if callback_ctx.filter.is_some() {
-        Some(ChangesetCallbackContext::<'js>::x_filter as unsafe extern "C" fn(*mut c_void, *const std::os::raw::c_char) -> c_int)
+        Some(
+            ChangesetCallbackContext::<'js>::x_filter
+                as unsafe extern "C" fn(*mut c_void, *const std::os::raw::c_char) -> c_int,
+        )
     } else {
         None
     };
 
     let x_conflict = if callback_ctx.on_conflict.is_some() {
-        Some(ChangesetCallbackContext::<'js>::x_conflict as unsafe extern "C" fn(*mut c_void, c_int, *mut ffi::sqlite3_changeset_iter) -> c_int)
+        Some(
+            ChangesetCallbackContext::<'js>::x_conflict
+                as unsafe extern "C" fn(
+                    *mut c_void,
+                    c_int,
+                    *mut ffi::sqlite3_changeset_iter,
+                ) -> c_int,
+        )
     } else {
-        Some(ChangesetCallbackContext::<'js>::x_conflict_default as unsafe extern "C" fn(*mut c_void, c_int, *mut ffi::sqlite3_changeset_iter) -> c_int)
+        Some(
+            ChangesetCallbackContext::<'js>::x_conflict_default
+                as unsafe extern "C" fn(
+                    *mut c_void,
+                    c_int,
+                    *mut ffi::sqlite3_changeset_iter,
+                ) -> c_int,
+        )
     };
 
     let changeset_len = checked_sqlite_len(ctx, data.len())?;

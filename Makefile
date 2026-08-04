@@ -149,7 +149,7 @@ run-ssr: js
 compat: compat-next compat-vite-plus compat-better-sqlite3 compat-mysql compat-node-postgres compat-napi compat-v8 compat-node-sqlite
 
 compat-v8: js
-	$(CARGO) build --features v8-compat
+	$(CARGO) build -p raster_runtime --features v8-compat
 	cd compat/v8-hello && npm run build
 	RASTER_RUNTIME=$(RASTER_RUNTIME) node compat/run.mjs v8-hello $(RASTER_RUNTIME)
 
@@ -158,14 +158,14 @@ compat-next: js
 	node compat/run.mjs next $(RASTER_RUNTIME)
 
 compat-vite-plus: js
-	$(CARGO) build --features napi
+	$(CARGO) build -p raster_runtime --features napi
 	# Install baseline must satisfy vite-plus engines (^20.19 || ^22.18 || >=24.11).
 	# Raster process identity is 24.3.0; do not use system Node 24.3 for yarn install.
 	cd compat/vite-plus && yarn install --frozen-lockfile
 	node compat/run.mjs vite-plus $(RASTER_RUNTIME)
 
 compat-better-sqlite3: js
-	$(CARGO) build --features v8-compat
+	$(CARGO) build -p raster_runtime --features v8-compat
 	cd compat/better-sqlite3 && yarn install --frozen-lockfile
 	RASTER_RUNTIME=$(RASTER_RUNTIME) node compat/run.mjs better-sqlite3 $(RASTER_RUNTIME)
 
@@ -185,12 +185,12 @@ sanitizer-ci:
 	bash v8_compat/tools/run_sanitizer_ci.sh undefined
 
 compat-napi: js
-	$(CARGO) build --features napi
+	$(CARGO) build -p raster_runtime --features napi
 	cd compat/napi-hello && yarn install
 	RASTER_RUNTIME=$(RASTER_RUNTIME) node compat/run.mjs napi-hello $(RASTER_RUNTIME)
 
 compat-node-sqlite: js
-	$(CARGO) build
+	$(CARGO) build -p raster_runtime
 	RASTER_RUNTIME=$(RASTER_RUNTIME) node compat/run.mjs node-sqlite $(RASTER_RUNTIME)
 
 compat-node-sqlite-asan:

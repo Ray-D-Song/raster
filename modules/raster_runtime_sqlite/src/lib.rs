@@ -19,13 +19,13 @@ use rquickjs::{
 
 use crate::backup::backup;
 use crate::database::{install_database_sync_extras, DatabaseSync};
-use crate::statement::{install_statement_iterator_prototype, StatementSync};
 use crate::ffi::{
-    SQLITE_CHANGESET_ABORT, SQLITE_CHANGESET_CONSTRAINT, SQLITE_CHANGESET_DATA,
-    SQLITE_CHANGESET_FOREIGN_KEY, SQLITE_CHANGESET_NOTFOUND, SQLITE_CHANGESET_OMIT,
-    SQLITE_CHANGESET_REPLACE, SQLITE_CHANGESET_CONFLICT,
+    SQLITE_CHANGESET_ABORT, SQLITE_CHANGESET_CONFLICT, SQLITE_CHANGESET_CONSTRAINT,
+    SQLITE_CHANGESET_DATA, SQLITE_CHANGESET_FOREIGN_KEY, SQLITE_CHANGESET_NOTFOUND,
+    SQLITE_CHANGESET_OMIT, SQLITE_CHANGESET_REPLACE,
 };
 use crate::session::Session;
+use crate::statement::{install_statement_iterator_prototype, StatementSync};
 
 pub const NODE_SQLITE_MODULE_NAME: &str = "node:sqlite";
 pub const SQLITE_VERSION: &str = "3.50.1";
@@ -113,8 +113,14 @@ impl ModuleDef for SqliteModule {
         default.set("constants", constants.clone())?;
         default.set("backup", Func::from(backup))?;
 
-        exports.export("DatabaseSync", default.get::<_, rquickjs::Value>("DatabaseSync")?)?;
-        exports.export("StatementSync", default.get::<_, rquickjs::Value>("StatementSync")?)?;
+        exports.export(
+            "DatabaseSync",
+            default.get::<_, rquickjs::Value>("DatabaseSync")?,
+        )?;
+        exports.export(
+            "StatementSync",
+            default.get::<_, rquickjs::Value>("StatementSync")?,
+        )?;
         exports.export("constants", constants)?;
         exports.export("backup", default.get::<_, rquickjs::Value>("backup")?)?;
         exports.export("default", default)?;

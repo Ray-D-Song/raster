@@ -55,11 +55,7 @@ pub fn throw_out_of_range(ctx: &Ctx<'_>, message: impl AsRef<str>) -> Error {
 }
 
 pub fn throw_illegal_constructor(ctx: &Ctx<'_>) -> Error {
-    throw_type_error_code(
-        ctx,
-        "ERR_ILLEGAL_CONSTRUCTOR",
-        "Illegal constructor",
-    )
+    throw_type_error_code(ctx, "ERR_ILLEGAL_CONSTRUCTOR", "Illegal constructor")
 }
 
 pub fn make_sqlite_error<'js>(ctx: &Ctx<'js>, db: *mut sqlite3) -> Result<Value<'js>> {
@@ -91,7 +87,9 @@ fn make_sqlite_error_parts<'js>(
     errstr: &str,
 ) -> Result<Value<'js>> {
     let primordials = BasePrimordials::get(ctx)?;
-    let err: Object = primordials.constructor_error.construct((message.to_string(),))?;
+    let err: Object = primordials
+        .constructor_error
+        .construct((message.to_string(),))?;
     err.set("code", "ERR_SQLITE_ERROR")?;
     err.set("errcode", errcode)?;
     err.set("errstr", errstr)?;

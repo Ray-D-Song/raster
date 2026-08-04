@@ -10,6 +10,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Fetch Node 24.3 source
+        run: |
+          git submodule sync -- refs/node
+          git submodule update --init --depth 1 refs/node
+          test "$(git -C refs/node rev-parse HEAD)" = \
+            "741975041995a272ff7e378bcbb6d6fa4b93f38f"
+          grep -q '#define NODE_MAJOR_VERSION 24' refs/node/src/node_version.h
+          grep -q '#define NODE_MINOR_VERSION 3' refs/node/src/node_version.h
       - uses: actions/setup-node@v4
         with:
           node-version: 22.18.0
@@ -27,7 +35,7 @@ jobs:
       - run: cargo test -p raster_runtime_sqlite --all-targets
       - run: make js JS_MINIFY=0
       - name: Build raster_runtime (napi) for JS unit gates
-        run: cargo build --features napi
+        run: cargo build -p raster_runtime --features napi
       - name: JS unit gates
         env:
           RASTER_RUNTIME_ASYNC_HOOKS: "1"
@@ -45,11 +53,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24.3.0
+      - run: yarn install --frozen-lockfile
       - run: make js JS_MINIFY=0
       - name: Build raster_runtime and sqlite extension
+        env:
+          CC: clang
         run: |
-          cargo build
+          cargo build -p raster_runtime
           node compat/node-sqlite/build-extension.mjs
+          if (-not (Test-Path compat/node-sqlite/build/sqlite_extension.dll)) {
+            throw "missing compat/node-sqlite/build/sqlite_extension.dll"
+          }
       - name: JS sqlite unit tests
         run: ./target/debug/raster_runtime.exe test -d bundle/js/__tests__/unit --filter sqlite
       - name: Parity differential (Raster only on Windows CI)
@@ -82,6 +96,14 @@ jobs:
         sanitizer: [address, undefined]
     steps:
       - uses: actions/checkout@v4
+      - name: Fetch Node 24.3 source
+        run: |
+          git submodule sync -- refs/node
+          git submodule update --init --depth 1 refs/node
+          test "$(git -C refs/node rev-parse HEAD)" = \
+            "741975041995a272ff7e378bcbb6d6fa4b93f38f"
+          grep -q '#define NODE_MAJOR_VERSION 24' refs/node/src/node_version.h
+          grep -q '#define NODE_MINOR_VERSION 3' refs/node/src/node_version.h
       - uses: actions/setup-node@v4
         with:
           node-version: 24.3.0
@@ -99,6 +121,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Fetch Node 24.3 source
+        run: |
+          git submodule sync -- refs/node
+          git submodule update --init --depth 1 refs/node
+          test "$(git -C refs/node rev-parse HEAD)" = \
+            "741975041995a272ff7e378bcbb6d6fa4b93f38f"
+          grep -q '#define NODE_MAJOR_VERSION 24' refs/node/src/node_version.h
+          grep -q '#define NODE_MINOR_VERSION 3' refs/node/src/node_version.h
       - uses: actions/setup-node@v4
         with:
           node-version: 24.3.0
@@ -109,6 +139,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Fetch Node 24.3 source
+        run: |
+          git submodule sync -- refs/node
+          git submodule update --init --depth 1 refs/node
+          test "$(git -C refs/node rev-parse HEAD)" = \
+            "741975041995a272ff7e378bcbb6d6fa4b93f38f"
+          grep -q '#define NODE_MAJOR_VERSION 24' refs/node/src/node_version.h
+          grep -q '#define NODE_MINOR_VERSION 3' refs/node/src/node_version.h
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo clippy -p v8_compat --all-targets -- -D warnings
 
@@ -156,7 +194,7 @@ jobs:
       - run: make js JS_MINIFY=0
       - uses: dtolnay/rust-toolchain@stable
       - name: Build raster_runtime
-        run: cargo build
+        run: cargo build -p raster_runtime
       - run: make compat-mysql
       - if: always()
         uses: actions/upload-artifact@v4
@@ -178,7 +216,7 @@ jobs:
       - run: make js JS_MINIFY=0
       - uses: dtolnay/rust-toolchain@stable
       - name: Build raster_runtime
-        run: cargo build
+        run: cargo build -p raster_runtime
       - run: make compat-node-postgres
       - if: always()
         uses: actions/upload-artifact@v4
@@ -222,6 +260,15 @@ jobs:
             os: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Fetch Node 24.3 source
+        if: matrix.case == 'v8-hello' || matrix.case == 'better-sqlite3'
+        run: |
+          git submodule sync -- refs/node
+          git submodule update --init --depth 1 refs/node
+          test "$(git -C refs/node rev-parse HEAD)" = \
+            "741975041995a272ff7e378bcbb6d6fa4b93f38f"
+          grep -q '#define NODE_MAJOR_VERSION 24' refs/node/src/node_version.h
+          grep -q '#define NODE_MINOR_VERSION 3' refs/node/src/node_version.h
       - uses: actions/setup-node@v4
         with:
           # Vite+ / Next install with Node 22.18 (not system 24.3). V8 fixtures pin 24.3 ABI.
@@ -236,7 +283,7 @@ jobs:
           if [ "${{ matrix.case }}" = "napi-hello" ] || [ "${{ matrix.case }}" = "vite-plus" ]; then FEATURES="--features napi"; fi
           if [ "${{ matrix.case }}" = "better-sqlite3" ] || [ "${{ matrix.case }}" = "v8-hello" ]; then FEATURES="--features v8-compat"; fi
           if [ "${{ matrix.case }}" = "node-sqlite" ]; then FEATURES=""; fi
-          cargo build $FEATURES
+          cargo build -p raster_runtime $FEATURES
       - name: Run compatibility fixture
         env:
           COMPAT_VP_VERSION_LOOPS: ${{ matrix.case == 'vite-plus' && '100' || '0' }}

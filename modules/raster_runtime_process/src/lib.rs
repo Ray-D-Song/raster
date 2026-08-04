@@ -64,9 +64,15 @@ fn emit_warning<'js>(_ctx: Ctx<'js>, message: String, type_or_opts: Opt<Value<'j
     }
 
     if TRACE_WARNINGS.load(Ordering::Relaxed) {
-        eprintln!("(node:{pid}) [{warning_type}] {message}", pid = std::process::id());
+        eprintln!(
+            "(node:{pid}) [{warning_type}] {message}",
+            pid = std::process::id()
+        );
     } else {
-        eprintln!("(node:{pid}) [{warning_type}] {message}", pid = std::process::id());
+        eprintln!(
+            "(node:{pid}) [{warning_type}] {message}",
+            pid = std::process::id()
+        );
     }
     Ok(())
 }
@@ -97,8 +103,26 @@ const EVENT_EMITTER_METHODS: &[&str] = &[
 ];
 
 const PROCESS_NAMED_EXPORTS: &[&str] = &[
-    "env", "cwd", "chdir", "argv0", "id", "pid", "argv", "platform", "arch", "hrtime", "release",
-    "version", "versions", "exitCode", "exit", "kill", "nextTick", "stdin", "stdout", "stderr",
+    "env",
+    "cwd",
+    "chdir",
+    "argv0",
+    "id",
+    "pid",
+    "argv",
+    "platform",
+    "arch",
+    "hrtime",
+    "release",
+    "version",
+    "versions",
+    "exitCode",
+    "exit",
+    "kill",
+    "nextTick",
+    "stdin",
+    "stdout",
+    "stderr",
     "emitWarning",
 ];
 

@@ -1,28 +1,62 @@
 #!/usr/bin/env bash
-# Verify V8/Node ABI 137 constants against Node 24.3.0 headers (nvm).
+# Verify V8/Node ABI 137 constants against Node 24.3.0 headers.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 TOOLS="$ROOT/v8_compat/tools"
 GEN_HDR="$ROOT/v8_compat/cpp/include/abi_137_generated.h"
+NODE_COMMIT="741975041995a272ff7e378bcbb6d6fa4b93f38f"
 
-node_include() {
+assert_node_version_header() {
+  local header="$1"
+  if ! grep -q '#define NODE_MAJOR_VERSION 24' "$header"; then
+    echo "ABI check: expected Node 24.x in $header" >&2
+    exit 1
+  fi
+  if ! grep -q '#define NODE_MINOR_VERSION 3' "$header"; then
+    echo "ABI check: expected Node 24.3.x in $header" >&2
+    exit 1
+  fi
+}
+
+node_include_dirs() {
   if [[ -n "${RASTER_NODE24_INCLUDE:-}" ]]; then
-    echo "$RASTER_NODE24_INCLUDE"
+    echo "${RASTER_NODE24_INCLUDE}"
+    if [[ -f "${RASTER_NODE24_INCLUDE}/v8.h" ]]; then
+      echo "${RASTER_NODE24_INCLUDE}"
+    else
+      echo "${RASTER_NODE24_INCLUDE}/../deps/v8/include"
+    fi
     return
   fi
   if [[ -n "${HOME:-}" ]]; then
     local nvm="$HOME/.nvm/versions/node/v24.3.0/include/node"
     if [[ -f "$nvm/v8.h" ]]; then
       echo "$nvm"
+      echo "$nvm"
       return
     fi
   fi
-  echo "Node 24.3.0 headers not found. Install via nvm or set RASTER_NODE24_INCLUDE." >&2
+  local node_src="$ROOT/refs/node/src"
+  local v8_include="$ROOT/refs/node/deps/v8/include"
+  if [[ -f "$node_src/node_version.h" ]]; then
+    echo "$node_src"
+    echo "$v8_include"
+    return
+  fi
+  echo "Node 24.3.0 headers not found. Install via nvm, set RASTER_NODE24_INCLUDE, or init refs/node." >&2
   exit 1
 }
 
-NODE_INC="$(node_include)"
+NODE_DIRS="$(node_include_dirs)"
+NODE_INC="$(echo "$NODE_DIRS" | sed -n '1p')"
+V8_INC="$(echo "$NODE_DIRS" | sed -n '2p')"
+
+if [[ ! -f "$NODE_INC/node_version.h" && -f "$NODE_INC/src/node_version.h" ]]; then
+  NODE_INC="$NODE_INC/src"
+fi
+assert_node_version_header "$NODE_INC/node_version.h"
+
 CXX="${CXX:-clang++}"
 
 build_probe() {
@@ -31,6 +65,7 @@ build_probe() {
   shift 2
   "$CXX" -std=c++20 -DNODE_MODULE_VERSION=137 \
     -I"$NODE_INC" \
+    -I"$V8_INC" \
     -I"$ROOT/v8_compat/cpp/include" \
     "$src" -o "$out" "$@"
 }
@@ -91,5 +126,13 @@ expect_macro RASTER_V8_K_EMPTY_STRING_ROOT_INDEX "$(json_int kEmptyStringRootInd
 expect_macro RASTER_V8_FUNCTION_CALLBACK_K_RETURN_VALUE_INDEX "$(json_int function_callback_k_return_value_index)"
 expect_macro RASTER_V8_PROPERTY_CALLBACK_K_RETURN_VALUE_INDEX "$(json_int property_callback_k_return_value_index)"
 expect_macro RASTER_V8_PROPERTY_CALLBACK_K_THIS_INDEX "$(json_int property_callback_k_this_index)"
+
+if [[ -d "$ROOT/refs/node/.git" ]]; then
+  actual="$(git -C "$ROOT/refs/node" rev-parse HEAD)"
+  if [[ "$actual" != "$NODE_COMMIT" ]]; then
+    echo "ABI check: refs/node HEAD is $actual, expected $NODE_COMMIT" >&2
+    exit 1
+  fi
+fi
 
 echo "V8 ABI 137 check OK (Node 24.3.0 headers at $NODE_INC)"

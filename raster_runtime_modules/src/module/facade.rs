@@ -50,8 +50,7 @@ fn is_builtin_request(ctx: &Ctx<'_>, request: &str) -> bool {
 }
 
 fn resolve_builtin_request(ctx: &Ctx<'_>, request: &str) -> Option<String> {
-    ctx.userdata::<ModuleNames>()?
-        .resolve_builtin(request)
+    ctx.userdata::<ModuleNames>()?.resolve_builtin(request)
 }
 
 pub fn canonical_parent_filename(ctx: &Ctx<'_>, parent: Option<Object<'_>>) -> Result<String> {

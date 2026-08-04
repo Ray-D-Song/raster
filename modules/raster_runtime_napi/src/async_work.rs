@@ -1,14 +1,13 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::cell::UnsafeCell;
 use std::collections::{HashMap, VecDeque};
 use std::os::raw::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
+use std::thread::ThreadId;
 
-use libc::pthread_t;
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex, MutexGuard};
 use rquickjs::qjs::{self, JSValue};
 
 use crate::driver::{ensure_driver, DriverJob, DriverState};
@@ -294,67 +293,110 @@ impl From<QueuePushResult> for QueueAdmissionResult {
     }
 }
 
-/// TSFN payload queue: `pthread_mutex` + `pthread_cond` for Node-API queue semantics.
-struct TsfnQueue {
-    mutex: UnsafeCell<libc::pthread_mutex_t>,
-    cond: UnsafeCell<libc::pthread_cond_t>,
-    items: UnsafeCell<VecDeque<usize>>,
-    /// `0` means unlimited queue size.
-    max_size: usize,
-    closed: UnsafeCell<bool>,
+/// TSFN payload queue backed by `parking_lot` for cross-platform queue semantics.
+struct TsfnQueueState {
+    items: VecDeque<usize>,
+    closed: bool,
 }
 
-unsafe impl Send for TsfnQueue {}
-unsafe impl Sync for TsfnQueue {}
+struct TsfnQueue {
+    state: Mutex<TsfnQueueState>,
+    changed: Condvar,
+    /// `0` means unlimited queue size.
+    max_size: usize,
+}
 
 impl TsfnQueue {
     fn new(max_queue_size: usize) -> Self {
-        let mutex = UnsafeCell::new(unsafe { std::mem::zeroed() });
-        let cond = UnsafeCell::new(unsafe { std::mem::zeroed() });
-        unsafe {
-            libc::pthread_mutex_init(mutex.get(), std::ptr::null());
-            libc::pthread_cond_init(cond.get(), std::ptr::null());
-        }
         let initial_cap = if max_queue_size == 0 {
             64
         } else {
             max_queue_size
         };
         Self {
-            mutex,
-            cond,
-            items: UnsafeCell::new(VecDeque::with_capacity(initial_cap)),
+            state: Mutex::new(TsfnQueueState {
+                items: VecDeque::with_capacity(initial_cap),
+                closed: false,
+            }),
+            changed: Condvar::new(),
             max_size: max_queue_size,
-            closed: UnsafeCell::new(false),
         }
-    }
-
-    unsafe fn lock(&self) -> QueueGuard<'_> {
-        unsafe {
-            libc::pthread_mutex_lock(self.mutex.get());
-        }
-        QueueGuard { queue: self }
     }
 
     fn set_closing(&self) {
-        let mut guard = unsafe { self.lock() };
-        guard.set_closing_locked();
+        let mut state = self.state.lock();
+        state.closed = true;
+        self.changed.notify_all();
     }
 
     fn pop_front(&self) -> Option<usize> {
-        let mut guard = unsafe { self.lock() };
-        guard.pop_front_locked()
+        let mut state = self.state.lock();
+        let item = state.items.pop_front();
+        if item.is_some() {
+            self.changed.notify_all();
+        }
+        item
     }
 
     fn drain_all(&self) -> Vec<usize> {
-        let mut guard = unsafe { self.lock() };
-        guard.drain_all_locked()
+        let mut state = self.state.lock();
+        let drained: Vec<usize> = state.items.drain(..).collect();
+        if !drained.is_empty() {
+            self.changed.notify_all();
+        }
+        drained
     }
 
     #[cfg(test)]
     fn len(&self) -> usize {
-        let _guard = unsafe { self.lock() };
-        unsafe { (*self.items.get()).len() }
+        self.state.lock().items.len()
+    }
+
+    fn try_push_locked(
+        changed: &Condvar,
+        state: &mut MutexGuard<'_, TsfnQueueState>,
+        max_size: usize,
+        item: usize,
+    ) -> QueuePushResult {
+        if state.closed {
+            return QueuePushResult::Closing;
+        }
+        if max_size > 0 && state.items.len() >= max_size {
+            return QueuePushResult::Full;
+        }
+        state.items.push_back(item);
+        changed.notify_all();
+        QueuePushResult::Ok
+    }
+
+    fn push_blocking_locked(
+        changed: &Condvar,
+        state: &mut MutexGuard<'_, TsfnQueueState>,
+        max_size: usize,
+        item: usize,
+    ) -> QueuePushResult {
+        loop {
+            if state.closed {
+                return QueuePushResult::Closing;
+            }
+            if max_size == 0 || state.items.len() < max_size {
+                state.items.push_back(item);
+                changed.notify_all();
+                return QueuePushResult::Ok;
+            }
+            changed.wait(state);
+        }
+    }
+
+    fn pop_back_locked(
+        changed: &Condvar,
+        state: &mut MutexGuard<'_, TsfnQueueState>,
+    ) -> Option<usize> {
+        let item = state.items.pop_back();
+        if item.is_some() {
+            changed.notify_all();
+        }
+        item
     }
 
     fn admit_and_post(
@@ -364,124 +406,27 @@ impl TsfnQueue {
         item: usize,
         blocking: bool,
     ) -> QueueAdmissionResult {
-        let mut guard = unsafe { self.lock() };
+        let mut state = self.state.lock();
         let push_result = if blocking {
-            guard.push_blocking_locked(item)
+            Self::push_blocking_locked(&self.changed, &mut state, self.max_size, item)
         } else {
-            guard.try_push_locked(item)
+            Self::try_push_locked(&self.changed, &mut state, self.max_size, item)
         };
         if push_result != QueuePushResult::Ok {
             return push_result.into();
         }
         if !driver.post_job(DriverJob::Tsfn { tsfn, done: None }) {
-            guard.pop_back_locked();
+            Self::pop_back_locked(&self.changed, &mut state);
             return QueueAdmissionResult::PostFailed;
         }
         QueueAdmissionResult::Ok
     }
 }
 
-struct QueueGuard<'a> {
-    queue: &'a TsfnQueue,
-}
-
-impl<'a> QueueGuard<'a> {
-    fn try_push_locked(&mut self, item: usize) -> QueuePushResult {
-        if unsafe { *self.queue.closed.get() } {
-            return QueuePushResult::Closing;
-        }
-        let items = unsafe { &mut *self.queue.items.get() };
-        if self.queue.max_size > 0 && items.len() >= self.queue.max_size {
-            return QueuePushResult::Full;
-        }
-        items.push_back(item);
-        unsafe {
-            libc::pthread_cond_signal(self.queue.cond.get());
-        }
-        QueuePushResult::Ok
-    }
-
-    fn push_blocking_locked(&mut self, item: usize) -> QueuePushResult {
-        loop {
-            if unsafe { *self.queue.closed.get() } {
-                return QueuePushResult::Closing;
-            }
-            let items = unsafe { &mut *self.queue.items.get() };
-            if self.queue.max_size == 0 || items.len() < self.queue.max_size {
-                items.push_back(item);
-                unsafe {
-                    libc::pthread_cond_signal(self.queue.cond.get());
-                }
-                return QueuePushResult::Ok;
-            }
-            unsafe {
-                libc::pthread_cond_wait(self.queue.cond.get(), self.queue.mutex.get());
-            }
-        }
-    }
-
-    fn set_closing_locked(&mut self) {
-        unsafe {
-            *self.queue.closed.get() = true;
-            libc::pthread_cond_broadcast(self.queue.cond.get());
-        }
-    }
-
-    fn pop_front_locked(&mut self) -> Option<usize> {
-        let item = unsafe { (*self.queue.items.get()).pop_front() };
-        if item.is_some() {
-            unsafe {
-                libc::pthread_cond_signal(self.queue.cond.get());
-            }
-        }
-        item
-    }
-
-    fn pop_back_locked(&mut self) -> Option<usize> {
-        let item = unsafe { (*self.queue.items.get()).pop_back() };
-        if item.is_some() {
-            unsafe {
-                libc::pthread_cond_signal(self.queue.cond.get());
-            }
-        }
-        item
-    }
-
-    fn drain_all_locked(&mut self) -> Vec<usize> {
-        let drained: Vec<usize> = unsafe {
-            let items = &mut *self.queue.items.get();
-            items.drain(..).collect()
-        };
-        if !drained.is_empty() {
-            unsafe {
-                libc::pthread_cond_broadcast(self.queue.cond.get());
-            }
-        }
-        drained
-    }
-}
-
-impl Drop for QueueGuard<'_> {
-    fn drop(&mut self) {
-        unsafe {
-            libc::pthread_mutex_unlock(self.queue.mutex.get());
-        }
-    }
-}
-
-impl Drop for TsfnQueue {
-    fn drop(&mut self) {
-        unsafe {
-            libc::pthread_mutex_destroy(self.mutex.get());
-            libc::pthread_cond_destroy(self.cond.get());
-        }
-    }
-}
-
 pub struct ThreadsafeFunction {
     pub handle: usize,
     pub env: napi_env,
-    pub js_pthread: pthread_t,
+    pub js_thread_id: ThreadId,
     pub driver: Arc<DriverState>,
     pub call_js: napi_threadsafe_function_call_js,
     pub context: *mut c_void,
@@ -835,7 +780,7 @@ pub unsafe extern "C" fn napi_create_threadsafe_function(
     let tsfn = Arc::new(ThreadsafeFunction {
         handle,
         env,
-        js_pthread: env_ref.js_pthread,
+        js_thread_id: env_ref.js_thread_id,
         driver: driver.clone(),
         call_js: call_js_cb,
         context,
@@ -899,7 +844,7 @@ pub unsafe extern "C" fn napi_call_threadsafe_function(
         return status;
     }
 
-    if unsafe { libc::pthread_equal(libc::pthread_self(), tsfn.js_pthread) != 0 } {
+    if tsfn.js_thread_id == std::thread::current().id() {
         let env_ref = unsafe { Env::from_napi_env(tsfn.env) };
         tsfn.driver.ensure_loop(env_ref);
     }
@@ -934,7 +879,7 @@ pub unsafe extern "C" fn napi_release_threadsafe_function(
     let Some(tsfn) = lookup_tsfn(func) else {
         return napi_status::napi_invalid_arg;
     };
-    let on_js_thread = unsafe { libc::pthread_equal(libc::pthread_self(), tsfn.js_pthread) != 0 };
+    let on_js_thread = tsfn.js_thread_id == std::thread::current().id();
 
     let abort_mode = mode == napi_threadsafe_function_release_mode::napi_tsfn_abort;
     if abort_mode {
@@ -977,7 +922,7 @@ pub unsafe extern "C" fn napi_unref_threadsafe_function(
     let Some(tsfn) = lookup_tsfn(func) else {
         return napi_status::napi_invalid_arg;
     };
-    if unsafe { libc::pthread_equal(libc::pthread_self(), tsfn.js_pthread) == 0 } {
+    if tsfn.js_thread_id != std::thread::current().id() {
         return napi_status::napi_generic_failure;
     }
     let env_ref = unsafe { Env::from_napi_env(env) };
@@ -1006,7 +951,7 @@ pub unsafe extern "C" fn napi_ref_threadsafe_function(
     let Some(tsfn) = lookup_tsfn(func) else {
         return napi_status::napi_invalid_arg;
     };
-    if unsafe { libc::pthread_equal(libc::pthread_self(), tsfn.js_pthread) == 0 } {
+    if tsfn.js_thread_id != std::thread::current().id() {
         return napi_status::napi_generic_failure;
     }
     let env_ref = unsafe { Env::from_napi_env(env) };

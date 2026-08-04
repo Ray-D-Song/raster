@@ -128,9 +128,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
         .with_global(raster_runtime_core::builtins_inspect::init)
         .with_module(raster_runtime_core::modules::raster_runtime::hex::RasterRuntimeHexModule)
         .with_module(raster_runtime_core::modules::raster_runtime::qjs::RasterRuntimeQjsModule)
-        .with_module(
-            raster_runtime_core::modules::raster_runtime::util::RasterRuntimeUtilModule,
-        )
+        .with_module(raster_runtime_core::modules::raster_runtime::util::RasterRuntimeUtilModule)
         .with_module(raster_runtime_core::modules::raster_runtime::xml::RasterRuntimeXmlModule),
         ..VmOptions::default()
     })

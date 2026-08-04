@@ -74,8 +74,10 @@ impl Drop for OwnedCrtFd {
 #[cfg(windows)]
 fn duplicate_as_crt_fd(file: &File, crt_flags: i32) -> io::Result<OwnedCrtFd> {
     use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Foundation::{CloseHandle, DUPLICATE_SAME_ACCESS, HANDLE};
-    use windows_sys::Win32::System::Threading::{DuplicateHandle, GetCurrentProcess};
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE,
+    };
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
     unsafe {
         let src = file.as_raw_handle() as HANDLE;

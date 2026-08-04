@@ -63,6 +63,8 @@ mod modules {
     pub use raster_runtime_process as process;
     #[cfg(feature = "querystring")]
     pub use raster_runtime_querystring as querystring;
+    #[cfg(feature = "sqlite")]
+    pub use raster_runtime_sqlite as sqlite;
     #[cfg(feature = "stream-web")]
     pub use raster_runtime_stream_web as stream_web;
     #[cfg(feature = "string-decoder")]
@@ -87,8 +89,6 @@ mod modules {
     pub use raster_runtime_webassembly as webassembly;
     #[cfg(feature = "zlib")]
     pub use raster_runtime_zlib as zlib;
-    #[cfg(feature = "sqlite")]
-    pub use raster_runtime_sqlite as sqlite;
 }
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

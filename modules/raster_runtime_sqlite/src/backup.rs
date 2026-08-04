@@ -4,9 +4,7 @@ use std::ptr;
 use std::rc::Rc;
 
 use rquickjs::{
-    class::Class,
-    function::Opt,
-    Ctx, Error, Function, Object, Persistent, Promise, Result, Value,
+    class::Class, function::Opt, Ctx, Error, Function, Object, Persistent, Promise, Result, Value,
 };
 
 use crate::database::{DatabaseInner, DatabaseSync};
@@ -147,12 +145,7 @@ pub fn backup<'js>(
     let dest_db_c = CString::new(dest_name).map_err(|_| Error::Unknown)?;
 
     let backup_ptr = unsafe {
-        ffi::sqlite3_backup_init(
-            dest_ptr,
-            dest_db_c.as_ptr(),
-            source_ptr,
-            source_c.as_ptr(),
-        )
+        ffi::sqlite3_backup_init(dest_ptr, dest_db_c.as_ptr(), source_ptr, source_c.as_ptr())
     };
 
     if backup_ptr.is_null() {
@@ -179,7 +172,7 @@ pub fn backup<'js>(
                 if let Ok(resolve) = resolve_p.clone().restore(&ctx) {
                     let _ = resolve.call::<(i32,), ()>((total_pages,));
                 }
-            }
+            },
             Err(err) => {
                 if let Ok(reject) = reject_p.clone().restore(&ctx) {
                     let reject_value = match err {
@@ -190,11 +183,11 @@ pub fn backup<'js>(
                             } else {
                                 return;
                             }
-                        }
+                        },
                     };
                     let _ = reject.call::<(Value<'_>,), ()>((reject_value,));
                 }
-            }
+            },
         }
     });
 
@@ -225,7 +218,7 @@ async fn run_backup_steps<'js>(
             Err(_) => {
                 state.cleanup();
                 return Err(BackupRunError::Internal(Error::Unknown));
-            }
+            },
         };
 
         if status != ffi::SQLITE_OK
@@ -254,16 +247,16 @@ async fn run_backup_steps<'js>(
                 info.set("remainingPages", remaining)
                     .map_err(BackupRunError::Internal)?;
                 match progress_fn.call::<(Object<'_>,), ()>((info,)) {
-                    Ok(_) => {}
+                    Ok(_) => {},
                     Err(Error::Exception) => {
                         let err = ctx.catch();
                         state.cleanup();
                         return Err(BackupRunError::Value(err));
-                    }
+                    },
                     Err(e) => {
                         state.cleanup();
                         return Err(BackupRunError::Internal(e));
-                    }
+                    },
                 }
             }
             continue;

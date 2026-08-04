@@ -1389,14 +1389,262 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tsfn_abort_from_worker_invokes_call_js_on_js_thread() {
+    async fn env_js_thread_identity_main_vs_worker() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        ctx.with(|ctx| {
+            let raw = ctx.as_raw();
+            let env = Env::new(raw);
+            assert!(env.is_js_thread());
+            let js_thread_id = env.js_thread_id;
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+            let barrier_worker = Arc::clone(&barrier);
+            let worker = thread::spawn(move || {
+                barrier_worker.wait();
+                assert_ne!(std::thread::current().id(), js_thread_id);
+            });
+            barrier.wait();
+            worker.join().unwrap();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn tsfn_blocking_producer_wakes_after_pop() {
         use std::os::raw::c_void;
         use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
         use std::thread;
         use std::time::Duration;
 
-        static EXPECTED_JS_PTHREAD: AtomicUsize = AtomicUsize::new(0);
-        static TEARDOWN_PTHREAD: AtomicUsize = AtomicUsize::new(0);
+        static PAYLOAD_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn tsfn_call_js(
+            _env: crate::types::napi_env,
+            _js_callback: crate::types::napi_value,
+            _context: *mut c_void,
+            _data: *mut c_void,
+        ) {
+            PAYLOAD_COUNT.fetch_add(1, Ordering::SeqCst);
+        }
+
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        ctx.with(|ctx| {
+            PAYLOAD_COUNT.store(0, Ordering::SeqCst);
+            let raw = ctx.as_raw();
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let napi_env = env.as_napi_env();
+            let func_val = make_tsfn_js_callback(raw.as_ptr());
+            let func_handle = value_to_napi_owned(&mut env, func_val);
+            let mut tsfn: crate::types::napi_threadsafe_function = std::ptr::null_mut();
+            assert_eq!(
+                unsafe {
+                    crate::async_work::napi_create_threadsafe_function(
+                        napi_env,
+                        func_handle,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        1,
+                        1,
+                        std::ptr::null_mut(),
+                        None,
+                        std::ptr::null_mut(),
+                        Some(tsfn_call_js),
+                        &mut tsfn,
+                    )
+                },
+                napi_status::napi_ok
+            );
+            let tsfn_arc = crate::async_work::lookup_tsfn_for_test(tsfn).unwrap();
+            assert_eq!(tsfn_arc.test_queue_len(), 0);
+
+            let tsfn_fill = tsfn as usize;
+            assert_eq!(
+                unsafe {
+                    crate::async_work::napi_call_threadsafe_function(
+                        tsfn_fill as crate::types::napi_threadsafe_function,
+                        0xA1usize as *mut c_void,
+                        crate::types::napi_threadsafe_function_call_mode::napi_tsfn_nonblocking,
+                    )
+                },
+                napi_status::napi_ok
+            );
+            assert_eq!(tsfn_arc.test_queue_len(), 1);
+
+            let tsfn_block = tsfn as usize;
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+            let barrier_worker = Arc::clone(&barrier);
+            let worker = thread::spawn(move || {
+                barrier_worker.wait();
+                let status = unsafe {
+                    crate::async_work::napi_call_threadsafe_function(
+                        tsfn_block as crate::types::napi_threadsafe_function,
+                        0xA2usize as *mut c_void,
+                        crate::types::napi_threadsafe_function_call_mode::napi_tsfn_blocking,
+                    )
+                };
+                assert_eq!(status, napi_status::napi_ok);
+            });
+
+            thread::sleep(Duration::from_millis(20));
+            assert_eq!(tsfn_arc.test_queue_len(), 1);
+
+            let driver = crate::driver::ensure_driver(&mut env);
+            driver.drain_ready_jobs(&mut env);
+            assert_eq!(PAYLOAD_COUNT.load(Ordering::SeqCst), 1);
+
+            barrier.wait();
+            worker.join().unwrap();
+
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while PAYLOAD_COUNT.load(Ordering::SeqCst) < 2 && deadline > std::time::Instant::now() {
+                driver.drain_ready_jobs(&mut env);
+                thread::sleep(Duration::from_millis(1));
+            }
+            assert_eq!(PAYLOAD_COUNT.load(Ordering::SeqCst), 2);
+
+            unsafe {
+                crate::async_work::napi_release_threadsafe_function(
+                    tsfn,
+                    crate::types::napi_threadsafe_function_release_mode::napi_tsfn_release,
+                );
+            }
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while crate::async_work::lookup_tsfn_for_test(tsfn).is_some()
+                && deadline > std::time::Instant::now()
+            {
+                driver.drain_ready_jobs(&mut env);
+                thread::sleep(Duration::from_millis(1));
+            }
+            driver.drain_ready_jobs(&mut env);
+            env.scopes.close(raw.as_ptr());
+            env.dispose();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn tsfn_closing_wakes_blocking_producers_with_napi_closing() {
+        use std::os::raw::c_void;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use std::thread;
+        use std::time::Duration;
+
+        static CLOSING_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn tsfn_call_js(
+            _env: crate::types::napi_env,
+            _js_callback: crate::types::napi_value,
+            _context: *mut c_void,
+            _data: *mut c_void,
+        ) {
+        }
+
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        ctx.with(|ctx| {
+            CLOSING_COUNT.store(0, Ordering::SeqCst);
+            let raw = ctx.as_raw();
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let napi_env = env.as_napi_env();
+            let func_val = make_tsfn_js_callback(raw.as_ptr());
+            let func_handle = value_to_napi_owned(&mut env, func_val);
+            let mut tsfn: crate::types::napi_threadsafe_function = std::ptr::null_mut();
+            assert_eq!(
+                unsafe {
+                    crate::async_work::napi_create_threadsafe_function(
+                        napi_env,
+                        func_handle,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        1,
+                        2,
+                        std::ptr::null_mut(),
+                        None,
+                        std::ptr::null_mut(),
+                        Some(tsfn_call_js),
+                        &mut tsfn,
+                    )
+                },
+                napi_status::napi_ok
+            );
+
+            let tsfn_fill = tsfn as usize;
+            assert_eq!(
+                unsafe {
+                    crate::async_work::napi_call_threadsafe_function(
+                        tsfn_fill as crate::types::napi_threadsafe_function,
+                        0xA1usize as *mut c_void,
+                        crate::types::napi_threadsafe_function_call_mode::napi_tsfn_nonblocking,
+                    )
+                },
+                napi_status::napi_ok
+            );
+
+            let tsfn_block = tsfn as usize;
+            let barrier = Arc::new(std::sync::Barrier::new(3));
+            let mut workers = Vec::new();
+            for _ in 0..2 {
+                let barrier_worker = Arc::clone(&barrier);
+                let tsfn_worker = tsfn_block;
+                workers.push(thread::spawn(move || {
+                    barrier_worker.wait();
+                    let status = unsafe {
+                        crate::async_work::napi_call_threadsafe_function(
+                            tsfn_worker as crate::types::napi_threadsafe_function,
+                            0xA2usize as *mut c_void,
+                            crate::types::napi_threadsafe_function_call_mode::napi_tsfn_blocking,
+                        )
+                    };
+                    if status == napi_status::napi_closing {
+                        CLOSING_COUNT.fetch_add(1, Ordering::SeqCst);
+                    }
+                }));
+            }
+
+            thread::sleep(Duration::from_millis(20));
+            barrier.wait();
+            unsafe {
+                crate::async_work::napi_release_threadsafe_function(
+                    tsfn,
+                    crate::types::napi_threadsafe_function_release_mode::napi_tsfn_abort,
+                );
+            }
+
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while CLOSING_COUNT.load(Ordering::SeqCst) < 2 && deadline > std::time::Instant::now() {
+                thread::sleep(Duration::from_millis(1));
+            }
+            for worker in workers {
+                worker.join().unwrap();
+            }
+            assert_eq!(CLOSING_COUNT.load(Ordering::SeqCst), 2);
+
+            let driver = crate::driver::ensure_driver(&mut env);
+            driver.drain_ready_jobs(&mut env);
+            env.scopes.close(raw.as_ptr());
+            env.dispose();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn tsfn_abort_from_worker_invokes_call_js_on_js_thread() {
+        use std::os::raw::c_void;
+        use std::sync::Mutex;
+        use std::thread;
+        use std::thread::ThreadId;
+        use std::time::Duration;
+
+        static EXPECTED_JS_THREAD: Mutex<Option<ThreadId>> = Mutex::new(None);
+        static TEARDOWN_THREAD: Mutex<Option<ThreadId>> = Mutex::new(None);
 
         unsafe extern "C" fn tsfn_call_js(
             env: crate::types::napi_env,
@@ -1405,7 +1653,7 @@ mod tests {
             _data: *mut c_void,
         ) {
             if env.is_null() {
-                TEARDOWN_PTHREAD.store(unsafe { libc::pthread_self() as usize }, Ordering::SeqCst);
+                *TEARDOWN_THREAD.lock().unwrap() = Some(std::thread::current().id());
             }
         }
 
@@ -1413,12 +1661,12 @@ mod tests {
         let ctx = AsyncContext::full(&rt).await.unwrap();
         let _async_ctx = ctx.clone();
         ctx.with(|ctx| {
-            TEARDOWN_PTHREAD.store(0, Ordering::SeqCst);
+            *TEARDOWN_THREAD.lock().unwrap() = None;
             let raw = ctx.as_raw();
             let mut env = Env::new(raw);
             env.scopes.open();
             let napi_env = env.as_napi_env();
-            EXPECTED_JS_PTHREAD.store(env.js_pthread, Ordering::SeqCst);
+            *EXPECTED_JS_THREAD.lock().unwrap() = Some(env.js_thread_id);
             let func_val = make_tsfn_js_callback(raw.as_ptr());
             let func_handle = value_to_napi_owned(&mut env, func_val);
             let mut tsfn: crate::types::napi_threadsafe_function = std::ptr::null_mut();
@@ -1464,16 +1712,15 @@ mod tests {
             worker.join().unwrap();
 
             let deadline = std::time::Instant::now() + Duration::from_secs(2);
-            while TEARDOWN_PTHREAD.load(Ordering::SeqCst) == 0
-                && deadline > std::time::Instant::now()
+            while TEARDOWN_THREAD.lock().unwrap().is_none() && deadline > std::time::Instant::now()
             {
                 driver.drain_ready_jobs(&mut env);
                 thread::sleep(Duration::from_millis(1));
             }
 
             assert_eq!(
-                TEARDOWN_PTHREAD.load(Ordering::SeqCst),
-                EXPECTED_JS_PTHREAD.load(Ordering::SeqCst)
+                *TEARDOWN_THREAD.lock().unwrap(),
+                *EXPECTED_JS_THREAD.lock().unwrap()
             );
             env.scopes.close(raw.as_ptr());
             env.dispose();
@@ -2379,7 +2626,7 @@ mod tests {
 
         // Pure driver: inflight keepalive blocks finished even after close_sender.
         let driver = Arc::new(DriverState::new(
-            unsafe { libc::pthread_self() },
+            std::thread::current().id(),
             std::ptr::null_mut(),
         ));
         driver.acquire_async_keepalive();

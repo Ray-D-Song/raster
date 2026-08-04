@@ -186,9 +186,8 @@ impl<'js> StatementInner<'js> {
         stmt: *mut sqlite3_stmt,
         key: &str,
     ) -> Result<i32> {
-        let key_c = CString::new(key).map_err(|_| {
-            throw_invalid_arg_type(ctx, "key", "string without NUL", "string")
-        })?;
+        let key_c = CString::new(key)
+            .map_err(|_| throw_invalid_arg_type(ctx, "key", "string without NUL", "string"))?;
         let mut index = unsafe { ffi::sqlite3_bind_parameter_index(stmt, key_c.as_ptr()) };
         if index == 0 && self.allow_bare_named.get() {
             if let Some(map) = self.bare_named_cache.borrow().as_ref() {
@@ -390,27 +389,27 @@ impl<'js> StatementSync<'js> {
 
     pub fn set_read_big_ints(&self, ctx: Ctx<'js>, value: Value<'js>) -> Result<()> {
         self.inner.require_live(&ctx)?;
-        let value = value
-            .as_bool()
-            .ok_or_else(|| throw_invalid_arg_type(&ctx, "value", "boolean", &js_type_name(&value)))?;
+        let value = value.as_bool().ok_or_else(|| {
+            throw_invalid_arg_type(&ctx, "value", "boolean", &js_type_name(&value))
+        })?;
         self.inner.read_bigints.set(value);
         Ok(())
     }
 
     pub fn set_return_arrays(&self, ctx: Ctx<'js>, value: Value<'js>) -> Result<()> {
         self.inner.require_live(&ctx)?;
-        let value = value
-            .as_bool()
-            .ok_or_else(|| throw_invalid_arg_type(&ctx, "value", "boolean", &js_type_name(&value)))?;
+        let value = value.as_bool().ok_or_else(|| {
+            throw_invalid_arg_type(&ctx, "value", "boolean", &js_type_name(&value))
+        })?;
         self.inner.return_arrays.set(value);
         Ok(())
     }
 
     pub fn set_allow_bare_named_parameters(&self, ctx: Ctx<'js>, value: Value<'js>) -> Result<()> {
         self.inner.require_live(&ctx)?;
-        let value = value
-            .as_bool()
-            .ok_or_else(|| throw_invalid_arg_type(&ctx, "value", "boolean", &js_type_name(&value)))?;
+        let value = value.as_bool().ok_or_else(|| {
+            throw_invalid_arg_type(&ctx, "value", "boolean", &js_type_name(&value))
+        })?;
         self.inner.allow_bare_named.set(value);
         *self.inner.bare_named_cache.borrow_mut() = None;
         Ok(())
@@ -422,9 +421,9 @@ impl<'js> StatementSync<'js> {
         value: Value<'js>,
     ) -> Result<()> {
         self.inner.require_live(&ctx)?;
-        let value = value
-            .as_bool()
-            .ok_or_else(|| throw_invalid_arg_type(&ctx, "value", "boolean", &js_type_name(&value)))?;
+        let value = value.as_bool().ok_or_else(|| {
+            throw_invalid_arg_type(&ctx, "value", "boolean", &js_type_name(&value))
+        })?;
         self.inner.allow_unknown_named.set(value);
         Ok(())
     }

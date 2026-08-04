@@ -1,11 +1,11 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use libc::pthread_t;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
+use std::thread::ThreadId;
 
 use parking_lot::Mutex;
 use raster_runtime_context::CtxExtension;
@@ -50,7 +50,7 @@ pub struct DriverState {
     finished: AtomicBool,
     /// Multi-waiter notification when `finished` becomes true.
     finished_notify: Notify,
-    pub js_pthread: pthread_t,
+    pub js_thread_id: ThreadId,
     pub runtime: tokio::runtime::Handle,
     pub rt_ptr: *mut JSRuntime,
     #[cfg(test)]
@@ -61,7 +61,7 @@ unsafe impl Send for DriverState {}
 unsafe impl Sync for DriverState {}
 
 impl DriverState {
-    pub fn new(js_pthread: pthread_t, rt_ptr: *mut JSRuntime) -> Self {
+    pub fn new(js_thread_id: ThreadId, rt_ptr: *mut JSRuntime) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         Self {
             tx: Mutex::new(Some(tx)),
@@ -72,7 +72,7 @@ impl DriverState {
             loop_running: AtomicBool::new(false),
             finished: AtomicBool::new(false),
             finished_notify: Notify::new(),
-            js_pthread,
+            js_thread_id,
             runtime: tokio::runtime::Handle::current(),
             rt_ptr,
             #[cfg(test)]
@@ -213,14 +213,13 @@ impl DriverState {
         if self.loop_running.load(Ordering::SeqCst) {
             return;
         }
-        let on_js_thread =
-            unsafe { libc::pthread_equal(libc::pthread_self(), self.js_pthread) != 0 };
+        let on_js_thread = std::thread::current().id() == self.js_thread_id;
         if !on_js_thread {
             debug_assert!(
                 on_js_thread,
                 "spawn_loop must run on the Env's registered JS thread"
             );
-            tracing::debug!("spawn_loop skipped: current pthread does not match Env JS thread");
+            tracing::debug!("spawn_loop skipped: current thread does not match Env JS thread");
             return;
         }
         if self.loop_running.swap(true, Ordering::SeqCst) {
@@ -375,7 +374,7 @@ pub fn ensure_driver(env: &mut Env) -> Arc<DriverState> {
     if env.driver.is_none() {
         let rt_ptr = unsafe { rquickjs::qjs::JS_GetRuntime(env.ctx_ptr()) };
         raster_runtime_utils::driver_poll::driver_notify_for_rt(rt_ptr);
-        env.driver = Some(Arc::new(DriverState::new(env.js_pthread, rt_ptr)));
+        env.driver = Some(Arc::new(DriverState::new(env.js_thread_id, rt_ptr)));
     }
     env.driver.clone().unwrap()
 }
@@ -405,7 +404,7 @@ mod tests {
             .unwrap();
         rt.block_on(async {
             let driver = Arc::new(DriverState::new(
-                unsafe { libc::pthread_self() },
+                std::thread::current().id(),
                 std::ptr::null_mut(),
             ));
             let work = Arc::new(AsyncWorkState {
@@ -448,7 +447,7 @@ mod tests {
     #[tokio::test]
     async fn wait_finished_after_close_sender_when_idle() {
         let driver = Arc::new(DriverState::new(
-            unsafe { libc::pthread_self() },
+            std::thread::current().id(),
             std::ptr::null_mut(),
         ));
         assert!(!driver.is_finished());
@@ -462,7 +461,7 @@ mod tests {
     #[tokio::test]
     async fn mark_finished_notifies_waiters() {
         let driver = Arc::new(DriverState::new(
-            unsafe { libc::pthread_self() },
+            std::thread::current().id(),
             std::ptr::null_mut(),
         ));
         let d2 = Arc::clone(&driver);
@@ -477,7 +476,7 @@ mod tests {
 
     #[tokio::test]
     async fn mark_finished_if_idle_refuses_when_pending() {
-        let driver = DriverState::new(unsafe { libc::pthread_self() }, std::ptr::null_mut());
+        let driver = DriverState::new(std::thread::current().id(), std::ptr::null_mut());
         driver.close_sender();
         driver.pending.store(1, Ordering::SeqCst);
         driver.mark_finished_if_idle();
@@ -489,7 +488,7 @@ mod tests {
 
     #[tokio::test]
     async fn mark_finished_if_idle_refuses_when_inflight() {
-        let driver = DriverState::new(unsafe { libc::pthread_self() }, std::ptr::null_mut());
+        let driver = DriverState::new(std::thread::current().id(), std::ptr::null_mut());
         driver.close_sender();
         driver.acquire_async_keepalive();
         driver.mark_finished_if_idle();
@@ -501,7 +500,7 @@ mod tests {
 
     #[tokio::test]
     async fn idle_refs_prevents_finished_until_released() {
-        let driver = DriverState::new(unsafe { libc::pthread_self() }, std::ptr::null_mut());
+        let driver = DriverState::new(std::thread::current().id(), std::ptr::null_mut());
         driver.idle_refs.fetch_add(1, Ordering::SeqCst);
         driver.close_sender();
         driver.mark_finished_if_idle();

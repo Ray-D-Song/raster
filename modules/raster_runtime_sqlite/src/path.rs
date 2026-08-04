@@ -8,7 +8,10 @@ pub fn parse_path<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> Result<Vec<u8>> {
     if let Some(s) = value.as_string() {
         let s = s.to_string()?;
         if s.contains('\0') {
-            return Err(throw_invalid_arg_value(ctx, "path cannot contain NUL bytes"));
+            return Err(throw_invalid_arg_value(
+                ctx,
+                "path cannot contain NUL bytes",
+            ));
         }
         return Ok(s.into_bytes());
     }
@@ -25,7 +28,10 @@ pub fn parse_path<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> Result<Vec<u8>> {
             }
             let path = url.pathname();
             if path.contains('\0') {
-                return Err(throw_invalid_arg_value(ctx, "path cannot contain NUL bytes"));
+                return Err(throw_invalid_arg_value(
+                    ctx,
+                    "path cannot contain NUL bytes",
+                ));
             }
             return Ok(path.into_bytes());
         }
@@ -33,7 +39,10 @@ pub fn parse_path<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> Result<Vec<u8>> {
         if let Some(bytes) = ObjectBytes::from_array_buffer_view(obj)? {
             let slice = bytes.as_bytes(ctx)?;
             if slice.contains(&0) {
-                return Err(throw_invalid_arg_value(ctx, "path cannot contain NUL bytes"));
+                return Err(throw_invalid_arg_value(
+                    ctx,
+                    "path cannot contain NUL bytes",
+                ));
             }
             return Ok(slice.to_vec());
         }
@@ -77,9 +86,6 @@ pub fn null_prototype_object<'js>(ctx: &Ctx<'js>) -> Result<Object<'js>> {
     Ok(obj)
 }
 
-pub fn copy_buffer_to_uint8array<'js>(
-    ctx: &Ctx<'js>,
-    data: &[u8],
-) -> Result<TypedArray<'js, u8>> {
+pub fn copy_buffer_to_uint8array<'js>(ctx: &Ctx<'js>, data: &[u8]) -> Result<TypedArray<'js, u8>> {
     TypedArray::new_copy(ctx.clone(), data)
 }

@@ -8,8 +8,8 @@ use std::ptr;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use libc::pthread_t;
 use rquickjs::qjs::{self, JSContext, JSValue};
+use std::thread::ThreadId;
 
 use crate::driver::DriverState;
 use crate::error::LastError;
@@ -33,7 +33,7 @@ pub enum DisposeState {
 pub struct Env {
     pub id: u64,
     pub ctx: NonNull<JSContext>,
-    pub js_pthread: pthread_t,
+    pub js_thread_id: ThreadId,
     pub scopes: ScopeStack,
     pub refs: RefTable,
     pub wraps: WrapTable,
@@ -57,7 +57,7 @@ impl Env {
         Self {
             id: ENV_ID.fetch_add(1, Ordering::Relaxed),
             ctx,
-            js_pthread: unsafe { libc::pthread_self() },
+            js_thread_id: std::thread::current().id(),
             scopes: ScopeStack::new(),
             refs: RefTable::new(),
             wraps: WrapTable::new(),
@@ -82,7 +82,7 @@ impl Env {
     }
 
     pub fn is_js_thread(&self) -> bool {
-        unsafe { libc::pthread_equal(libc::pthread_self(), self.js_pthread) != 0 }
+        std::thread::current().id() == self.js_thread_id
     }
 
     pub fn ctx_ptr(&self) -> *mut JSContext {

@@ -303,7 +303,10 @@ impl ModuleBuilder {
         self
     }
 
-    pub fn with_node_only_module<M: ModuleDef, I: Into<ModuleInfo<M>>>(mut self, module: I) -> Self {
+    pub fn with_node_only_module<M: ModuleDef, I: Into<ModuleInfo<M>>>(
+        mut self,
+        module: I,
+    ) -> Self {
         let module_info: ModuleInfo<M> = module.into();
 
         self.module_resolver = self.module_resolver.add_name(module_info.name);

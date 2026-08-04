@@ -4,22 +4,22 @@ use std::ffi::CString;
 use std::ptr;
 use std::rc::{Rc, Weak};
 
-use rquickjs::class::{Trace, Tracer};
-use rquickjs::function::Opt;
-use rquickjs::{Class, Ctx, Function, IntoJs, Object, Result, Value};
 use crate::error::{
     make_sqlite_error, throw_invalid_arg_type, throw_invalid_arg_value, throw_invalid_state,
     throw_load_extension_error, throw_out_of_range, throw_sqlite_error, throw_type_error,
 };
 use crate::ffi::{
-    self, sqlite3, sqlite3_db_config_enable, SQLITE_OK, SQLITE_OPEN_CREATE, SQLITE_OPEN_READONLY,
-    SQLITE_OPEN_READWRITE, SQLITE_OPEN_URI, SQLITE_DBCONFIG_DQS_DDL, SQLITE_DBCONFIG_DQS_DML,
-    SQLITE_DBCONFIG_ENABLE_FKEY, SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION,
+    self, sqlite3, sqlite3_db_config_enable, SQLITE_DBCONFIG_DQS_DDL, SQLITE_DBCONFIG_DQS_DML,
+    SQLITE_DBCONFIG_ENABLE_FKEY, SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION, SQLITE_OK,
+    SQLITE_OPEN_CREATE, SQLITE_OPEN_READONLY, SQLITE_OPEN_READWRITE, SQLITE_OPEN_URI,
 };
 use crate::function::{register_aggregate, register_scalar_function, CallbackEntry};
 use crate::path::{js_type_name, parse_path};
 use crate::session::{apply_changeset, create_session, SessionInner};
 use crate::statement::{StatementInner, StatementSync};
+use rquickjs::class::{Trace, Tracer};
+use rquickjs::function::Opt;
+use rquickjs::{Class, Ctx, Function, IntoJs, Object, Result, Value};
 
 #[derive(Clone, Debug)]
 pub struct OpenConfig {
@@ -118,9 +118,7 @@ impl<'js> DatabaseInner<'js> {
 
     pub fn register_statement(&self, inner: &Rc<StatementInner<'js>>) {
         self.sweep_dead_refs();
-        self.statements
-            .borrow_mut()
-            .push(Rc::downgrade(inner));
+        self.statements.borrow_mut().push(Rc::downgrade(inner));
     }
 
     pub fn register_session(&self, inner: &Rc<SessionInner<'js>>) {
@@ -162,9 +160,8 @@ impl<'js> DatabaseInner<'js> {
             SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI
         };
 
-        let path = CString::new(self.location.as_slice()).map_err(|_| {
-            throw_invalid_arg_value(ctx, "path cannot contain NUL bytes")
-        })?;
+        let path = CString::new(self.location.as_slice())
+            .map_err(|_| throw_invalid_arg_value(ctx, "path cannot contain NUL bytes"))?;
 
         let mut db: *mut sqlite3 = ptr::null_mut();
         let r = unsafe { ffi::sqlite3_open_v2(path.as_ptr(), &mut db, flags, ptr::null()) };
@@ -183,8 +180,7 @@ impl<'js> DatabaseInner<'js> {
         self.connection.set(db);
         self.open_generation
             .set(self.open_generation.get().saturating_add(1));
-        self.enable_load_extension
-            .set(self.config.allow_extension);
+        self.enable_load_extension.set(self.config.allow_extension);
 
         let dqs = if self.config.enable_dqs { 1 } else { 0 };
         unsafe {
@@ -192,7 +188,11 @@ impl<'js> DatabaseInner<'js> {
             sqlite3_db_config_enable(db, SQLITE_DBCONFIG_DQS_DDL, dqs);
         }
 
-        let fkey = if self.config.enable_foreign_keys { 1 } else { 0 };
+        let fkey = if self.config.enable_foreign_keys {
+            1
+        } else {
+            0
+        };
         let r = unsafe { sqlite3_db_config_enable(db, SQLITE_DBCONFIG_ENABLE_FKEY, fkey) };
         if r != SQLITE_OK {
             let err = make_sqlite_error(ctx, db)?;
@@ -201,9 +201,8 @@ impl<'js> DatabaseInner<'js> {
         }
 
         if self.config.allow_extension {
-            let r = unsafe {
-                sqlite3_db_config_enable(db, SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION, 1)
-            };
+            let r =
+                unsafe { sqlite3_db_config_enable(db, SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION, 1) };
             if r != SQLITE_OK {
                 let err = make_sqlite_error(ctx, db)?;
                 self.close_internal();
@@ -255,7 +254,12 @@ impl<'js> DatabaseInner<'js> {
         self.enable_load_extension.set(false);
     }
 
-    pub fn check_sqlite_or_pending(&self, ctx: &Ctx<'js>, db: *mut sqlite3, code: i32) -> Result<()> {
+    pub fn check_sqlite_or_pending(
+        &self,
+        ctx: &Ctx<'js>,
+        db: *mut sqlite3,
+        code: i32,
+    ) -> Result<()> {
         if let Some(pending) = self.take_pending_exception() {
             return Err(ctx.throw(pending));
         }
@@ -272,7 +276,9 @@ pub struct BusyScope<'a, 'js> {
 
 impl<'a, 'js> BusyScope<'a, 'js> {
     pub fn new(inner: &'a DatabaseInner<'js>) -> Self {
-        inner.busy_depth.set(inner.busy_depth.get().saturating_add(1));
+        inner
+            .busy_depth
+            .set(inner.busy_depth.get().saturating_add(1));
         Self { inner }
     }
 }
@@ -308,7 +314,10 @@ impl<'js> DatabaseSync<'js> {
         &self.inner
     }
 
-    fn parse_constructor_options(ctx: &Ctx<'js>, options: Option<Value<'js>>) -> Result<(OpenConfig, bool)> {
+    fn parse_constructor_options(
+        ctx: &Ctx<'js>,
+        options: Option<Value<'js>>,
+    ) -> Result<(OpenConfig, bool)> {
         let mut config = OpenConfig::default();
         let mut open_immediately = true;
 
@@ -364,7 +373,9 @@ impl<'js> DatabaseSync<'js> {
         let (config, open_immediately) = Self::parse_constructor_options(&ctx, options.0)?;
 
         let inner = Rc::new(DatabaseInner::new(location, config));
-        let this = Self { inner: inner.clone() };
+        let this = Self {
+            inner: inner.clone(),
+        };
 
         if open_immediately {
             this.inner.open(&ctx)?;
@@ -406,17 +417,22 @@ impl<'js> DatabaseSync<'js> {
             .ok_or_else(|| throw_invalid_arg_type(&ctx, "sql", "string", &js_type_name(&sql)))?
             .to_string()?;
 
-        let c_sql = CString::new(sql).map_err(|_| {
-            throw_invalid_arg_type(&ctx, "sql", "string without NUL", "string")
-        })?;
+        let c_sql = CString::new(sql)
+            .map_err(|_| throw_invalid_arg_type(&ctx, "sql", "string without NUL", "string"))?;
 
         let db = self.inner.connection();
-        let r = unsafe { ffi::sqlite3_exec(db, c_sql.as_ptr(), None, ptr::null_mut(), ptr::null_mut()) };
+        let r = unsafe {
+            ffi::sqlite3_exec(db, c_sql.as_ptr(), None, ptr::null_mut(), ptr::null_mut())
+        };
         self.inner.check_sqlite_or_pending(&ctx, db, r)?;
         Ok(())
     }
 
-    pub fn prepare(&self, ctx: Ctx<'js>, sql: Value<'js>) -> Result<Class<'js, StatementSync<'js>>> {
+    pub fn prepare(
+        &self,
+        ctx: Ctx<'js>,
+        sql: Value<'js>,
+    ) -> Result<Class<'js, StatementSync<'js>>> {
         self.inner.require_open(&ctx)?;
         let _busy = BusyScope::new(&self.inner);
 
@@ -425,15 +441,13 @@ impl<'js> DatabaseSync<'js> {
             .ok_or_else(|| throw_invalid_arg_type(&ctx, "sql", "string", &js_type_name(&sql)))?
             .to_string()?;
 
-        let c_sql = CString::new(sql).map_err(|_| {
-            throw_invalid_arg_type(&ctx, "sql", "string without NUL", "string")
-        })?;
+        let c_sql = CString::new(sql)
+            .map_err(|_| throw_invalid_arg_type(&ctx, "sql", "string without NUL", "string"))?;
 
         let db = self.inner.connection();
         let mut stmt: *mut ffi::sqlite3_stmt = ptr::null_mut();
-        let r = unsafe {
-            ffi::sqlite3_prepare_v2(db, c_sql.as_ptr(), -1, &mut stmt, ptr::null_mut())
-        };
+        let r =
+            unsafe { ffi::sqlite3_prepare_v2(db, c_sql.as_ptr(), -1, &mut stmt, ptr::null_mut()) };
 
         if let Some(pending) = self.inner.take_pending_exception() {
             if !stmt.is_null() {
@@ -461,13 +475,11 @@ impl<'js> DatabaseSync<'js> {
             return Ok(Value::new_null(ctx));
         }
 
-        let c_name = CString::new(name).map_err(|_| {
-            throw_invalid_arg_type(&ctx, "dbName", "string without NUL", "string")
-        })?;
+        let c_name = CString::new(name)
+            .map_err(|_| throw_invalid_arg_type(&ctx, "dbName", "string without NUL", "string"))?;
 
-        let filename = unsafe {
-            ffi::sqlite3_db_filename(self.inner.connection(), c_name.as_ptr())
-        };
+        let filename =
+            unsafe { ffi::sqlite3_db_filename(self.inner.connection(), c_name.as_ptr()) };
 
         if filename.is_null() {
             return Ok(Value::new_null(ctx));
@@ -503,11 +515,7 @@ impl<'js> DatabaseSync<'js> {
         register_aggregate(&ctx, &self.inner, &name, options)
     }
 
-    pub fn create_session(
-        &self,
-        ctx: Ctx<'js>,
-        options: Opt<Value<'js>>,
-    ) -> Result<Value<'js>> {
+    pub fn create_session(&self, ctx: Ctx<'js>, options: Opt<Value<'js>>) -> Result<Value<'js>> {
         self.inner.require_open(&ctx)?;
         create_session(&ctx, &self.inner, options)
     }
@@ -526,9 +534,9 @@ impl<'js> DatabaseSync<'js> {
     pub fn enable_load_extension(&self, ctx: Ctx<'js>, allow: Value<'js>) -> Result<()> {
         self.inner.require_open(&ctx)?;
 
-        let allow = allow
-            .as_bool()
-            .ok_or_else(|| throw_invalid_arg_type(&ctx, "allow", "boolean", &js_type_name(&allow)))?;
+        let allow = allow.as_bool().ok_or_else(|| {
+            throw_invalid_arg_type(&ctx, "allow", "boolean", &js_type_name(&allow))
+        })?;
 
         if allow && !self.inner.config.allow_extension {
             return Err(throw_invalid_state(
@@ -574,7 +582,10 @@ impl<'js> DatabaseSync<'js> {
         self.inner.require_open(&ctx)?;
 
         if !self.inner.config.allow_extension || !self.inner.enable_load_extension.get() {
-            return Err(throw_invalid_state(&ctx, "extension loading is not allowed"));
+            return Err(throw_invalid_state(
+                &ctx,
+                "extension loading is not allowed",
+            ));
         }
 
         let path = path
@@ -582,9 +593,8 @@ impl<'js> DatabaseSync<'js> {
             .ok_or_else(|| throw_invalid_arg_type(&ctx, "path", "string", &js_type_name(&path)))?
             .to_string()?;
 
-        let c_path = CString::new(path).map_err(|_| {
-            throw_invalid_arg_type(&ctx, "path", "string without NUL", "string")
-        })?;
+        let c_path = CString::new(path)
+            .map_err(|_| throw_invalid_arg_type(&ctx, "path", "string without NUL", "string"))?;
 
         let entry_c = match entry_point.0 {
             Some(entry) => Some(CString::new(entry).map_err(|_| {
@@ -593,10 +603,7 @@ impl<'js> DatabaseSync<'js> {
             None => None,
         };
 
-        let entry_ptr = entry_c
-            .as_ref()
-            .map(|c| c.as_ptr())
-            .unwrap_or(ptr::null());
+        let entry_ptr = entry_c.as_ref().map(|c| c.as_ptr()).unwrap_or(ptr::null());
 
         let mut errmsg: *mut std::os::raw::c_char = ptr::null_mut();
         let r = unsafe {
@@ -671,7 +678,10 @@ fn read_timeout<'js>(ctx: &Ctx<'js>, obj: &Object<'js>) -> Result<i32> {
     if value.is_int() {
         let v = value.as_int().unwrap();
         if v < 0 {
-            return Err(throw_out_of_range(ctx, "timeout must be a non-negative integer"));
+            return Err(throw_out_of_range(
+                ctx,
+                "timeout must be a non-negative integer",
+            ));
         }
         return Ok(v);
     }
@@ -700,18 +710,13 @@ fn resolve_function_args<'js>(
                 let empty = Object::new(ctx.clone())?;
                 Ok((empty, f))
             } else {
-                Err(throw_invalid_arg_type(
-                    ctx,
-                    "fn",
-                    "function",
-                    "object",
-                ))
+                Err(throw_invalid_arg_type(ctx, "fn", "function", "object"))
             }
-        }
+        },
         (None, Some(f)) => {
             let empty = Object::new(ctx.clone())?;
             Ok((empty, f))
-        }
+        },
         (None, None) => Err(throw_type_error(ctx, "fn argument is required")),
     }
 }
