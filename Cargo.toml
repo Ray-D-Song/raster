@@ -36,6 +36,7 @@ members = [
   "modules/raster_runtime_path",
   "modules/raster_runtime_perf_hooks",
   "modules/raster_runtime_process",
+  "modules/raster_runtime_sqlite",
   "modules/raster_runtime_stream",
   "modules/raster_runtime_stream_web",
   "modules/raster_runtime_string_decoder",

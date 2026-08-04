@@ -1,6 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
-use std::{cell::RefCell, collections::HashSet, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 
 use raster_runtime_hooking::{invoke_async_hook, register_finalization_registry, HookType};
 use raster_runtime_utils::{provider::ProviderType, result::ResultExt};
@@ -16,13 +16,8 @@ use super::facade::ModuleFacadeState;
 use super::{ModuleCache, ModuleNames, RequireState};
 
 fn is_builtin_import_name(ctx: &Ctx<'_>, import_name: &str) -> bool {
-    let module_list = ctx
-        .userdata::<ModuleNames>()
-        .map_or_else(HashSet::new, |v| v.get_list());
-    let normalized = import_name
-        .trim_start_matches("node:")
-        .trim_end_matches('/');
-    module_list.contains(normalized)
+    ctx.userdata::<ModuleNames>()
+        .is_some_and(|names| names.is_builtin(import_name.trim_end_matches('/')))
 }
 
 fn collect_imported_exports<'js>(

@@ -40,7 +40,7 @@ impl Resolver for ModuleResolver {
         _attr: Option<ImportAttributes<'_>>,
     ) -> Result<String> {
         let name = name.trim_start_matches(CJS_IMPORT_PREFIX);
-        let name = name.trim_start_matches("node:").trim_end_matches("/");
+        let name = name.trim_end_matches('/');
 
         let base = base.trim_start_matches(CJS_IMPORT_PREFIX);
 
@@ -59,13 +59,27 @@ impl Resolver for ModuleResolver {
             trace!("|  Determined as `NormalCircuit`: {}", x);
         }
 
-        if self.modules.contains(&x) {
-            trace!("+- Resolved by `NativeModule`: {}", x);
-            Ok(x)
+        if let Some(resolved) = resolve_native_module_name(&x, &self.modules) {
+            trace!("+- Resolved by `NativeModule`: {}", resolved);
+            Ok(resolved)
         } else {
             Err(Error::new_resolving(base, x))
         }
     }
+}
+
+fn resolve_native_module_name(name: &str, modules: &HashSet<String>) -> Option<String> {
+    if modules.contains(name) {
+        return Some(name.to_string());
+    }
+
+    if let Some(bare) = name.strip_prefix("node:") {
+        if modules.contains(bare) {
+            return Some(bare.to_string());
+        }
+    }
+
+    None
 }
 
 pub fn module_hook_resolve<'js>(ctx: &Ctx<'js>, x: &str, y: &str) -> Result<(bool, bool, String)> {

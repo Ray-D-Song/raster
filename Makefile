@@ -146,7 +146,7 @@ run-ssr: js
 	cargo build
 	cd example/functions && yarn build && cd build && ../../../target/debug/raster_runtime
 
-compat: compat-next compat-vite-plus compat-better-sqlite3 compat-mysql compat-node-postgres compat-napi compat-v8
+compat: compat-next compat-vite-plus compat-better-sqlite3 compat-mysql compat-node-postgres compat-napi compat-v8 compat-node-sqlite
 
 compat-v8: js
 	$(CARGO) build --features v8-compat
@@ -188,6 +188,13 @@ compat-napi: js
 	$(CARGO) build --features napi
 	cd compat/napi-hello && yarn install
 	RASTER_RUNTIME=$(RASTER_RUNTIME) node compat/run.mjs napi-hello $(RASTER_RUNTIME)
+
+compat-node-sqlite: js
+	$(CARGO) build
+	RASTER_RUNTIME=$(RASTER_RUNTIME) node compat/run.mjs node-sqlite $(RASTER_RUNTIME)
+
+compat-node-sqlite-asan:
+	bash compat/node-sqlite/run-asan.sh
 
 flame:
 	cargo flamegraph --profile flame -- index.mjs
@@ -299,4 +306,4 @@ check-crates:
 	  cargo check -p "$$crate"; \
 	done
 
-.PHONY: libs check check-all check-crates libs-arm64 libs-x64 toolchain clean-js release-linux release-darwin release-windows stdlib stdlib-x64 stdlib-arm64 test test-ci run js run-release build release clean flame deploy compat compat-next compat-vite-plus compat-better-sqlite3 compat-mysql compat-node-postgres compat-napi compat-v8 check-v8-abi types-pack-check types-smoke
+.PHONY: libs check check-all check-crates libs-arm64 libs-x64 toolchain clean-js release-linux release-darwin release-windows stdlib stdlib-x64 stdlib-arm64 test test-ci run js run-release build release clean flame deploy compat compat-next compat-vite-plus compat-better-sqlite3 compat-mysql compat-node-postgres compat-napi compat-v8 compat-node-sqlite compat-node-sqlite-asan check-v8-abi types-pack-check types-smoke

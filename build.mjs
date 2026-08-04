@@ -95,6 +95,8 @@ const ES_BUILD_OPTIONS = {
     "node:readline",
     "readline/promises",
     "node:readline/promises",
+    "sqlite",
+    "node:sqlite",
     "worker_threads",
     "node:worker_threads",
     "http2",

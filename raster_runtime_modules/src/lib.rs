@@ -87,6 +87,8 @@ mod modules {
     pub use raster_runtime_webassembly as webassembly;
     #[cfg(feature = "zlib")]
     pub use raster_runtime_zlib as zlib;
+    #[cfg(feature = "sqlite")]
+    pub use raster_runtime_sqlite as sqlite;
 }
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

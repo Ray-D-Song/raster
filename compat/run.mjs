@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -61,6 +62,11 @@ const cases = {
     script: "test.cjs",
     successMarker: "v8-hello compat OK",
   },
+  "node-sqlite": {
+    directory: "compat/node-sqlite",
+    parity: "parity.mjs",
+    buildCommand: "node build-extension.mjs",
+  },
   "napi-hello": {
     directory: "compat/napi-hello",
     buildCommand: "yarn build",
@@ -105,7 +111,7 @@ const cases = {
 const testCase = cases[name];
 if (!testCase || !rasterPath) {
   throw new Error(
-    "Usage: node compat/run.mjs <next|vite-plus|better-sqlite3|mysql2|node-postgres|v8-hello|napi-hello> <raster-runtime>"
+    "Usage: node compat/run.mjs <next|vite-plus|better-sqlite3|mysql2|node-postgres|v8-hello|napi-hello|node-sqlite> <raster-runtime>"
   );
 }
 
@@ -115,6 +121,8 @@ const logPath = path.join(directory, "compat.log");
 
 if (name === "next") {
   await runNextStandalone(directory, raster, logPath, root);
+} else if (name === "node-sqlite") {
+  await runNodeSqliteCompat(testCase, directory, raster, logPath, root);
 } else if (
   name === "better-sqlite3" ||
   name === "mysql2" ||
@@ -337,6 +345,233 @@ async function runVitePlusBuild(testCase, directory, raster, logPath, root) {
   console.log(
     `${name} compatibility build passed (version×${versionLoops}, build×${buildLoops})`
   );
+}
+
+async function runNodeSqliteCompat(testCase, directory, raster, logPath, root) {
+  const logParts = [];
+  const INVALID_TEARDOWN =
+    /abort|Assertion|JS_CONTEXT|gc_obj_list|shutdown incomplete|driver has not finished|leaking env|double free|pending backup/i;
+
+  try {
+    await assertRasterExecutable(raster, logParts);
+
+    if (testCase.buildCommand && process.env.COMPAT_SKIP_BUILD !== "1") {
+      logParts.push(`# Build extension\n$ ${testCase.buildCommand}`);
+      console.log(`[compat-node-sqlite] building extension: ${testCase.buildCommand}`);
+      const buildResult = await spawnCollect(
+        "sh",
+        ["-c", testCase.buildCommand],
+        { cwd: directory, env: { ...process.env } },
+        BUILD_TIMEOUT_MS
+      );
+      logParts.push(
+        `exit: ${buildResult.code ?? buildResult.signal}\n\nstdout:\n${buildResult.stdout}\n\nstderr:\n${buildResult.stderr}`
+      );
+      if (buildResult.code !== 0) {
+        throw new Error(
+          `node-sqlite extension build failed (exit ${buildResult.code ?? buildResult.signal}). ` +
+            `See ${path.relative(root, logPath)}.`
+        );
+      }
+    }
+
+    const extensionPath = resolveSqliteExtensionPath(directory);
+    logParts.push(`\n# Extension\npath: ${extensionPath ?? "(not built)"}`);
+
+    const sharedTmpRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "raster-node-sqlite-parity-")
+    );
+    const nodeTmpRoot = path.join(sharedTmpRoot, "node");
+    const rasterTmpRoot = path.join(sharedTmpRoot, "raster");
+    await fs.mkdir(nodeTmpRoot, { recursive: true });
+    await fs.mkdir(rasterTmpRoot, { recursive: true });
+    const lifecycleLoops = process.env.COMPAT_SQLITE_LIFECYCLE_LOOPS ?? "100";
+    const backupLoops = process.env.COMPAT_SQLITE_BACKUP_LOOPS ?? "20";
+    const baseParityEnv = {
+      ...process.env,
+      LIFECYCLE_LOOPS: lifecycleLoops,
+      BACKUP_LOOPS: backupLoops,
+      ...(extensionPath ? { SQLITE_EXTENSION_PATH: extensionPath } : {}),
+    };
+
+    const skipNodeBaseline = process.env.COMPAT_SKIP_NODE_BASELINE === "1";
+    let nodeParity = null;
+
+    if (!skipNodeBaseline) {
+      const nodeCmd = `${process.execPath} ${testCase.parity}`;
+      logParts.push(`\n# Node parity\n$ ${nodeCmd}`);
+      console.log(`[compat-node-sqlite] Node parity: ${nodeCmd}`);
+      const nodeResult = await spawnCompatChild(
+        process.execPath,
+        [testCase.parity],
+        {
+          cwd: directory,
+          env: {
+            ...baseParityEnv,
+            PARITY_TMP_ROOT: nodeTmpRoot,
+          },
+        },
+        Math.min(NODE_BASELINE_TIMEOUT_MS * 4, SCRIPT_TIMEOUT_MS * 4),
+        logParts
+      );
+      validateCompatRun("node-sqlite/parity.mjs", "Node parity", nodeResult, {
+        maxDurationMs: SCRIPT_TIMEOUT_MS * 4,
+        expectCode: 0,
+        logPath,
+        root,
+        logParts,
+        rasterNotStarted: true,
+        mustNotContainStdout: INVALID_TEARDOWN,
+      });
+      nodeParity = parseParityJson(nodeResult.stdout, "Node parity");
+    }
+
+    const rasterCmd = `${raster} ${testCase.parity}`;
+    logParts.push(`\n# Raster parity\n$ ${rasterCmd}`);
+    console.log(`[compat-node-sqlite] Raster parity: ${rasterCmd}`);
+    const rasterResult = await spawnCompatChild(
+      raster,
+      [testCase.parity],
+      {
+        cwd: directory,
+        env: {
+          ...baseParityEnv,
+          PARITY_TMP_ROOT: rasterTmpRoot,
+        },
+      },
+      SCRIPT_TIMEOUT_MS * 4,
+      logParts
+    );
+    validateCompatRun("node-sqlite/parity.mjs", "Raster parity", rasterResult, {
+      maxDurationMs: SCRIPT_TIMEOUT_MS * 4,
+      expectCode: 0,
+      logPath,
+      root,
+      logParts,
+      rasterNotStarted: false,
+      mustNotContainStdout: INVALID_TEARDOWN,
+    });
+    const rasterParity = parseParityJson(rasterResult.stdout, "Raster parity");
+
+    if (nodeParity) {
+      const nodeNorm = normalizeParityOutput(nodeParity);
+      const rasterNorm = normalizeParityOutput(rasterParity);
+      const diff = diffParityOutputs(nodeNorm, rasterNorm);
+      logParts.push(`\n# Parity diff\n${diff || "(no differences)"}`);
+      if (diff) {
+        throw new Error(
+          `node-sqlite parity mismatch between Node and Raster:\n${diff}\n` +
+            `See ${path.relative(root, logPath)}.`
+        );
+      }
+    }
+
+    const compatMode = skipNodeBaseline ? "Raster only" : "Node baseline + Raster";
+    console.log(`node-sqlite compatibility passed (${compatMode})`);
+  } finally {
+    await writeLog(logPath, logParts);
+  }
+}
+
+function resolveSqliteExtensionPath(directory) {
+  const buildDir = path.join(directory, "build");
+  if (!fsSync.existsSync(buildDir)) {
+    return null;
+  }
+  const candidates = fsSync
+    .readdirSync(buildDir)
+    .filter((file) => file.startsWith("sqlite_extension"));
+  if (candidates.length === 0) {
+    return null;
+  }
+  return path.join(buildDir, candidates[0]);
+}
+
+function parseParityJson(stdout, label) {
+  const lines = stdout.trim().split("\n");
+  const jsonLine = [...lines].reverse().find((line) => line.startsWith("{"));
+  if (!jsonLine) {
+    throw new Error(`${label} stdout missing JSON payload`);
+  }
+  try {
+    return JSON.parse(jsonLine);
+  } catch (err) {
+    throw new Error(
+      `${label} stdout JSON parse failed: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
+function normalizeParityOutput(parityOutput) {
+  const clone = structuredClone(parityOutput);
+  delete clone.runtime;
+  for (const entry of clone.results ?? []) {
+    if (entry?.value && typeof entry.value === "object") {
+      entry.value = normalizeParityValue(entry.value);
+    }
+    if (entry?.error?.message) {
+      entry.error.message = normalizeParityText(entry.error.message);
+    }
+  }
+  return clone;
+}
+
+function normalizeParityValue(value) {
+  if (value === null || typeof value !== "object") {
+    return typeof value === "string" ? normalizeParityText(value) : value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeParityValue(item));
+  }
+  if (value instanceof Uint8Array || Buffer.isBuffer(value)) {
+    return { byteLength: value.byteLength ?? value.length };
+  }
+  const out = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (key === "__proto__") {
+      continue;
+    }
+    out[key] = normalizeParityValue(item);
+  }
+  return out;
+}
+
+function normalizeParityText(text) {
+  return String(text)
+    .replaceAll(String(process.pid), "<pid>")
+    .replace(/\/(?:var|tmp|private)\/folders\/[^\s"']+/g, "<tmp>")
+    .replace(/sqlite_extension\.(?:dylib|so|dll)/g, "sqlite_extension<ext>")
+    .replace(/ExperimentalWarning:[^\n]*/g, "<warning>")
+    .replace(/Require stack:[\s\S]*/g, "")
+    .replace(/from '[^']+'/g, "from '<module>'")
+    .trim();
+}
+
+function diffParityOutputs(nodeParity, rasterParity) {
+  const nodeJson = JSON.stringify(nodeParity, null, 2);
+  const rasterJson = JSON.stringify(rasterParity, null, 2);
+  if (nodeJson === rasterJson) {
+    return "";
+  }
+  const nodeResults = new Map(
+    (nodeParity.results ?? []).map((entry) => [entry.name, entry])
+  );
+  const lines = [];
+  for (const rasterEntry of rasterParity.results ?? []) {
+    const nodeEntry = nodeResults.get(rasterEntry.name);
+    if (!nodeEntry) {
+      lines.push(`- missing Node result: ${rasterEntry.name}`);
+      continue;
+    }
+    const nodeValue = JSON.stringify(nodeEntry);
+    const rasterValue = JSON.stringify(rasterEntry);
+    if (nodeValue !== rasterValue) {
+      lines.push(`- ${rasterEntry.name}`);
+      lines.push(`  node:   ${nodeValue}`);
+      lines.push(`  raster: ${rasterValue}`);
+    }
+  }
+  return lines.join("\n");
 }
 
 async function runScriptCompat(testCase, directory, raster, logPath, root) {
@@ -578,11 +813,18 @@ function validateCompatRun(
     );
   }
 
-  if (mustNotContainStdout && result.stdout.includes(mustNotContainStdout)) {
-    throw new Error(
-      `${label} ${phase} stdout must not contain "${mustNotContainStdout}". ` +
-        `See ${path.relative(root, logPath)}.`
-    );
+  if (mustNotContainStdout) {
+    const haystack = result.stderr;
+    const blocked =
+      typeof mustNotContainStdout === "string"
+        ? haystack.includes(mustNotContainStdout)
+        : mustNotContainStdout.test(haystack);
+    if (blocked) {
+      throw new Error(
+        `${label} ${phase} output must not match teardown guard ${mustNotContainStdout}. ` +
+          `See ${path.relative(root, logPath)}.`
+      );
+    }
   }
 }
 

@@ -30,20 +30,102 @@ use facade::init_module_facade;
 
 #[derive(JsLifetime)]
 pub struct ModuleNames<'js> {
-    list: HashSet<String>,
+    ordinary: HashSet<String>,
+    enabled_node_only: HashSet<String>,
+    disabled_node_only: HashSet<String>,
     _marker: PhantomData<&'js ()>,
 }
 
 impl ModuleNames<'_> {
-    pub fn new(names: HashSet<String>) -> Self {
+    pub fn new(
+        ordinary: HashSet<String>,
+        enabled_node_only: HashSet<String>,
+        disabled_node_only: HashSet<String>,
+    ) -> Self {
         Self {
-            list: names,
+            ordinary,
+            enabled_node_only,
+            disabled_node_only,
             _marker: PhantomData,
         }
     }
 
+    pub fn ordinary(&self) -> &HashSet<String> {
+        &self.ordinary
+    }
+
+    pub fn enabled_node_only(&self) -> &HashSet<String> {
+        &self.enabled_node_only
+    }
+
+    pub fn disabled_node_only(&self) -> &HashSet<String> {
+        &self.disabled_node_only
+    }
+
     pub fn get_list(&self) -> HashSet<String> {
-        self.list.clone()
+        let mut list = self.ordinary.clone();
+        for name in &self.enabled_node_only {
+            list.insert(format!("node:{name}"));
+        }
+        for name in &self.disabled_node_only {
+            list.insert(format!("node:{name}"));
+        }
+        list
+    }
+
+    pub fn is_builtin(&self, request: &str) -> bool {
+        let request = request.trim_end_matches('/');
+        if let Some(bare) = request.strip_prefix("node:") {
+            if self.disabled_node_only.contains(bare) {
+                return false;
+            }
+            if self.enabled_node_only.contains(bare) {
+                return true;
+            }
+            return self.ordinary.contains(bare);
+        }
+        self.ordinary.contains(request) && !self.enabled_node_only.contains(request)
+    }
+
+    pub fn is_known_disabled(&self, request: &str) -> bool {
+        let request = request.trim_end_matches('/');
+        if let Some(bare) = request.strip_prefix("node:") {
+            return self.disabled_node_only.contains(bare);
+        }
+        self.disabled_node_only.contains(request)
+    }
+
+    pub fn disabled_node_builtin_error_request(&self, request: &str) -> Option<String> {
+        let request = request.trim_end_matches('/');
+        let bare = request.strip_prefix("node:")?;
+        if self.disabled_node_only.contains(bare) {
+            Some(request.to_string())
+        } else {
+            None
+        }
+    }
+
+    pub fn resolve_builtin(&self, request: &str) -> Option<String> {
+        let request = request.trim_end_matches('/');
+        if let Some(bare) = request.strip_prefix("node:") {
+            if self.disabled_node_only.contains(bare) {
+                return None;
+            }
+            if self.enabled_node_only.contains(bare) {
+                return Some(format!("node:{bare}"));
+            }
+            if self.ordinary.contains(bare) {
+                return Some(bare.to_string());
+            }
+            return None;
+        }
+        if self.disabled_node_only.contains(request) {
+            return None;
+        }
+        if self.ordinary.contains(request) && !self.enabled_node_only.contains(request) {
+            return Some(request.to_string());
+        }
+        None
     }
 }
 
@@ -94,13 +176,11 @@ unsafe impl<'js> JsLifetime<'js> for ModuleCache<'js> {
 pub struct ModuleModule;
 
 fn is_builtin(ctx: Ctx<'_>, name: String) -> Result<bool> {
-    let module_list = ctx
+    let module_names = ctx
         .userdata::<ModuleNames>()
-        .ok_or_else(|| Exception::throw_reference(&ctx, "is_builtin is not supported"))?
-        .get_list();
+        .ok_or_else(|| Exception::throw_reference(&ctx, "is_builtin is not supported"))?;
 
-    let name = name.trim_start_matches("node:").trim_end_matches('/');
-    Ok(module_list.contains(name))
+    Ok(module_names.is_builtin(name.trim_end_matches('/')))
 }
 
 pub fn register_hooks<'js>(ctx: Ctx<'js>, hooks_obj: Object<'js>) -> Result<()> {

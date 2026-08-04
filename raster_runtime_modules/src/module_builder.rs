@@ -7,9 +7,24 @@ use rquickjs::{module::ModuleDef, Ctx, Result};
 
 use crate::module::{loader::ModuleLoader, resolver::ModuleResolver, ModuleNames};
 
+#[derive(Debug, Clone, Copy)]
+pub struct ModuleBuilderConfig {
+    pub sqlite_enabled: bool,
+}
+
+impl Default for ModuleBuilderConfig {
+    fn default() -> Self {
+        Self {
+            sqlite_enabled: true,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct GlobalAttachment {
-    names: HashSet<String>,
+    ordinary: HashSet<String>,
+    enabled_node_only: HashSet<String>,
+    disabled_node_only: HashSet<String>,
     functions: Vec<fn(&Ctx<'_>) -> Result<()>>,
 }
 
@@ -20,13 +35,30 @@ impl GlobalAttachment {
     }
 
     pub fn add_name<P: Into<String>>(mut self, path: P) -> Self {
-        self.names.insert(path.into());
+        self.ordinary.insert(path.into());
+        self
+    }
+
+    pub fn add_node_only_name<P: Into<String>>(mut self, path: P) -> Self {
+        self.enabled_node_only.insert(path.into());
+        self
+    }
+
+    pub fn add_disabled_node_only_name<P: Into<String>>(mut self, path: P) -> Self {
+        self.disabled_node_only.insert(path.into());
         self
     }
 
     pub fn attach(self, ctx: &Ctx<'_>) -> Result<()> {
-        if !self.names.is_empty() {
-            let _ = ctx.store_userdata(ModuleNames::new(self.names));
+        if !self.ordinary.is_empty()
+            || !self.enabled_node_only.is_empty()
+            || !self.disabled_node_only.is_empty()
+        {
+            let _ = ctx.store_userdata(ModuleNames::new(
+                self.ordinary,
+                self.enabled_node_only,
+                self.disabled_node_only,
+            ));
         }
         for init in self.functions {
             init(ctx)?;
@@ -43,6 +75,20 @@ pub struct ModuleBuilder {
 
 impl Default for ModuleBuilder {
     fn default() -> Self {
+        Self::with_config(ModuleBuilderConfig::default())
+    }
+}
+
+impl ModuleBuilder {
+    pub fn new() -> Self {
+        Self {
+            module_resolver: ModuleResolver::default(),
+            module_loader: ModuleLoader::default(),
+            global_attachment: GlobalAttachment::default(),
+        }
+    }
+
+    pub fn with_config(config: ModuleBuilderConfig) -> Self {
         let mut builder = Self::new();
 
         builder = builder
@@ -231,18 +277,14 @@ impl Default for ModuleBuilder {
         {
             builder = builder.with_module(crate::modules::tls::TlsModule);
         }
+        #[cfg(feature = "sqlite")]
+        if config.sqlite_enabled {
+            builder = builder.with_node_only_module(crate::modules::sqlite::SqliteModule);
+        } else {
+            builder = builder.with_disabled_node_only_name("sqlite");
+        }
 
         builder
-    }
-}
-
-impl ModuleBuilder {
-    pub fn new() -> Self {
-        Self {
-            module_resolver: ModuleResolver::default(),
-            module_loader: ModuleLoader::default(),
-            global_attachment: GlobalAttachment::default(),
-        }
     }
 
     pub fn with_module<M: ModuleDef, I: Into<ModuleInfo<M>>>(mut self, module: I) -> Self {
@@ -253,6 +295,26 @@ impl ModuleBuilder {
             .module_loader
             .with_module(module_info.name, module_info.module);
         self.global_attachment = self.global_attachment.add_name(module_info.name);
+        self
+    }
+
+    pub fn with_disabled_node_only_name(mut self, name: impl Into<String>) -> Self {
+        self.global_attachment = self.global_attachment.add_disabled_node_only_name(name);
+        self
+    }
+
+    pub fn with_node_only_module<M: ModuleDef, I: Into<ModuleInfo<M>>>(mut self, module: I) -> Self {
+        let module_info: ModuleInfo<M> = module.into();
+
+        self.module_resolver = self.module_resolver.add_name(module_info.name);
+        self.module_loader = self
+            .module_loader
+            .with_module(module_info.name, module_info.module);
+        if let Some(bare) = module_info.name.strip_prefix("node:") {
+            self.global_attachment = self.global_attachment.add_node_only_name(bare);
+        } else {
+            self.global_attachment = self.global_attachment.add_node_only_name(module_info.name);
+        }
         self
     }
 

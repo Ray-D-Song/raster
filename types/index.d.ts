@@ -30,6 +30,7 @@
 /// <reference types="./querystring.d.ts" />
 /// <reference types="./readline.d.ts" />
 /// <reference types="./readline/promises.d.ts" />
+/// <reference types="./sqlite.d.ts" />
 /// <reference types="./stream/web.d.ts" />
 /// <reference types="./timers.d.ts" />
 /// <reference types="./timers/promises.d.ts" />

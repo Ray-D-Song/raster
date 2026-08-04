@@ -18,7 +18,11 @@ mod repl;
 
 use constcat::concat;
 use minimal_tracer::MinimalTracer;
-use raster_runtime_core::modules::process::EXIT_CODE;
+use raster_runtime_core::modules::{
+    module_builder::{ModuleBuilder, ModuleBuilderConfig},
+    process::{argv, set_argv, EXIT_CODE, NO_WARNINGS, TRACE_WARNINGS},
+};
+use raster_runtime_core::vm::{Vm, VmOptions};
 use tracing::trace;
 
 use crate::base::compiler::compile_file;
@@ -30,7 +34,6 @@ use crate::base::{
         sysinfo::{ARCH, PLATFORM},
     },
     modules::path::name_extname,
-    vm::Vm,
     VERSION,
 };
 
@@ -111,7 +114,27 @@ async fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
     MinimalTracer::register()?;
     trace!("Started runtime");
 
-    let vm = Vm::new().await?;
+    let cli = parse_node_cli_flags(env::args().collect());
+    set_argv(cli.argv);
+    NO_WARNINGS.store(cli.no_warnings, Ordering::Relaxed);
+    TRACE_WARNINGS.store(cli.trace_warnings, Ordering::Relaxed);
+
+    let vm = Vm::from_options(VmOptions {
+        sqlite_enabled: cli.sqlite_enabled,
+        module_builder: ModuleBuilder::with_config(ModuleBuilderConfig {
+            sqlite_enabled: cli.sqlite_enabled,
+        })
+        .with_global(raster_runtime_core::modules::embedded::init)
+        .with_global(raster_runtime_core::builtins_inspect::init)
+        .with_module(raster_runtime_core::modules::raster_runtime::hex::RasterRuntimeHexModule)
+        .with_module(raster_runtime_core::modules::raster_runtime::qjs::RasterRuntimeQjsModule)
+        .with_module(
+            raster_runtime_core::modules::raster_runtime::util::RasterRuntimeUtilModule,
+        )
+        .with_module(raster_runtime_core::modules::raster_runtime::xml::RasterRuntimeXmlModule),
+        ..VmOptions::default()
+    })
+    .await?;
     trace!("Initialized VM in {}ms", now.elapsed().as_millis());
 
     #[cfg(feature = "napi")]
@@ -169,6 +192,42 @@ async fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
 
 pub const VERSION_STRING: &str =
     concat!("raster_runtime v", VERSION, " (", PLATFORM, ", ", ARCH, ")");
+
+struct NodeCliFlags {
+    argv: Vec<String>,
+    sqlite_enabled: bool,
+    no_warnings: bool,
+    trace_warnings: bool,
+}
+
+fn parse_node_cli_flags(mut argv: Vec<String>) -> NodeCliFlags {
+    let mut sqlite_enabled = true;
+    let mut no_warnings = false;
+    let mut trace_warnings = false;
+
+    argv.retain(|arg| {
+        if arg == "--no-experimental-sqlite" {
+            sqlite_enabled = false;
+            return false;
+        }
+        if arg == "--no-warnings" {
+            no_warnings = true;
+            return false;
+        }
+        if arg == "--trace-warnings" {
+            trace_warnings = true;
+            return false;
+        }
+        true
+    });
+
+    NodeCliFlags {
+        argv,
+        sqlite_enabled,
+        no_warnings,
+        trace_warnings,
+    }
+}
 
 fn print_version() {
     println!("{VERSION_STRING}");
@@ -259,7 +318,7 @@ async fn start_cli(vm: &Vm) {
         }
     }
 
-    let args: Vec<String> = env::args().collect();
+    let args: Vec<String> = argv();
 
     if args.len() <= 1 {
         repl::run_repl(&vm.ctx).await;

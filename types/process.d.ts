@@ -41,6 +41,7 @@ declare module "process" {
     raster_runtime: string;
     /** Node-compat identity for ecosystem semver gates. */
     node: string;
+    sqlite: string;
   }
   interface Process extends EventEmitter {
     hrtime: HRTime;

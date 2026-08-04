@@ -1,6 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
-use std::{cell::RefCell, collections::HashSet, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 
 use raster_runtime_utils::io::BYTECODE_FILE_EXT;
 use rquickjs::{Ctx, Object, Result, Value};
@@ -13,22 +13,14 @@ use super::facade::{call_resolve_filename, get_or_create_module_record};
 use super::import_load::load_via_import;
 use super::{ModuleNames, RequireState};
 
-fn normalize_builtin_request(request: &str) -> String {
-    request
-        .trim_start_matches("node:")
-        .trim_end_matches('/')
-        .to_string()
-}
-
 pub fn require_from_module<'js>(
     ctx: Ctx<'js>,
     parent: Object<'js>,
     specifier: String,
     link_parent: bool,
 ) -> Result<Value<'js>> {
-    let module_list = ctx
-        .userdata::<ModuleNames>()
-        .map_or_else(HashSet::new, |v| v.get_list());
+    let ctx_for_names = ctx.clone();
+    let module_names = ctx_for_names.userdata::<ModuleNames>();
 
     let record_parent = if link_parent {
         Some(parent.clone())
@@ -50,20 +42,36 @@ pub fn require_from_module<'js>(
         import_name = specifier[CJS_IMPORT_PREFIX.len()..].into();
         import_specifier = specifier.clone().into();
     } else {
+        if let Some(names) = module_names.as_ref() {
+            let trimmed = specifier.trim_end_matches('/');
+            if let Some(request) = names.disabled_node_builtin_error_request(trimmed) {
+                super::facade::unknown_builtin_module(&ctx, &request)?;
+            }
+        }
+
         let resolved = call_resolve_filename(&ctx, &specifier, Some(parent.clone()), None)?;
         is_bytecode = resolved.ends_with(BYTECODE_FILE_EXT);
 
-        let normalized = if is_bytecode {
-            resolved.clone()
-        } else {
-            normalize_builtin_request(&resolved)
-        };
-
-        is_builtin = module_list.contains(normalized.as_str());
-        if is_builtin {
-            import_name = normalized.into();
+        if is_bytecode {
+            import_name = resolved.clone().into();
             import_specifier = import_name.clone();
+            is_builtin = false;
+        } else if let Some(names) = module_names.as_ref() {
+            let resolved_trimmed = resolved.trim_end_matches('/');
+            if let Some(request) = names.disabled_node_builtin_error_request(&resolved_trimmed) {
+                super::facade::unknown_builtin_module(&ctx, &request)?;
+            }
+            if let Some(builtin_name) = names.resolve_builtin(&resolved) {
+                is_builtin = true;
+                import_name = builtin_name.into();
+                import_specifier = import_name.clone();
+            } else {
+                is_builtin = false;
+                import_name = resolved.clone().into();
+                import_specifier = import_name.clone();
+            }
         } else {
+            is_builtin = false;
             import_name = resolved.clone().into();
             import_specifier = import_name.clone();
         }

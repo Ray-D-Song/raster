@@ -24,6 +24,7 @@ jobs:
       - run: cargo test -p raster_runtime_modules --lib
       - run: cargo test -p raster_runtime_util --lib
       - run: cargo test -p raster_runtime_fs --lib
+      - run: cargo test -p raster_runtime_sqlite --all-targets
       - run: make js JS_MINIFY=0
       - name: Build raster_runtime (napi) for JS unit gates
         run: cargo build --features napi
@@ -31,9 +32,32 @@ jobs:
         env:
           RASTER_RUNTIME_ASYNC_HOOKS: "1"
         run: |
-          for filter in events readline util worker_threads module fs; do
+          for filter in events readline util worker_threads module fs sqlite; do
             ./target/debug/raster_runtime test -d bundle/js/__tests__/unit --filter "$filter"
           done
+
+  windows-sqlite:
+    name: windows-sqlite
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.3.0
+      - run: make js JS_MINIFY=0
+      - name: Build raster_runtime and sqlite extension
+        run: |
+          cargo build
+          node compat/node-sqlite/build-extension.mjs
+      - name: JS sqlite unit tests
+        run: ./target/debug/raster_runtime.exe test -d bundle/js/__tests__/unit --filter sqlite
+      - name: Parity differential (Raster only on Windows CI)
+        env:
+          COMPAT_SKIP_NODE_BASELINE: "1"
+          COMPAT_SQLITE_LIFECYCLE_LOOPS: "5"
+          COMPAT_SQLITE_BACKUP_LOOPS: "2"
+        run: node compat/run.mjs node-sqlite target/debug/raster_runtime.exe
 
   windows-tty-napi:
     name: windows-tty-napi
@@ -102,7 +126,22 @@ jobs:
           -p raster_runtime_modules
           -p raster_runtime_fs
           -p raster_runtime_util
+          -p raster_runtime_sqlite
           --all-targets --no-deps -- -D warnings
+
+  sqlite-asan:
+    name: sqlite-asan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.3.0
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - run: yarn install --frozen-lockfile
+      - run: bash compat/node-sqlite/run-asan.sh
 
   mysql-compat:
     name: mysql-compat
@@ -177,12 +216,16 @@ jobs:
             os: ubuntu-24.04-arm
           - case: v8-hello
             os: ubuntu-24.04-arm
+          - case: node-sqlite
+            os: ubuntu-latest
+          - case: node-sqlite
+            os: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           # Vite+ / Next install with Node 22.18 (not system 24.3). V8 fixtures pin 24.3 ABI.
-          node-version: ${{ (matrix.case == 'better-sqlite3' || matrix.case == 'v8-hello') && '24.3.0' || '22.18.0' }}
+          node-version: ${{ (matrix.case == 'better-sqlite3' || matrix.case == 'v8-hello' || matrix.case == 'node-sqlite') && '24.3.0' || '22.18.0' }}
           cache: yarn
       - run: yarn install --frozen-lockfile
       - run: make js JS_MINIFY=0
@@ -192,12 +235,14 @@ jobs:
           FEATURES=""
           if [ "${{ matrix.case }}" = "napi-hello" ] || [ "${{ matrix.case }}" = "vite-plus" ]; then FEATURES="--features napi"; fi
           if [ "${{ matrix.case }}" = "better-sqlite3" ] || [ "${{ matrix.case }}" = "v8-hello" ]; then FEATURES="--features v8-compat"; fi
+          if [ "${{ matrix.case }}" = "node-sqlite" ]; then FEATURES=""; fi
           cargo build $FEATURES
-      # Full stability (version×100, build×20) is expensive; CI uses reduced loops unless overridden.
       - name: Run compatibility fixture
         env:
           COMPAT_VP_VERSION_LOOPS: ${{ matrix.case == 'vite-plus' && '100' || '0' }}
           COMPAT_VP_BUILD_LOOPS: ${{ matrix.case == 'vite-plus' && '20' || '0' }}
+          COMPAT_SQLITE_LIFECYCLE_LOOPS: ${{ matrix.case == 'node-sqlite' && '100' || '0' }}
+          COMPAT_SQLITE_BACKUP_LOOPS: ${{ matrix.case == 'node-sqlite' && '20' || '0' }}
         run: make compat-${{ matrix.case }}
       - if: always()
         run: |

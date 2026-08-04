@@ -28,6 +28,14 @@ pub struct ModuleFacadeState<'js> {
     pub native_node_handler: Function<'js>,
 }
 
+pub fn unknown_builtin_module(ctx: &Ctx<'_>, request: &str) -> Result<()> {
+    let message = format!("No such built-in module: {request}");
+    let error_ctor: Constructor = ctx.globals().get("Error")?;
+    let err: Object = error_ctor.construct((message,))?;
+    err.set("code", "ERR_UNKNOWN_BUILTIN_MODULE")?;
+    Err(ctx.throw(err.into_value()))
+}
+
 pub fn module_not_found(ctx: &Ctx<'_>, request: &str, parent: &str) -> Result<()> {
     let message = format!("Cannot find module '{request}' from '{parent}'");
     let error_ctor: Constructor = ctx.globals().get("Error")?;
@@ -36,19 +44,14 @@ pub fn module_not_found(ctx: &Ctx<'_>, request: &str, parent: &str) -> Result<()
     Err(ctx.throw(err.into_value()))
 }
 
-fn normalize_builtin_request(request: &str) -> String {
-    request
-        .trim_start_matches("node:")
-        .trim_end_matches('/')
-        .to_string()
+fn is_builtin_request(ctx: &Ctx<'_>, request: &str) -> bool {
+    ctx.userdata::<ModuleNames>()
+        .is_some_and(|names| names.is_builtin(request))
 }
 
-fn is_builtin_request(ctx: &Ctx<'_>, request: &str) -> bool {
-    let module_list = ctx
-        .userdata::<ModuleNames>()
-        .map_or_else(HashSet::new, |v| v.get_list());
-    let name = normalize_builtin_request(request);
-    module_list.contains(name.as_str())
+fn resolve_builtin_request(ctx: &Ctx<'_>, request: &str) -> Option<String> {
+    ctx.userdata::<ModuleNames>()?
+        .resolve_builtin(request)
 }
 
 pub fn canonical_parent_filename(ctx: &Ctx<'_>, parent: Option<Object<'_>>) -> Result<String> {
@@ -114,8 +117,15 @@ pub fn default_resolve_filename(
         None => None,
     };
 
-    if is_builtin_request(&ctx, &request) {
-        return Ok(normalize_builtin_request(&request));
+    let trimmed = request.trim_end_matches('/');
+    if let Some(names) = ctx.userdata::<ModuleNames>() {
+        if let Some(builtin_request) = names.disabled_node_builtin_error_request(trimmed) {
+            return unknown_builtin_module(&ctx, &builtin_request).map(|_| String::new());
+        }
+    }
+
+    if let Some(resolved) = resolve_builtin_request(&ctx, &request) {
+        return Ok(resolved);
     }
 
     let parent_filename = canonical_parent_filename(&ctx, parent_object)?;
@@ -293,8 +303,8 @@ fn global_require_resolve_impl<'js>(
     request: String,
     options: Opt<Object<'js>>,
 ) -> Result<String> {
-    if request.starts_with("node:") && is_builtin_request(&ctx, &request) {
-        return Ok(request);
+    if let Some(resolved) = resolve_builtin_request(&ctx, &request) {
+        return Ok(resolved);
     }
     require_resolve_fn(ctx, request, options, Opt(None))
 }
@@ -318,8 +328,8 @@ fn resolve_from_filename<'js>(
     request: String,
     options: Opt<Object<'js>>,
 ) -> Result<String> {
-    if request.starts_with("node:") && is_builtin_request(&ctx, &request) {
-        return Ok(request);
+    if let Some(resolved) = resolve_builtin_request(&ctx, &request) {
+        return Ok(resolved);
     }
     let parent = get_or_create_module_record(&ctx, &parent_filename, None)?;
     call_resolve_filename(&ctx, &request, Some(parent), options.0)

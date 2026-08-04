@@ -21,7 +21,7 @@ use crate::libs::{
 use crate::modules::{
     async_hooks::promise_hook_tracker,
     embedded::{loader::EmbeddedLoader, resolver::EmbeddedResolver, BYTECODE_CACHE},
-    module_builder::ModuleBuilder,
+    module_builder::{ModuleBuilder, ModuleBuilderConfig},
     package::{loader::PackageLoader, resolver::PackageResolver},
 };
 use crate::{environment, http, security};
@@ -33,13 +33,15 @@ pub struct Vm {
 
 pub struct VmOptions {
     pub module_builder: ModuleBuilder,
+    pub sqlite_enabled: bool,
     pub max_stack_size: usize,
     pub gc_threshold_mb: usize,
 }
 
 impl Default for VmOptions {
     fn default() -> Self {
-        let module_builder = ModuleBuilder::default()
+        let sqlite_enabled = true;
+        let module_builder = ModuleBuilder::with_config(ModuleBuilderConfig { sqlite_enabled })
             .with_global(crate::modules::embedded::init)
             .with_global(crate::builtins_inspect::init)
             .with_module(crate::modules::raster_runtime::hex::RasterRuntimeHexModule)
@@ -49,6 +51,7 @@ impl Default for VmOptions {
 
         Self {
             module_builder,
+            sqlite_enabled,
             max_stack_size: 2 * 1024 * 1024,
             gc_threshold_mb: {
                 const DEFAULT_GC_THRESHOLD_MB: usize = 20;

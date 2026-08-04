@@ -1,0 +1,8 @@
+{
+  "name": "raster-compat-node-sqlite",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "parity": "node parity.mjs"
+  }
+}

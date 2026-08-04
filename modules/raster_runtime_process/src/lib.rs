@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::env;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
+use std::sync::OnceLock;
+
 use raster_runtime_events::{Emitter, EventEmitter};
 use raster_runtime_hooking::{allocate_hook_resource_id, invoke_async_hook, HookType};
 use raster_runtime_utils::provider::ProviderType;
@@ -32,6 +34,49 @@ use rquickjs::{
 
 pub static EXIT_CODE: AtomicU8 = AtomicU8::new(0);
 static EXITING: AtomicBool = AtomicBool::new(false);
+static PROCESS_ARGV: OnceLock<Vec<String>> = OnceLock::new();
+
+pub static NO_WARNINGS: AtomicBool = AtomicBool::new(false);
+pub static TRACE_WARNINGS: AtomicBool = AtomicBool::new(false);
+
+pub fn set_argv(argv: Vec<String>) {
+    let _ = PROCESS_ARGV.set(argv);
+}
+
+pub fn no_warnings() -> bool {
+    NO_WARNINGS.load(Ordering::Relaxed)
+}
+
+fn emit_warning<'js>(_ctx: Ctx<'js>, message: String, type_or_opts: Opt<Value<'js>>) -> Result<()> {
+    if no_warnings() {
+        return Ok(());
+    }
+
+    let mut warning_type = "Warning".to_string();
+    if let Some(value) = type_or_opts.0 {
+        if let Some(s) = value.as_string() {
+            warning_type = s.to_string()?;
+        } else if let Some(obj) = value.as_object() {
+            if let Ok(t) = obj.get::<_, String>("type") {
+                warning_type = t;
+            }
+        }
+    }
+
+    if TRACE_WARNINGS.load(Ordering::Relaxed) {
+        eprintln!("(node:{pid}) [{warning_type}] {message}", pid = std::process::id());
+    } else {
+        eprintln!("(node:{pid}) [{warning_type}] {message}", pid = std::process::id());
+    }
+    Ok(())
+}
+
+pub fn argv() -> Vec<String> {
+    PROCESS_ARGV
+        .get()
+        .cloned()
+        .unwrap_or_else(|| env::args().collect())
+}
 
 /// Node-compat identity advertised to ecosystem semver gates.
 const NODE_COMPAT_VERSION: &str = "24.3.0";
@@ -54,6 +99,7 @@ const EVENT_EMITTER_METHODS: &[&str] = &[
 const PROCESS_NAMED_EXPORTS: &[&str] = &[
     "env", "cwd", "chdir", "argv0", "id", "pid", "argv", "platform", "arch", "hrtime", "release",
     "version", "versions", "exitCode", "exit", "kill", "nextTick", "stdin", "stdout", "stderr",
+    "emitWarning",
 ];
 
 #[cfg(feature = "napi")]
@@ -316,6 +362,7 @@ pub fn init(ctx: &Ctx<'_>) -> Result<()> {
     let process_versions = Object::new(ctx.clone())?;
     process_versions.set("raster_runtime", VERSION)?;
     process_versions.set("node", NODE_COMPAT_VERSION)?;
+    process_versions.set("sqlite", "3.50.1")?;
 
     let hr_time = Function::new(ctx.clone(), hr_time)?;
     hr_time.set("bigint", Func::from(hr_time_big_int))?;
@@ -324,7 +371,7 @@ pub fn init(ctx: &Ctx<'_>) -> Result<()> {
     release.prop("name", Property::from("raster_runtime").enumerable())?;
 
     let env_map: HashMap<String, String> = env::vars().collect();
-    let mut args: Vec<String> = env::args().collect();
+    let mut args: Vec<String> = argv();
 
     if let Some(arg) = args.get(1) {
         if arg == "-e" || arg == "--eval" {
@@ -382,6 +429,7 @@ pub fn init(ctx: &Ctx<'_>) -> Result<()> {
         .enumerable(),
     )?;
     process.set("exit", Func::from(exit))?;
+    process.set("emitWarning", Func::from(emit_warning))?;
     process.set(
         "kill",
         Func::from(|ctx, pid, signal| signals::kill(&ctx, pid, signal)),
