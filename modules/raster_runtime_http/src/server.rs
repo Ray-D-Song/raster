@@ -1320,6 +1320,9 @@ impl ModuleDef for HttpModule {
             "STATUS_CODES",
             "validateHeaderName",
             "validateHeaderValue",
+            // Client stubs — present for ESM named-import graphs (e.g. vite).
+            "get",
+            "request",
             "default",
         ] {
             declare.declare(name)?;
@@ -1361,6 +1364,17 @@ impl ModuleDef for HttpModule {
             default.set("STATUS_CODES", status_codes)?;
             default.set("validateHeaderName", Func::from(validate_header_name))?;
             default.set("validateHeaderValue", Func::from(validate_header_value))?;
+            // Named-export stubs so `import { get, request } from "node:http"` links.
+            // Full client request pipeline is not yet implemented.
+            let client_stub: rquickjs::Function = ctx.eval(
+                r#"(function(){
+  return function httpClientStub() {
+    throw new Error("http.get/request client API is not implemented in raster_runtime yet");
+  };
+})()"#,
+            )?;
+            default.set("get", client_stub.clone())?;
+            default.set("request", client_stub)?;
             Ok(())
         })?;
         Ok(())

@@ -3,6 +3,7 @@
 #![allow(clippy::uninlined_format_args)]
 
 use std::borrow::Cow;
+use std::io;
 use std::path::PathBuf;
 
 use either::Either;
@@ -22,6 +23,88 @@ use super::{read_file, Stats};
 const DEFAULT_BUFFER_SIZE: usize = 16384;
 const DEFAULT_ENCODING: &str = "utf8";
 
+/// CRT open flags matching MSVC `<fcntl.h>` (used by `_open_osfhandle`).
+/// Defined on all platforms so unit tests can lock the mapping without Windows.
+pub mod crt_flags {
+    pub const O_RDONLY: i32 = 0x0000;
+    pub const O_WRONLY: i32 = 0x0001;
+    pub const O_RDWR: i32 = 0x0002;
+    pub const O_APPEND: i32 = 0x0008;
+    pub const O_BINARY: i32 = 0x8000;
+}
+
+/// Map Node-style open flags to CRT `_open_osfhandle` access flags.
+pub fn crt_flags_for_node_open(flags: &str) -> i32 {
+    use crt_flags::*;
+    match flags {
+        "r" => O_RDONLY | O_BINARY,
+        "r+" => O_RDWR | O_BINARY,
+        "w" | "wx" => O_WRONLY | O_BINARY,
+        "w+" | "wx+" => O_RDWR | O_BINARY,
+        "a" | "ax" => O_WRONLY | O_APPEND | O_BINARY,
+        "a+" => O_RDWR | O_APPEND | O_BINARY,
+        // Default read (same as open default "r").
+        _ => O_RDONLY | O_BINARY,
+    }
+}
+
+#[cfg(windows)]
+extern "C" {
+    fn _open_osfhandle(handle: isize, flags: i32) -> i32;
+    fn _close(fd: i32) -> i32;
+    fn _get_osfhandle(fd: i32) -> isize;
+}
+
+/// Owns a CRT file descriptor created via `_open_osfhandle` on a duplicated HANDLE.
+#[cfg(windows)]
+struct OwnedCrtFd(i32);
+
+#[cfg(windows)]
+impl Drop for OwnedCrtFd {
+    fn drop(&mut self) {
+        if self.0 >= 0 {
+            unsafe {
+                _close(self.0);
+            }
+            self.0 = -1;
+        }
+    }
+}
+
+#[cfg(windows)]
+fn duplicate_as_crt_fd(file: &File, crt_flags: i32) -> io::Result<OwnedCrtFd> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::{CloseHandle, DUPLICATE_SAME_ACCESS, HANDLE};
+    use windows_sys::Win32::System::Threading::{DuplicateHandle, GetCurrentProcess};
+
+    unsafe {
+        let src = file.as_raw_handle() as HANDLE;
+        let mut dup: HANDLE = std::ptr::null_mut();
+        let ok = DuplicateHandle(
+            GetCurrentProcess(),
+            src,
+            GetCurrentProcess(),
+            &mut dup,
+            0,
+            0,
+            DUPLICATE_SAME_ACCESS,
+        );
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let fd = _open_osfhandle(dup as isize, crt_flags);
+        if fd < 0 {
+            CloseHandle(dup);
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "_open_osfhandle failed",
+            ));
+        }
+        // CRT now owns `dup`; do not CloseHandle(dup).
+        Ok(OwnedCrtFd(fd))
+    }
+}
+
 #[allow(dead_code)]
 #[rquickjs::class]
 #[derive(rquickjs::class::Trace, rquickjs::JsLifetime)]
@@ -30,13 +113,45 @@ pub struct FileHandle {
     file: Option<File>,
     #[qjs(skip_trace)]
     path: PathBuf,
+    /// Real CRT file descriptor (Windows only); dropped via `_close`.
+    #[cfg(windows)]
+    #[qjs(skip_trace)]
+    crt_fd: Option<OwnedCrtFd>,
 }
 
 impl FileHandle {
-    pub fn new(file: File, path: PathBuf) -> Self {
-        Self {
-            file: Some(file),
-            path,
+    /// Create a FileHandle. On Windows, `crt_flags` must match open access
+    /// (`crt_flags_for_node_open`); ignored on Unix.
+    pub fn new(file: File, path: PathBuf) -> io::Result<Self> {
+        Self::new_with_crt_flags(file, path, {
+            #[cfg(windows)]
+            {
+                crt_flags::O_RDONLY | crt_flags::O_BINARY
+            }
+            #[cfg(not(windows))]
+            {
+                0
+            }
+        })
+    }
+
+    pub fn new_with_crt_flags(file: File, path: PathBuf, crt_flags: i32) -> io::Result<Self> {
+        #[cfg(windows)]
+        {
+            let crt_fd = duplicate_as_crt_fd(&file, crt_flags)?;
+            Ok(Self {
+                file: Some(file),
+                path,
+                crt_fd: Some(crt_fd),
+            })
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = crt_flags;
+            Ok(Self {
+                file: Some(file),
+                path,
+            })
         }
     }
 
@@ -81,6 +196,11 @@ impl FileHandle {
     }
 
     async fn close(&mut self) {
+        // Drop CRT fd first (closes the duplicated HANDLE), then the Rust File.
+        #[cfg(windows)]
+        {
+            self.crt_fd = None;
+        }
         if let Some(file) = self.file.take() {
             drop(file.into_std().await);
         }
@@ -94,21 +214,32 @@ impl FileHandle {
         Ok(())
     }
 
+    /// Synchronous file descriptor (Node `filehandle.fd`).
+    ///
+    /// Unix: real OS fd. Windows: real CRT fd from `_open_osfhandle` on a
+    /// duplicated HANDLE (interoperable; not a truncated pointer cast).
     #[qjs(get)]
-    async fn fd(&self, ctx: Ctx<'_>) -> Result<i32> {
+    fn fd(&self) -> Result<i32> {
         #[cfg(unix)]
         {
             use std::os::fd::AsRawFd;
-            Ok(self.file(&ctx)?.as_raw_fd())
+            self.file
+                .as_ref()
+                .map(AsRawFd::as_raw_fd)
+                .ok_or_else(|| Error::new_from_js("closed FileHandle", "fd"))
         }
         #[cfg(windows)]
         {
-            use std::os::windows::io::AsRawHandle;
-            let handle = self.file(&ctx)?.as_raw_handle();
-            Ok(handle as i32)
+            self.crt_fd
+                .as_ref()
+                .map(|fd| fd.0)
+                .ok_or_else(|| Error::new_from_js("closed FileHandle", "fd"))
         }
         #[cfg(not(any(unix, windows)))]
         {
+            if self.file.is_none() {
+                return Err(Error::new_from_js("closed FileHandle", "fd"));
+            }
             Ok(0)
         }
     }
@@ -523,8 +654,12 @@ mod tests {
                 .await
                 .unwrap();
 
-                let result =
-                    call_test::<Vec<u8>, _>(&ctx, &module, (FileHandle::new(file, path_1),)).await;
+                let result = call_test::<Vec<u8>, _>(
+                    &ctx,
+                    &module,
+                    (FileHandle::new(file, path_1).unwrap(),),
+                )
+                .await;
 
                 assert!(result.starts_with(b"Hello World"));
             })
@@ -560,7 +695,7 @@ mod tests {
                 .unwrap();
 
                 let result =
-                    call_test::<Vec<u8>, _>(&ctx, &module, (FileHandle::new(file_a, path_a_1), FileHandle::new(file_b, path_b_1))).await;
+                    call_test::<Vec<u8>, _>(&ctx, &module, (FileHandle::new(file_a, path_a_1).unwrap(), FileHandle::new(file_b, path_b_1).unwrap())).await;
 
                 assert_eq!(result.len(), 10000);
                 if result.iter().all(|&b| b == b'a') {
@@ -602,8 +737,12 @@ mod tests {
                 .catch(&ctx)
                 .unwrap();
 
-                let result =
-                    call_test::<Vec<u8>, _>(&ctx, &module, (FileHandle::new(file, path_1),)).await;
+                let result = call_test::<Vec<u8>, _>(
+                    &ctx,
+                    &module,
+                    (FileHandle::new(file, path_1).unwrap(),),
+                )
+                .await;
 
                 assert!(result.starts_with(b"WorldHello World"));
             })
@@ -636,8 +775,12 @@ mod tests {
                 .await
                 .unwrap();
 
-                let result =
-                    call_test::<Vec<u8>, _>(&ctx, &module, (FileHandle::new(file, path_1),)).await;
+                let result = call_test::<Vec<u8>, _>(
+                    &ctx,
+                    &module,
+                    (FileHandle::new(file, path_1).unwrap(),),
+                )
+                .await;
 
                 assert!(result.starts_with(b"\x00\x00\x00Hello\x00"));
             })
@@ -670,9 +813,13 @@ mod tests {
                 .await
                 .unwrap();
 
-                let error = call_test_err::<(), _>(&ctx, &module, (FileHandle::new(file, path_1),))
-                    .await
-                    .unwrap_err();
+                let error = call_test_err::<(), _>(
+                    &ctx,
+                    &module,
+                    (FileHandle::new(file, path_1).unwrap(),),
+                )
+                .await
+                .unwrap_err();
 
                 let CaughtError::Exception(exception) = error else {
                     panic!("Expected exception");
@@ -709,8 +856,12 @@ mod tests {
                 .await
                 .unwrap();
 
-                let result =
-                    call_test::<Vec<u8>, _>(&ctx, &module, (FileHandle::new(file, path_1),)).await;
+                let result = call_test::<Vec<u8>, _>(
+                    &ctx,
+                    &module,
+                    (FileHandle::new(file, path_1).unwrap(),),
+                )
+                .await;
 
                 assert!(result.starts_with(b"Hello World"));
             })
@@ -740,8 +891,12 @@ mod tests {
                 .await
                 .unwrap();
 
-                let result =
-                    call_test::<String, _>(&ctx, &module, (FileHandle::new(file, path_1),)).await;
+                let result = call_test::<String, _>(
+                    &ctx,
+                    &module,
+                    (FileHandle::new(file, path_1).unwrap(),),
+                )
+                .await;
 
                 assert_eq!(result, "Hello World");
             })
@@ -774,7 +929,7 @@ mod tests {
                 .unwrap();
 
                 let result =
-                    call_test::<u32, _>(&ctx, &module, (FileHandle::new(file, path_1),)).await;
+                    call_test::<u32, _>(&ctx, &module, (FileHandle::new(file, path_1).unwrap(),)).await;
 
                 assert_eq!(result, 11);
             })
@@ -808,7 +963,7 @@ mod tests {
                 .unwrap();
 
                 let result =
-                    call_test::<u32, _>(&ctx, &module, (FileHandle::new(file, path_1),)).await;
+                    call_test::<u32, _>(&ctx, &module, (FileHandle::new(file, path_1).unwrap(),)).await;
 
                 assert_eq!(result, 11);
             })
@@ -838,9 +993,13 @@ mod tests {
                 .await
                 .unwrap();
 
-                let error = call_test_err::<(), _>(&ctx, &module, (FileHandle::new(file, path_1),))
-                    .await
-                    .unwrap_err();
+                let error = call_test_err::<(), _>(
+                    &ctx,
+                    &module,
+                    (FileHandle::new(file, path_1).unwrap(),),
+                )
+                .await
+                .unwrap_err();
 
                 let CaughtError::Exception(exception) = error else {
                     panic!("Expected exception");
@@ -879,7 +1038,7 @@ mod tests {
                 .await
                 .unwrap();
 
-                call_test::<(), _>(&ctx, &module, (FileHandle::new(file, path_1),)).await;
+                call_test::<(), _>(&ctx, &module, (FileHandle::new(file, path_1).unwrap(),)).await;
             })
         })
         .await;
@@ -908,13 +1067,82 @@ mod tests {
                 .unwrap();
 
                 let result =
-                    call_test::<i32, _>(&ctx, &module, (FileHandle::new(file, path_1),)).await;
+                    call_test::<i32, _>(&ctx, &module, (FileHandle::new(file, path_1).unwrap(),))
+                        .await;
 
                 assert!(result > 0);
             })
         })
         .await;
 
+        tokio::fs::remove_file(&path).await.unwrap();
+    }
+
+    #[test]
+    fn crt_flags_match_node_open_access() {
+        use super::crt_flags::*;
+        assert_eq!(crt_flags_for_node_open("r"), O_RDONLY | O_BINARY);
+        assert_eq!(crt_flags_for_node_open("r+"), O_RDWR | O_BINARY);
+        assert_eq!(crt_flags_for_node_open("w"), O_WRONLY | O_BINARY);
+        assert_eq!(crt_flags_for_node_open("w+"), O_RDWR | O_BINARY);
+        assert_eq!(crt_flags_for_node_open("a"), O_WRONLY | O_APPEND | O_BINARY);
+        assert_eq!(crt_flags_for_node_open("a+"), O_RDWR | O_APPEND | O_BINARY);
+        // Write modes must not be read-only.
+        assert_ne!(crt_flags_for_node_open("w") & O_WRONLY, 0);
+        assert_ne!(crt_flags_for_node_open("r+") & O_RDWR, 0);
+    }
+
+    /// Windows: fd must be a real CRT descriptor, not a truncated HANDLE cast.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_crt_fd_is_valid_osfhandle() {
+        use std::os::windows::io::AsRawHandle;
+        use tokio::fs::OpenOptions;
+
+        let (file, path) =
+            given_file("crt-fd-test", OpenOptions::new().read(true).write(true)).await;
+        let raw_handle = file.as_raw_handle() as isize;
+        // RDWR matches r+ / w+ — not the default O_RDONLY used by FileHandle::new.
+        let handle =
+            FileHandle::new_with_crt_flags(file, path.clone(), crt_flags_for_node_open("r+"))
+                .unwrap();
+        let fd = handle.fd().unwrap();
+        assert!(fd >= 0);
+        // Must not be the raw HANDLE truncated into i32.
+        let truncated = raw_handle as i32;
+        assert_ne!(fd, truncated, "fd must not be a truncated RawHandle cast");
+        let osf = unsafe { super::_get_osfhandle(fd) };
+        assert_ne!(osf, -1, "_get_osfhandle(filehandle.fd) must succeed");
+        // Closing FileHandle drops CRT fd.
+        drop(handle);
+        let osf_after = unsafe { super::_get_osfhandle(fd) };
+        assert_eq!(osf_after, -1, "CRT fd invalid after FileHandle drop");
+        tokio::fs::remove_file(&path).await.unwrap();
+    }
+
+    /// Windows: write-mode CRT fd allows CRT `_write` (not open read-only).
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_crt_fd_write_mode_allows_crt_write() {
+        use std::ffi::c_void;
+        use tokio::fs::OpenOptions;
+
+        extern "C" {
+            fn _write(fd: i32, buffer: *const c_void, count: u32) -> i32;
+        }
+
+        let (file, path) =
+            given_file("", OpenOptions::new().read(true).write(true).truncate(true)).await;
+        let handle =
+            FileHandle::new_with_crt_flags(file, path.clone(), crt_flags_for_node_open("w+"))
+                .unwrap();
+        let fd = handle.fd().unwrap();
+        let msg = b"crt-write";
+        let n = unsafe { _write(fd, msg.as_ptr() as *const c_void, msg.len() as u32) };
+        assert_eq!(n, msg.len() as i32, "CRT _write must succeed on RDWR fd");
+        drop(handle);
+        let content = tokio::fs::read(&path).await.unwrap();
+        assert_eq!(&content[..msg.len()], msg.as_slice());
         tokio::fs::remove_file(&path).await.unwrap();
     }
 }

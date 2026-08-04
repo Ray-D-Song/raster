@@ -94,6 +94,26 @@ declare module "util" {
     code?: string
   ): T;
   /**
+   * Returns `str` with any ANSI/VT100 escape sequences stripped.
+   */
+  export function stripVTControlCharacters(str: string): string;
+  /**
+   * Styles `text` with ANSI codes for the given format name(s).
+   * When `options.validateStream` is true (default), returns plain text if the
+   * target stream reports no color support via `hasColors()`.
+   */
+  export function styleText(
+    format:
+      | string
+      | string[]
+      | ReadonlyArray<string>,
+    text: string,
+    options?: {
+      validateStream?: boolean;
+      stream?: { hasColors?: (...args: any[]) => boolean; isTTY?: boolean };
+    }
+  ): string;
+  /**
    * Usage of `util.inherits()` is discouraged. Please use the ES6 `class` and `extends` keywords to get language level inheritance support. Also note
    * that the two styles are [semantically incompatible](https://github.com/nodejs/node/issues/4179).
    *

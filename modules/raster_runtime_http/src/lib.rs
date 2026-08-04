@@ -46,6 +46,9 @@ impl ModuleDef for HttpsModule {
             feature = "tls-openssl"
         ))]
         declare.declare(stringify!(Agent))?;
+        declare.declare("createServer")?;
+        declare.declare("get")?;
+        declare.declare("request")?;
         declare.declare("default")?;
         Ok(())
     }
@@ -59,6 +62,18 @@ impl ModuleDef for HttpsModule {
                 feature = "tls-openssl"
             ))]
             rquickjs::Class::<Agent>::define(default)?;
+
+            // ESM named-import stubs for packages that link https surface at load time.
+            let stub: rquickjs::Function = ctx.eval(
+                r#"(function(){
+  return function httpsStub() {
+    throw new Error("https.createServer/get/request is not fully implemented in raster_runtime yet");
+  };
+})()"#,
+            )?;
+            default.set("createServer", stub.clone())?;
+            default.set("get", stub.clone())?;
+            default.set("request", stub)?;
 
             let _ = default;
             Ok(())

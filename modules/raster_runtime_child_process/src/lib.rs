@@ -572,6 +572,10 @@ pub struct ChildProcessModule;
 impl ModuleDef for ChildProcessModule {
     fn declare(declare: &Declarations) -> Result<()> {
         declare.declare("spawn")?;
+        declare.declare("exec")?;
+        declare.declare("execFile")?;
+        declare.declare("execSync")?;
+        declare.declare("execFileSync")?;
         declare.declare("default")?;
         Ok(())
     }
@@ -585,11 +589,150 @@ impl ModuleDef for ChildProcessModule {
 
         export_default(ctx, exports, |default| {
             default.set("spawn", Func::from(spawn))?;
+            // Lazy JS helpers that call require("child_process").spawn after the
+            // module is fully registered (avoids mid-evaluate require cycles).
+            let exec: rquickjs::Function = ctx.eval(
+                r#"(function(){
+  return function exec(command, options, callback) {
+    const { spawn } = require("child_process");
+    if (typeof options === "function") { callback = options; options = {}; }
+    options = options || {};
+    const child = spawn(String(command), {
+      shell: options.shell !== false,
+      cwd: options.cwd,
+      env: options.env,
+      windowsHide: options.windowsHide,
+    });
+    let stdout = "", stderr = "";
+    if (child.stdout) child.stdout.on("data", (c) => { stdout += String(c); });
+    if (child.stderr) child.stderr.on("data", (c) => { stderr += String(c); });
+    child.on("error", (err) => { if (typeof callback === "function") callback(err, stdout, stderr); });
+    child.on("close", (code, signal) => {
+      if (typeof callback !== "function") return;
+      if (code === 0) callback(null, stdout, stderr);
+      else {
+        const err = new Error("Command failed: " + command + "\n" + stderr);
+        err.code = code; err.signal = signal; err.stdout = stdout; err.stderr = stderr;
+        callback(err, stdout, stderr);
+      }
+    });
+    return child;
+  };
+})()"#,
+            )?;
+            let exec_file: rquickjs::Function = ctx.eval(
+                r#"(function(){
+  return function execFile(file, args, options, callback) {
+    const { spawn } = require("child_process");
+    if (typeof args === "function") { callback = args; args = []; options = {}; }
+    else if (typeof options === "function") { callback = options; options = {}; }
+    args = args || []; options = options || {};
+    const child = spawn(file, args, { cwd: options.cwd, env: options.env, windowsHide: options.windowsHide });
+    let stdout = "", stderr = "";
+    if (child.stdout) child.stdout.on("data", (c) => { stdout += String(c); });
+    if (child.stderr) child.stderr.on("data", (c) => { stderr += String(c); });
+    child.on("error", (err) => { if (typeof callback === "function") callback(err, stdout, stderr); });
+    child.on("close", (code, signal) => {
+      if (typeof callback !== "function") return;
+      if (code === 0) callback(null, stdout, stderr);
+      else {
+        const err = new Error("Command failed: " + file);
+        err.code = code; err.signal = signal; err.stdout = stdout; err.stderr = stderr;
+        callback(err, stdout, stderr);
+      }
+    });
+    return child;
+  };
+})()"#,
+            )?;
+            default.set("exec", exec)?;
+            default.set("execFile", exec_file)?;
+            default.set("execSync", Func::from(exec_sync))?;
+            default.set("execFileSync", Func::from(exec_file_sync))?;
             Ok(())
         })?;
 
         Ok(())
     }
+}
+
+fn exec_sync<'js>(
+    ctx: Ctx<'js>,
+    command: String,
+    options: Opt<rquickjs::Object<'js>>,
+) -> Result<String> {
+    let mut shell = true;
+    let mut cwd: Option<String> = None;
+    if let Some(opts) = options.0 {
+        if let Some(s) = opts.get_optional::<_, bool>("shell")? {
+            shell = s;
+        }
+        cwd = opts.get_optional("cwd")?;
+    }
+    let mut cmd = if shell {
+        #[cfg(windows)]
+        {
+            let mut c = StdCommand::new("cmd");
+            c.arg("/C").arg(&command);
+            c
+        }
+        #[cfg(not(windows))]
+        {
+            let mut c = StdCommand::new("sh");
+            c.arg("-c").arg(&command);
+            c
+        }
+    } else {
+        StdCommand::new(&command)
+    };
+    if let Some(cwd) = cwd {
+        cmd.current_dir(cwd);
+    }
+    let output = cmd
+        .output()
+        .map_err(|e| Exception::throw_message(&ctx, &format!("execSync failed: {e}")))?;
+    if !output.status.success() {
+        return Err(Exception::throw_message(
+            &ctx,
+            &format!(
+                "Command failed: {}\n{}",
+                command,
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn exec_file_sync<'js>(
+    ctx: Ctx<'js>,
+    file: String,
+    args: Opt<Vec<String>>,
+    options: Opt<rquickjs::Object<'js>>,
+) -> Result<String> {
+    let args = args.0.unwrap_or_default();
+    let mut cmd = StdCommand::new(&file);
+    cmd.args(&args);
+    if let Some(opts) = options.0 {
+        if let Some(cwd) = opts.get_optional::<_, String>("cwd")? {
+            cmd.current_dir(cwd);
+        }
+    }
+    let output = cmd
+        .output()
+        .map_err(|e| Exception::throw_message(&ctx, &format!("execFileSync failed: {e}")))?;
+    if !output.status.success() {
+        return Err(Exception::throw_message(
+            &ctx,
+            &format!(
+                "Command failed: {} {}\n{}",
+                file,
+                args.join(" "),
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 impl From<ChildProcessModule> for ModuleInfo<ChildProcessModule> {

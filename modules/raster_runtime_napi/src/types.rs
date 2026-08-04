@@ -54,13 +54,14 @@ pub struct napi_extended_error_info {
     pub engine_error_code: u32,
 }
 
+/// Matches Node.js `napi_node_version` (node_api_types.h / js_native_api_types.h).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct napi_node_version {
-    pub version: u32,
-    pub napi_version: u32,
-    pub is_release: u8,
-    pub is_lts: u8,
+    pub major: u32,
+    pub minor: u32,
+    pub patch: u32,
+    pub release: *const c_char,
 }
 
 #[repr(C)]

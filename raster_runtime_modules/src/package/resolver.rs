@@ -523,9 +523,7 @@ fn load_as_directory<'a>(
 }
 
 /// `node_modules` character codes reversed (matches Node's `nmChars`).
-const NM_CHARS: [u8; 12] = [
-    b's', b'e', b'l', b'u', b'd', b'o', b'm', b'_', b'e', b'd', b'o', b'n',
-];
+const NM_CHARS: &[u8; 12] = b"seludom_edon";
 const NM_LEN: usize = NM_CHARS.len();
 
 /// Returns ordered `node_modules` search directories for a given absolute path,
@@ -959,7 +957,18 @@ fn package_exports_resolve<'a>(
         let is_cjs =
             !matches!(map.get("type"), Some(BorrowedValue::String(ref _type)) if _type == "module");
 
+        // Top-level string form: "exports": "./dist/index.js"
+        if modules_name == "." {
+            if let Some(BorrowedValue::String(path)) = map.get("exports") {
+                return Ok((path.as_ref(), None, is_cjs));
+            }
+        }
+
         if let Some(BorrowedValue::Object(exports)) = map.get("exports") {
+            // exports["."] = "./dist/index.mjs" (string target) — common modern form
+            if let Some(BorrowedValue::String(path)) = exports.get(modules_name) {
+                return Ok((path.as_ref(), None, is_cjs));
+            }
             if let Some(BorrowedValue::Object(name)) = exports.get(modules_name) {
                 // Check for exports -> name -> platform(browser or node) -> [import | require]
                 if let Some(BorrowedValue::Object(platform)) =

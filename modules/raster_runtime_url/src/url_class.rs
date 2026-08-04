@@ -60,20 +60,34 @@ impl<'js> URL<'js> {
     pub fn new(ctx: Ctx<'js>, input: Value<'js>, base: Opt<Value<'js>>) -> Result<Self> {
         let input: Result<Coerced<String>> = Coerced::from_js(&ctx, input);
         if let Some(base) = base.into_inner() {
-            if let Some(base) = base.as_string() {
-                if let Ok(base) = base.to_string() {
-                    let mut url: Url = base.parse().map_err(|err| {
-                        Exception::throw_type(&ctx, format!("Invalid base URL: {}", err).as_str())
-                    })?;
-
-                    if let Ok(input) = input {
-                        url = url.join(input.as_str()).map_err(|err| {
-                            Exception::throw_type(&ctx, format!("Invalid URL: {}", err).as_str())
-                        })?;
-                    }
-
-                    return Self::from_url(ctx, url);
+            // Node/WHATWG: base may be a string or a URL object (use its href).
+            let base_str = if let Some(s) = base.as_string() {
+                Some(s.to_string()?)
+            } else if let Some(obj) = base.as_object() {
+                if let Some(url_inst) = Class::<URL>::from_object(&obj) {
+                    Some(url_inst.borrow().url.borrow().as_str().to_string())
+                } else if let Ok(href) = obj.get::<_, String>("href") {
+                    Some(href)
+                } else {
+                    // Last resort: coerce to string (may yield "[object Object]").
+                    Coerced::<String>::from_js(&ctx, base).ok().map(|c| c.0)
                 }
+            } else {
+                Coerced::<String>::from_js(&ctx, base).ok().map(|c| c.0)
+            };
+
+            if let Some(base) = base_str {
+                let mut url: Url = base.parse().map_err(|err| {
+                    Exception::throw_type(&ctx, format!("Invalid base URL: {}", err).as_str())
+                })?;
+
+                if let Ok(input) = input {
+                    url = url.join(input.as_str()).map_err(|err| {
+                        Exception::throw_type(&ctx, format!("Invalid URL: {}", err).as_str())
+                    })?;
+                }
+
+                return Self::from_url(ctx, url);
             }
         }
 

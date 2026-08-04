@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 use std::ptr::NonNull;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use libloading::Library;
 use once_cell::sync::Lazy;
@@ -14,7 +14,8 @@ use rquickjs::Ctx;
 use tracing::debug;
 
 use crate::api::take_pending_module;
-use crate::env::Env;
+use crate::driver::DriverState;
+use crate::env::{DisposeState, Env};
 use crate::types::{napi_addon_register_func, napi_env, napi_value};
 use crate::value::value_to_napi_borrowed;
 
@@ -35,38 +36,18 @@ pub fn register_env(ctx: NonNull<JSContext>, env: Box<Env>) -> *mut Env {
     ptr
 }
 
-#[allow(dead_code)]
-pub fn unregister_env(ctx: NonNull<JSContext>) {
-    let key = ctx.as_ptr() as usize;
-    if let Some(EnvPtr(ptr)) = ENV_REGISTRY.lock().unwrap().remove(&key) {
-        unsafe {
-            (*ptr).dispose();
-            let _ = Box::from_raw(ptr);
-        }
+/// Postcondition check after the two-phase main shutdown: registry must be empty.
+///
+/// Does **not** drain, free, or leak envs. Residual state is a hard error.
+pub fn shutdown_all() -> Result<(), String> {
+    let env_count = ENV_REGISTRY.lock().unwrap().len();
+    let tsfn_count = crate::async_work::registered_tsfn_count();
+    if env_count != 0 || tsfn_count != 0 {
+        return Err(format!(
+            "N-API shutdown incomplete: envs={env_count}, tsfns={tsfn_count}"
+        ));
     }
-}
-
-/// Release all N-API env roots before the QuickJS runtime is torn down.
-pub fn shutdown_all() {
-    let runtime_ptrs: Vec<*mut qjs::JSRuntime> = {
-        let registry = ENV_REGISTRY.lock().unwrap();
-        registry
-            .values()
-            .map(|EnvPtr(ptr)| unsafe { qjs::JS_GetRuntime((**ptr).ctx_ptr()) })
-            .collect()
-    };
-    crate::async_work::shutdown_all_tsfn();
-    let mut registry = ENV_REGISTRY.lock().unwrap();
-    for (_, EnvPtr(ptr)) in registry.drain() {
-        unsafe {
-            (*ptr).dispose();
-            let _ = Box::from_raw(ptr);
-        }
-    }
-    for rt in runtime_ptrs {
-        raster_runtime_utils::driver_poll::unregister_driver_notify(rt);
-        crate::gc_hook::unregister_holder_class(rt);
-    }
+    Ok(())
 }
 
 pub(crate) fn env_ptrs_for_runtime(rt: *mut qjs::JSRuntime) -> Vec<*mut Env> {
@@ -79,9 +60,7 @@ pub(crate) fn env_ptrs_for_runtime(rt: *mut qjs::JSRuntime) -> Vec<*mut Env> {
         .collect()
 }
 
-/// Clear require cache entries for native addons and dispose N-API env state.
-/// Must run while the JS context is still alive (before `Vm` is dropped).
-pub fn prepare_shutdown<'js>(ctx: &Ctx<'js>) {
+fn clear_native_require_cache<'js>(ctx: &Ctx<'js>) {
     let remaining: usize = ctx
         .eval(
             r#"
@@ -103,37 +82,88 @@ pub fn prepare_shutdown<'js>(ctx: &Ctx<'js>) {
         .unwrap_or(0);
     if remaining > 0 {
         tracing::debug!(
-            "napi prepare_shutdown: cleared {} require cache entries",
+            "napi begin_shutdown: cleared {} require cache entries",
             remaining
         );
     }
+}
+
+/// Clear require-cache native roots and begin env dispose (phase 1).
+///
+/// Returns the env's driver Arc (if any) so the caller can `wait_finished()`
+/// before [`finish_shutdown`]. Env stays registered and alive.
+pub fn begin_shutdown<'js>(ctx: &Ctx<'js>) -> Result<Option<Arc<DriverState>>, String> {
+    clear_native_require_cache(ctx);
     crate::api::clear_function_callbacks();
-    if let Some(env_ptr) = env_for_ctx(ctx.as_raw().as_ptr()) {
-        let napi_env = unsafe { (*env_ptr).as_napi_env() };
-        crate::async_work::close_all_tsfn_for_env(napi_env);
-    }
     #[cfg(feature = "v8-compat")]
     {
         unsafe { v8_compat::shutdown_context(ctx.as_raw().as_ptr()) };
     }
-    if let Some(ctx_ptr) = NonNull::new(ctx.as_raw().as_ptr()) {
-        unregister_env(ctx_ptr);
-    }
+    let Some(env_ptr) = env_for_ctx(ctx.as_raw().as_ptr()) else {
+        return Ok(None);
+    };
+    let env = unsafe { &mut *env_ptr };
+    env.begin_dispose();
+    Ok(env.driver.clone())
+}
+
+/// Phase 2: free Env only when dispose finished (driver complete).
+///
+/// Does **not** remove the env from the registry until `finish_dispose` succeeds.
+pub fn finish_shutdown<'js>(ctx: &Ctx<'js>) -> Result<(), String> {
     let rt = unsafe { qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
-    for _ in 0..3 {
+    let key = ctx.as_raw().as_ptr() as usize;
+
+    let ptr = {
+        let registry = ENV_REGISTRY.lock().unwrap();
+        registry.get(&key).map(|EnvPtr(p)| *p)
+    };
+
+    let Some(ptr) = ptr else {
+        // No env registered — nothing to free (no N-API was used).
+        run_final_gc(ctx, rt);
+        unregister_runtime_hooks_if_unused(rt);
+        return Ok(());
+    };
+
+    unsafe {
+        if (*ptr).dispose_state == DisposeState::Active {
+            (*ptr).begin_dispose();
+        }
+        (*ptr).try_finish_dispose()?;
+        // Only remove after finish succeeds.
+        let removed = ENV_REGISTRY.lock().unwrap().remove(&key);
+        debug_assert!(removed.is_some());
+        let _ = Box::from_raw(ptr);
+    }
+
+    run_final_gc(ctx, rt);
+    unregister_runtime_hooks_if_unused(rt);
+    Ok(())
+}
+
+fn run_final_gc<'js>(ctx: &Ctx<'js>, rt: *mut qjs::JSRuntime) {
+    for _ in 0..16 {
         ctx.run_gc();
         unsafe {
             qjs::JS_RunGC(rt);
         }
+        if !crate::gc_hook::has_pending_finalizers() {
+            break;
+        }
+    }
+}
+
+fn unregister_runtime_hooks_if_unused(rt: *mut qjs::JSRuntime) {
+    if !env_ptrs_for_runtime(rt).is_empty() {
+        return;
     }
     #[cfg(feature = "v8-compat")]
-    if env_ptrs_for_runtime(rt).is_empty() {
-        unsafe { v8_compat::shutdown_runtime(rt) };
+    unsafe {
+        v8_compat::shutdown_runtime(rt);
     }
-    if env_ptrs_for_runtime(rt).is_empty() {
-        raster_runtime_utils::driver_poll::unregister_driver_notify(rt);
-        crate::gc_hook::unregister_holder_class(rt);
-    }
+    raster_runtime_utils::driver_poll::unregister_driver_notify(rt);
+    crate::gc_hook::unregister_holder_class(rt);
 }
 
 pub fn env_for_ctx(ctx: *mut JSContext) -> Option<*mut Env> {

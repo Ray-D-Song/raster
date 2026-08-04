@@ -18,6 +18,7 @@ use raster_runtime_utils::{
     sysinfo::{ARCH, PLATFORM},
     time, VERSION,
 };
+#[cfg(feature = "napi")]
 use rquickjs::qjs;
 use rquickjs::Exception;
 use rquickjs::{
@@ -33,7 +34,7 @@ pub static EXIT_CODE: AtomicU8 = AtomicU8::new(0);
 static EXITING: AtomicBool = AtomicBool::new(false);
 
 /// Node-compat identity advertised to ecosystem semver gates.
-const NODE_COMPAT_VERSION: &str = "22.18.0";
+const NODE_COMPAT_VERSION: &str = "24.3.0";
 
 const EVENT_EMITTER_METHODS: &[&str] = &[
     "on",
@@ -52,7 +53,7 @@ const EVENT_EMITTER_METHODS: &[&str] = &[
 
 const PROCESS_NAMED_EXPORTS: &[&str] = &[
     "env", "cwd", "chdir", "argv0", "id", "pid", "argv", "platform", "arch", "hrtime", "release",
-    "version", "versions", "exitCode", "exit", "kill", "nextTick",
+    "version", "versions", "exitCode", "exit", "kill", "nextTick", "stdin", "stdout", "stderr",
 ];
 
 #[cfg(feature = "napi")]
@@ -119,22 +120,6 @@ fn next_tick<'js>(ctx: Ctx<'js>, cb: Function<'js>, args: Rest<Value<'js>>) -> R
     let wrapped: Function = wrap.call((cb, uid as f64, arg_arr))?;
     wrapped.defer::<()>(())?;
     Ok(())
-}
-
-/// Minimal stdio stream surface for Node packages that probe `process.stdout.fd`
-/// / `process.stderr.fd` (e.g. `debug` via Next's `send`). Not a full Writable.
-fn create_stdio_stream<'js>(ctx: &Ctx<'js>, fd: i32) -> Result<Object<'js>> {
-    let stream = Object::new(ctx.clone())?;
-    stream.set("fd", fd)?;
-    let is_tty = unsafe { libc::isatty(fd) != 0 };
-    stream.set("isTTY", is_tty)?;
-    // Writable-ish stubs so naive `write` probes do not throw.
-    stream.set(
-        "write",
-        Func::from(|_ctx: Ctx<'_>, _chunk: Opt<Value<'_>>| -> Result<bool> { Ok(true) }),
-    )?;
-    stream.set("end", Func::from(|_ctx: Ctx<'_>| -> Result<()> { Ok(()) }))?;
-    Ok(stream)
 }
 
 fn cwd(ctx: Ctx<'_>) -> Result<String> {
@@ -421,10 +406,19 @@ pub fn init(ctx: &Ctx<'_>) -> Result<()> {
         process.set("dlopen", Func::from(dlopen))?;
     }
 
-    // Node stdio handles (minimal). Required by Next/debug/send for isatty checks.
-    process.set("stdin", create_stdio_stream(ctx, 0)?)?;
-    process.set("stdout", create_stdio_stream(ctx, 1)?)?;
-    process.set("stderr", create_stdio_stream(ctx, 2)?)?;
+    // Real TTY/stdio streams (Node-compatible ReadStream / WriteStream).
+    process.set(
+        "stdin",
+        raster_runtime_tty::ReadStream::new(ctx.clone(), 0)?,
+    )?;
+    process.set(
+        "stdout",
+        raster_runtime_tty::WriteStream::new(ctx.clone(), 1)?,
+    )?;
+    process.set(
+        "stderr",
+        raster_runtime_tty::WriteStream::new(ctx.clone(), 2)?,
+    )?;
 
     globals.set("process", process)?;
 

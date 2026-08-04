@@ -6,8 +6,12 @@
     clippy::new_without_default
 )]
 use std::{
+    cell::Cell,
     rc::Rc,
-    sync::{Arc, RwLock},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, RwLock,
+    },
 };
 
 use raster_runtime_utils::{
@@ -58,13 +62,99 @@ impl PartialEq for EventKey<'_> {
     }
 }
 
+/// Internal listener identity for precise once/remove (not exposed to JS).
+static NEXT_LISTENER_ID: AtomicU64 = AtomicU64::new(1);
+
 pub struct EventItem<'js> {
+    id: u64,
     callback: Function<'js>,
     once: bool,
+    /// Shared with emit snapshots so recursive `emit` can mark a once listener
+    /// as fired and outer snapshots skip a second call (Node onceWrapper).
+    fired: Rc<Cell<bool>>,
 }
 
 pub type EventList<'js> = Vec<(EventKey<'js>, Vec<EventItem<'js>>)>;
 pub type Events<'js> = Arc<RwLock<EventList<'js>>>;
+
+fn is_remove_listener_key(key: &EventKey<'_>) -> bool {
+    matches!(key, EventKey::String(s) if s.as_ref() == "removeListener")
+}
+
+fn event_key_to_value<'js>(ctx: &Ctx<'js>, key: &EventKey<'js>) -> Result<Value<'js>> {
+    match key {
+        EventKey::String(s) => Ok(JsString::from_str(ctx.clone(), s)?.into_value()),
+        EventKey::Symbol(sym) => Ok(sym.clone().into_value()),
+    }
+}
+
+/// Remove one listener by internal ID. Returns true if a listener was removed.
+/// When `emit_meta` is true and removal succeeds, emits `removeListener`.
+fn remove_listener_by_id<'js>(
+    ctx: &Ctx<'js>,
+    this: &This<Object<'js>>,
+    key: &EventKey<'js>,
+    id: u64,
+    emit_meta: bool,
+) -> Result<bool> {
+    let events = resolve_events(ctx, &this.0)?;
+    let mut events = events.write().or_throw(ctx)?;
+    let Some(index) = events.iter_mut().position(|(k, _)| k == key) else {
+        return Ok(false);
+    };
+    let items = &mut events[index].1;
+    let Some(pos) = items.iter().position(|item| item.id == id) else {
+        return Ok(false);
+    };
+    let removed = items.remove(pos);
+    let now_empty = items.is_empty();
+    if now_empty {
+        events.remove(index);
+    }
+    drop(events);
+
+    if emit_meta {
+        let event_val = event_key_to_value(ctx, key)?;
+        EventEmitter::do_emit(
+            to_event(ctx, "removeListener")?,
+            This(this.0.clone()),
+            ctx,
+            Rest(vec![event_val, removed.callback.into_value()]),
+            false,
+        )?;
+    }
+
+    if now_empty {
+        if let Some(class) = Class::<EventEmitter>::from_object(&this.0) {
+            class.borrow_mut().on_event_changed(key.clone(), false)?;
+        } else if let Some(class) = Class::<EventTarget>::from_object(&this.0) {
+            class.borrow_mut().on_event_changed(key.clone(), false)?;
+        }
+    }
+    Ok(true)
+}
+
+/// Reverse-order remove-all for one event key (Node `removeAllListeners(event)`).
+fn remove_all_for_key<'js>(
+    ctx: &Ctx<'js>,
+    this: &This<Object<'js>>,
+    key: &EventKey<'js>,
+) -> Result<()> {
+    let events = resolve_events(ctx, &this.0)?;
+    let events_read = events.read().or_throw(ctx)?;
+    let ids: Vec<u64> = events_read
+        .iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, items)| items.iter().rev().map(|item| item.id).collect())
+        .unwrap_or_default();
+    drop(events_read);
+
+    for id in ids {
+        // emit_meta per actual removal; missing ID is a no-op (reentrancy).
+        let _ = remove_listener_by_id(ctx, this, key, id, true)?;
+    }
+    Ok(())
+}
 
 /// Get the hidden symbol used to store the event list on JS objects.
 fn events_symbol<'js>(ctx: &Ctx<'js>) -> Result<Symbol<'js>> {
@@ -81,8 +171,11 @@ fn class_to_obj<'js, C: JsClass<'js>>(class: Class<'js, C>) -> Result<Object<'js
 /// lazily creates and stores a native EventEmitter as a hidden property.
 #[allow(clippy::arc_with_non_send_sync)]
 pub fn resolve_events<'js>(ctx: &Ctx<'js>, obj: &Object<'js>) -> Result<Events<'js>> {
-    // Try native EventEmitter first
+    // Try native EventEmitter / EventTarget first
     if let Some(class) = Class::<EventEmitter>::from_object(obj) {
+        return Ok(class.borrow().events.clone());
+    }
+    if let Some(class) = Class::<EventTarget>::from_object(obj) {
         return Ok(class.borrow().events.clone());
     }
     let sym = events_symbol(ctx)?;
@@ -251,12 +344,14 @@ where
         let events = Self::resolve_events_from(&ctx, &this)?;
         let mut events = events.write().or_throw(&ctx)?;
 
-        let key = EventKey::from_value(&ctx, event)?;
+        let key = EventKey::from_value(&ctx, event.clone())?;
         let mut removed_last = false;
+        let mut removed_cb: Option<Function<'js>> = None;
         if let Some(index) = events.iter_mut().position(|(k, _)| k == &key) {
             let items = &mut events[index].1;
-            if let Some(pos) = items.iter().position(|item| item.callback == listener) {
-                items.remove(pos);
+            // Node removes the *most recently* registered matching listener.
+            if let Some(pos) = items.iter().rposition(|item| item.callback == listener) {
+                removed_cb = Some(items.remove(pos).callback);
                 if items.is_empty() {
                     events.remove(index);
                     removed_last = true;
@@ -264,6 +359,17 @@ where
             }
         };
         drop(events);
+
+        // Node: emit "removeListener" after removal, without holding the list lock.
+        if let Some(removed) = removed_cb {
+            Self::do_emit(
+                to_event(&ctx, "removeListener")?,
+                This(this.0.clone()),
+                &ctx,
+                Rest(vec![event, removed.into_value()]),
+                false,
+            )?;
+        }
 
         if removed_last {
             if let Some(class) = Class::<Self>::from_object(&this.0) {
@@ -353,6 +459,18 @@ where
         prepend: bool,
         once: bool,
     ) -> Result<Object<'js>> {
+        // Node emits "newListener" *before* inserting, without holding the list lock.
+        // Always emit, including when event is "newListener" or "removeListener"
+        // (emit-before-insert avoids infinite recursion on the same registration).
+        // Propagate listener exceptions (do not swallow).
+        Self::do_emit(
+            to_event(&ctx, "newListener")?,
+            This(this.0.clone()),
+            &ctx,
+            Rest(vec![event.clone(), listener.clone().into_value()]),
+            false,
+        )?;
+
         let events = Self::resolve_events_from(&ctx, &this)?;
         let mut events = events.write().or_throw(&ctx)?;
         let key = EventKey::from_value(&ctx, event)?;
@@ -368,8 +486,10 @@ where
         };
 
         let item = EventItem {
+            id: NEXT_LISTENER_ID.fetch_add(1, Ordering::Relaxed),
             callback: listener,
             once,
+            fired: Rc::new(Cell::new(false)),
         };
         if !prepend {
             items.push(item);
@@ -415,30 +535,41 @@ where
     ) -> Result<bool> {
         let events = Self::resolve_events_from(ctx, &this)?;
         let mut events = events.write().or_throw(ctx)?;
-        let key = EventKey::from_value(ctx, event)?;
+        let key = EventKey::from_value(ctx, event.clone())?;
 
         if let Some(index) = events.iter_mut().position(|(k, _)| k == &key) {
-            let items = &mut events[index].1;
-            let mut callbacks = Vec::with_capacity(items.len());
-            items.retain(|item: &EventItem<'_>| {
-                callbacks.push(item.callback.clone());
-                !item.once
-            });
-            if items.is_empty() {
-                events.remove(index);
-                if let Some(class) = Class::<Self>::from_object(&this.0) {
-                    class.borrow_mut().on_event_changed(key, false)?;
-                }
-            }
+            // Snapshot by ID + shared fired flag (Node onceWrapper semantics).
+            let items = &events[index].1;
+            let callbacks: Vec<(u64, Function<'js>, bool, Rc<Cell<bool>>)> = items
+                .iter()
+                .map(|item| {
+                    (
+                        item.id,
+                        item.callback.clone(),
+                        item.once,
+                        Rc::clone(&item.fired),
+                    )
+                })
+                .collect();
             drop(events);
-            for callback in callbacks {
-                let args: Vec<Value<'js>> = args.iter().map(|arg| arg.to_owned()).collect();
-                let args = Rest(args);
+
+            for (id, callback, was_once, fired) in callbacks {
+                if was_once {
+                    // Already consumed by a recursive emit — skip (Node fired).
+                    if fired.get() {
+                        continue;
+                    }
+                    // Node: removeListener, then fired=true, then call listener.
+                    let _ = remove_listener_by_id(ctx, &this, &key, id, true)?;
+                    fired.set(true);
+                }
+                let call_args: Vec<Value<'js>> = args.iter().map(|arg| arg.to_owned()).collect();
+                let call_args = Rest(call_args);
                 let this_val = This(this.0.clone().into_value());
                 if defer {
-                    callback.defer((this_val, args))?;
+                    callback.defer((this_val, call_args))?;
                 } else {
-                    callback.call::<_, ()>((this_val, args))?;
+                    callback.call::<_, ()>((this_val, call_args))?;
                 }
             }
             Ok(true)
@@ -520,38 +651,28 @@ where
         ctx: Ctx<'js>,
         event: Opt<Value<'js>>,
     ) -> Result<Object<'js>> {
-        let events = Self::resolve_events_from(&ctx, &this)?;
-        let mut events = events.write().or_throw(&ctx)?;
-        let removed_keys: Vec<EventKey<'js>> = match event.0 {
-            Some(event) if !event.is_undefined() => {
-                let key = EventKey::from_value(&ctx, event)?;
-                let had_listeners = events
-                    .iter()
-                    .any(|(k, items)| k == &key && !items.is_empty());
-                events.retain(|(k, _)| k != &key);
-                if had_listeners {
-                    vec![key]
-                } else {
-                    vec![]
-                }
+        match event.0 {
+            Some(event_val) if !event_val.is_undefined() => {
+                let key = EventKey::from_value(&ctx, event_val)?;
+                remove_all_for_key(&ctx, &this, &key)?;
             },
             _ => {
-                let keys: Vec<_> = events
+                // Snapshot current event names; process non-removeListener first,
+                // then removeListener itself (Node order).
+                let events = Self::resolve_events_from(&ctx, &this)?;
+                let events = events.read().or_throw(&ctx)?;
+                let keys: Vec<EventKey<'js>> = events
                     .iter()
                     .filter(|(_, items)| !items.is_empty())
                     .map(|(k, _)| k.clone())
                     .collect();
-                events.clear();
-                keys
-            },
-        };
-        drop(events);
+                drop(events);
 
-        if let Some(class) = Class::<Self>::from_object(&this.0) {
-            let mut class_borrow = class.borrow_mut();
-            for key in removed_keys {
-                class_borrow.on_event_changed(key, false)?;
-            }
+                for key in keys.iter().filter(|k| !is_remove_listener_key(k)) {
+                    remove_all_for_key(&ctx, &this, key)?;
+                }
+                remove_all_for_key(&ctx, &this, &EventKey::String("removeListener".into()))?;
+            },
         }
 
         Ok(this.0)
@@ -585,6 +706,7 @@ pub struct EventsModule;
 impl ModuleDef for EventsModule {
     fn declare(declare: &Declarations) -> Result<()> {
         declare.declare(stringify!(EventEmitter))?;
+        declare.declare("on")?;
         declare.declare("default")?;
 
         Ok(())
@@ -594,7 +716,217 @@ impl ModuleDef for EventsModule {
         let ctor = Class::<EventEmitter>::create_constructor(ctx)?
             .expect("Can't create EventEmitter constructor");
         ctor.set(stringify!(EventEmitter), ctor.clone())?;
+
+        // Node: EventEmitter.on(emitter, eventName[, options]) → AsyncIterator
+        // Semantics aligned with Node 24.3 (always yield args as array; watermark
+        // pause/resume; no event drop over HWM).
+        let on_static: Function = ctx.eval(
+            r#"(function () {
+  return function on(emitter, event, options) {
+    if (emitter == null || typeof emitter.on !== "function") {
+      throw new TypeError('The "emitter" argument must be an EventEmitter');
+    }
+    if (options === undefined || options === null) {
+      options = {};
+    } else if (typeof options !== "object" || Array.isArray(options)) {
+      throw new TypeError('The "options" argument must be of type object. Received ' + options);
+    }
+
+    const signal = options.signal;
+    if (signal != null) {
+      if (typeof signal !== "object" || typeof signal.aborted !== "boolean") {
+        throw new TypeError('The "options.signal" property must be an AbortSignal.');
+      }
+      if (signal.aborted) {
+        const err = new Error("The operation was aborted");
+        err.name = "AbortError";
+        if (signal.reason !== undefined) {
+          try { err.cause = signal.reason; } catch (_) {}
+        }
+        throw err;
+      }
+    }
+
+    const closeEvents = options.close;
+    if (closeEvents != null && !Array.isArray(closeEvents)) {
+      throw new TypeError('The "options.close" property must be an array. Received ' + closeEvents);
+    }
+    const closes = closeEvents || [];
+
+    function validatePositiveInteger(value, name) {
+      if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || !Number.isFinite(value)) {
+        throw new TypeError('The "' + name + '" property must be a positive integer. Received ' + value);
+      }
+      return value;
+    }
+
+    // Support both highWaterMark/highWatermark and lowWaterMark/lowWatermark (Node).
+    const highWaterMark = validatePositiveInteger(
+      options.highWaterMark ?? options.highWatermark ?? Number.MAX_SAFE_INTEGER,
+      "options.highWaterMark"
+    );
+    const lowWaterMark = validatePositiveInteger(
+      options.lowWaterMark ?? options.lowWatermark ?? 1,
+      "options.lowWaterMark"
+    );
+
+    const queue = [];
+    const waiters = [];
+    let finished = false;
+    let error = null;
+    let paused = false;
+
+    function maybePause() {
+      if (!paused && queue.length >= highWaterMark && typeof emitter.pause === "function") {
+        paused = true;
+        try { emitter.pause(); } catch (_) {}
+      }
+    }
+
+    function maybeResume() {
+      if (paused && queue.length <= lowWaterMark && typeof emitter.resume === "function") {
+        paused = false;
+        try { emitter.resume(); } catch (_) {}
+      }
+    }
+
+    function rejectAll(err) {
+      while (waiters.length) {
+        const w = waiters.shift();
+        try { w.reject(err); } catch (_) {}
+      }
+    }
+
+    function resolveAllDone() {
+      const result = { value: undefined, done: true };
+      while (waiters.length) {
+        const w = waiters.shift();
+        try { w.resolve(result); } catch (_) {}
+      }
+    }
+
+    function onData() {
+      if (finished) return;
+      // Always yield args as an array (never unwrap a single arg).
+      const value = Array.prototype.slice.call(arguments);
+      if (waiters.length) {
+        const w = waiters.shift();
+        w.resolve({ value: value, done: false });
+      } else {
+        queue.push(value);
+        // Do NOT drop events over HWM — pause the source once instead.
+        maybePause();
+      }
+    }
+
+    function onError(err) {
+      if (finished) return;
+      error = err;
+      finished = true;
+      cleanup();
+      paused = false;
+      rejectAll(err);
+    }
+
+    function onClose() {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      paused = false;
+      resolveAllDone();
+    }
+
+    function cleanup() {
+      try {
+        if (typeof emitter.off === "function") emitter.off(event, onData);
+        else if (typeof emitter.removeListener === "function") emitter.removeListener(event, onData);
+      } catch (_) {}
+      try {
+        if (typeof emitter.off === "function") emitter.off("error", onError);
+        else if (typeof emitter.removeListener === "function") emitter.removeListener("error", onError);
+      } catch (_) {}
+      for (let i = 0; i < closes.length; i++) {
+        const ce = closes[i];
+        try {
+          if (typeof emitter.off === "function") emitter.off(ce, onClose);
+          else if (typeof emitter.removeListener === "function") emitter.removeListener(ce, onClose);
+        } catch (_) {}
+      }
+      if (signal && typeof signal.removeEventListener === "function") {
+        try { signal.removeEventListener("abort", onAbort); } catch (_) {}
+      }
+    }
+
+    function makeAbortError() {
+      const err = new Error("The operation was aborted");
+      err.name = "AbortError";
+      if (signal && signal.reason !== undefined) {
+        try { err.cause = signal.reason; } catch (_) {}
+      }
+      return err;
+    }
+
+    function onAbort() {
+      if (finished) return;
+      error = makeAbortError();
+      finished = true;
+      cleanup();
+      paused = false;
+      rejectAll(error);
+    }
+
+    emitter.on(event, onData);
+    if (event !== "error" && typeof emitter.on === "function") {
+      emitter.on("error", onError);
+    }
+    for (let i = 0; i < closes.length; i++) {
+      emitter.on(closes[i], onClose);
+    }
+    if (signal && typeof signal.addEventListener === "function") {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+
+    return {
+      [Symbol.asyncIterator]() { return this; },
+      next() {
+        if (error) return Promise.reject(error);
+        if (queue.length) {
+          const value = queue.shift();
+          maybeResume();
+          return Promise.resolve({ value: value, done: false });
+        }
+        if (finished) return Promise.resolve({ value: undefined, done: true });
+        return new Promise(function (resolve, reject) {
+          waiters.push({ resolve: resolve, reject: reject });
+        });
+      },
+      return() {
+        if (!finished) {
+          finished = true;
+          cleanup();
+          paused = false;
+          resolveAllDone();
+        }
+        return Promise.resolve({ value: undefined, done: true });
+      },
+      throw(err) {
+        if (!finished) {
+          finished = true;
+          cleanup();
+          paused = false;
+        }
+        error = err;
+        rejectAll(err);
+        return Promise.reject(err);
+      },
+    };
+  };
+})()"#,
+        )?;
+        ctor.set("on", on_static.clone())?;
+
         exports.export(stringify!(EventEmitter), ctor.clone())?;
+        exports.export("on", on_static)?;
         exports.export("default", ctor)?;
 
         EventEmitter::add_event_emitter_prototype(ctx)?;

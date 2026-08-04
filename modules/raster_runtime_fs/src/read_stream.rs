@@ -140,5 +140,5 @@ pub fn create_read_stream<'js>(
 
 /// Build the `fs.createReadStream` export.
 pub fn create_create_read_stream<'js>(ctx: &Ctx<'js>) -> Result<Function<'js>> {
-    Ok(Function::new(ctx.clone(), create_read_stream)?)
+    Function::new(ctx.clone(), create_read_stream)
 }

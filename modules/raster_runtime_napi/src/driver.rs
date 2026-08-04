@@ -13,6 +13,7 @@ use rquickjs::qjs::JSRuntime;
 use rquickjs::Ctx;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::Notify;
 
 use crate::env::Env;
 use crate::types::{napi_env, napi_status};
@@ -44,6 +45,11 @@ pub struct DriverState {
     /// In-flight async work items that must keep the driver loop alive until complete.
     pub inflight_async: AtomicUsize,
     loop_running: AtomicBool,
+    /// Set true when the driver has fully finished (loop exited or never started
+    /// and confirmed idle after sender close).
+    finished: AtomicBool,
+    /// Multi-waiter notification when `finished` becomes true.
+    finished_notify: Notify,
     pub js_pthread: pthread_t,
     pub runtime: tokio::runtime::Handle,
     pub rt_ptr: *mut JSRuntime,
@@ -64,12 +70,64 @@ impl DriverState {
             idle_refs: AtomicUsize::new(0),
             inflight_async: AtomicUsize::new(0),
             loop_running: AtomicBool::new(false),
+            finished: AtomicBool::new(false),
+            finished_notify: Notify::new(),
             js_pthread,
             runtime: tokio::runtime::Handle::current(),
             rt_ptr,
             #[cfg(test)]
             fail_posts: AtomicBool::new(false),
         }
+    }
+
+    /// Mark the driver finished and wake all waiters. Idempotent.
+    pub fn mark_finished(&self) {
+        if !self.finished.swap(true, Ordering::AcqRel) {
+            self.finished_notify.notify_waiters();
+        }
+    }
+
+    /// Wait until the driver is finished (loop exited or idle-never-started).
+    pub async fn wait_finished(&self) {
+        loop {
+            let notified = self.finished_notify.notified();
+            if self.finished.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.finished.load(Ordering::Acquire)
+    }
+
+    pub fn is_loop_running(&self) -> bool {
+        self.loop_running.load(Ordering::Acquire)
+    }
+
+    /// After `close_sender()`, if the loop never started (or has already set
+    /// `loop_running=false`) and there is no outstanding work, mark finished.
+    ///
+    /// When the loop is still running, only `run_loop`'s exit path calls
+    /// `mark_finished()` — callers must `wait_finished()`.
+    pub fn is_quiescent(&self) -> bool {
+        self.pending.load(Ordering::Acquire) == 0
+            && self.inflight_async.load(Ordering::Acquire) == 0
+            && self.idle_refs.load(Ordering::Acquire) == 0
+    }
+
+    pub fn mark_finished_if_idle(&self) {
+        if self.is_loop_running() {
+            return;
+        }
+        if self.tx.lock().is_some() {
+            return;
+        }
+        if !self.is_quiescent() {
+            return;
+        }
+        self.mark_finished();
     }
 
     #[cfg(test)]
@@ -118,9 +176,7 @@ impl DriverState {
     }
 
     pub fn should_keep_loop_alive(&self) -> bool {
-        self.pending.load(Ordering::Relaxed) > 0
-            || self.idle_refs.load(Ordering::Relaxed) > 0
-            || self.inflight_async.load(Ordering::Relaxed) > 0
+        !self.is_quiescent()
     }
 
     pub fn pending_count(&self) -> usize {
@@ -170,6 +226,10 @@ impl DriverState {
         if self.loop_running.swap(true, Ordering::SeqCst) {
             return;
         }
+        // A previous wait_finished may have seen finished=true for an idle env;
+        // starting a new loop requires unfinished state.
+        self.finished.store(false, Ordering::Release);
+
         let driver = Arc::clone(self);
         let ctx = unsafe { Ctx::from_raw(NonNull::new_unchecked(ctx_ptr)) };
         ctx.spawn_exit_simple(async move {
@@ -189,18 +249,63 @@ impl DriverState {
                         self.dispatch_job(env_addr, job);
                         continue;
                     },
-                    Err(mpsc::error::TryRecvError::Empty) => break,
-                    Err(mpsc::error::TryRecvError::Disconnected) => break,
+                    Err(mpsc::error::TryRecvError::Empty) => {
+                        // Channel empty and no keepalive — but inflight may race.
+                        drop(rx);
+                        if self.is_quiescent() {
+                            break;
+                        }
+                        // Wait briefly for worker completion to post.
+                        tokio::task::yield_now().await;
+                        continue;
+                    },
+                    Err(mpsc::error::TryRecvError::Disconnected) => {
+                        drop(rx);
+                        // Sender closed: drain remaining and wait for quiescence.
+                        self.wait_until_quiescent(env_addr).await;
+                        break;
+                    },
                 }
             }
 
             let job = self.rx.lock().await.recv().await;
             let Some(job) = job else {
+                // Disconnected while waiting — never finish until quiescent.
+                self.wait_until_quiescent(env_addr).await;
                 break;
             };
             self.dispatch_job(env_addr, job);
         }
-        self.loop_running.store(false, Ordering::SeqCst);
+        self.loop_running.store(false, Ordering::Release);
+
+        while !self.is_quiescent() {
+            self.drain_ready_jobs_from_ptr(env_addr);
+            tokio::task::yield_now().await;
+        }
+
+        self.mark_finished();
+    }
+
+    /// After sender disconnect, drain the queue and wait until fully quiescent.
+    async fn wait_until_quiescent(&self, env_addr: usize) {
+        loop {
+            self.drain_ready_jobs_from_ptr(env_addr);
+
+            if self.is_quiescent() {
+                return;
+            }
+
+            tokio::task::yield_now().await;
+        }
+    }
+
+    fn drain_ready_jobs_from_ptr(&self, env_addr: usize) {
+        let Ok(mut rx) = self.rx.try_lock() else {
+            return;
+        };
+        while let Ok(job) = rx.try_recv() {
+            self.dispatch_job(env_addr, job);
+        }
     }
 
     fn dispatch_job(&self, env_addr: usize, job: DriverJob) {
@@ -218,6 +323,11 @@ impl DriverState {
     }
 
     pub fn close_sender(&self) {
+        // Only drop the sender — do **not** mark finished here.
+        // Premature finished (before pending hits 0) races with jobs already
+        // enqueued by force-close TSFN. finished is set only by:
+        // - run_loop exit (after pending/inflight are zero), or
+        // - mark_finished_if_idle() once the loop is not running and queue is empty.
         self.tx.lock().take();
     }
 
@@ -333,5 +443,77 @@ mod tests {
             driver.drain_jobs_for_test();
             assert_eq!(driver.pending_count(), 0);
         });
+    }
+
+    #[tokio::test]
+    async fn wait_finished_after_close_sender_when_idle() {
+        let driver = Arc::new(DriverState::new(
+            unsafe { libc::pthread_self() },
+            std::ptr::null_mut(),
+        ));
+        assert!(!driver.is_finished());
+        driver.close_sender();
+        // close_sender alone does not mark finished; idle path must.
+        driver.mark_finished_if_idle();
+        driver.wait_finished().await;
+        assert!(driver.is_finished());
+    }
+
+    #[tokio::test]
+    async fn mark_finished_notifies_waiters() {
+        let driver = Arc::new(DriverState::new(
+            unsafe { libc::pthread_self() },
+            std::ptr::null_mut(),
+        ));
+        let d2 = Arc::clone(&driver);
+        let join = tokio::spawn(async move {
+            d2.wait_finished().await;
+        });
+        tokio::task::yield_now().await;
+        driver.mark_finished();
+        join.await.unwrap();
+        assert!(driver.is_finished());
+    }
+
+    #[tokio::test]
+    async fn mark_finished_if_idle_refuses_when_pending() {
+        let driver = DriverState::new(unsafe { libc::pthread_self() }, std::ptr::null_mut());
+        driver.close_sender();
+        driver.pending.store(1, Ordering::SeqCst);
+        driver.mark_finished_if_idle();
+        assert!(!driver.is_finished());
+        driver.pending.store(0, Ordering::SeqCst);
+        driver.mark_finished_if_idle();
+        assert!(driver.is_finished());
+    }
+
+    #[tokio::test]
+    async fn mark_finished_if_idle_refuses_when_inflight() {
+        let driver = DriverState::new(unsafe { libc::pthread_self() }, std::ptr::null_mut());
+        driver.close_sender();
+        driver.acquire_async_keepalive();
+        driver.mark_finished_if_idle();
+        assert!(!driver.is_finished());
+        driver.release_async_keepalive();
+        driver.mark_finished_if_idle();
+        assert!(driver.is_finished());
+    }
+
+    #[tokio::test]
+    async fn idle_refs_prevents_finished_until_released() {
+        let driver = DriverState::new(unsafe { libc::pthread_self() }, std::ptr::null_mut());
+        driver.idle_refs.fetch_add(1, Ordering::SeqCst);
+        driver.close_sender();
+        driver.mark_finished_if_idle();
+
+        assert!(!driver.is_quiescent());
+        assert!(!driver.is_finished());
+
+        driver.idle_refs.fetch_sub(1, Ordering::SeqCst);
+        driver.mark_finished_if_idle();
+
+        assert!(driver.is_quiescent());
+        assert!(driver.is_finished());
+        driver.wait_finished().await;
     }
 }

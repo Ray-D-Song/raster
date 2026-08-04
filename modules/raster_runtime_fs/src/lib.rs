@@ -24,14 +24,14 @@ use rquickjs::{
     prelude::{Async, Func},
     Function,
 };
-use rquickjs::{Class, Ctx, Object, Result};
+use rquickjs::{Class, Ctx, Object, Result, Value};
 
 use self::access::{access, access_callback, access_sync};
 use self::chmod::{chmod, chmod_sync};
 use self::file_handle::FileHandle;
 use self::mkdir::{mkdir, mkdir_sync, mkdtemp, mkdtemp_sync};
 use self::open::open;
-use self::read_dir::{read_dir, read_dir_sync, Dirent};
+use self::read_dir::{read_dir, read_dir_sync, readdir_callback, Dirent};
 use self::read_file::{read_file, read_file_sync};
 use self::read_stream::create_create_read_stream;
 use self::realpath::{realpath, realpath_promises, realpath_sync};
@@ -106,10 +106,15 @@ impl ModuleDef for FsModule {
         declare.declare("promises")?;
         declare.declare("access")?;
         declare.declare("accessSync")?;
+        declare.declare("open")?;
+        declare.declare("close")?;
         declare.declare("mkdirSync")?;
         declare.declare("mkdtempSync")?;
+        declare.declare("readdir")?;
         declare.declare("readdirSync")?;
+        declare.declare("readFile")?;
         declare.declare("readFileSync")?;
+        declare.declare("writeFile")?;
         declare.declare("rmdirSync")?;
         declare.declare("rmSync")?;
         declare.declare("unlinkSync")?;
@@ -157,7 +162,114 @@ impl ModuleDef for FsModule {
             default.set("accessSync", Func::from(access_sync))?;
             default.set("mkdirSync", Func::from(mkdir_sync))?;
             default.set("mkdtempSync", Func::from(mkdtemp_sync))?;
+            let readdir_fn = Function::new(ctx.clone(), readdir_callback)?;
+            default.set("readdir", readdir_fn)?;
             default.set("readdirSync", Func::from(read_dir_sync))?;
+            // Callback-style open/close/readFile/writeFile with real handle tracking.
+            let cb_helpers: Object = ctx.eval(
+                r#"(function(){
+  const fsp = require("fs/promises");
+  const handles = new Map();
+
+  function validateCallback(callback) {
+    if (typeof callback !== "function") {
+      throw new TypeError('The "cb" argument must be of type function');
+    }
+  }
+
+  function onceCallback(callback) {
+    let called = false;
+    return function(...args) {
+      if (called) return;
+      called = true;
+      callback(...args);
+    };
+  }
+
+  function createEBADF(fd) {
+    const err = new Error("EBADF: bad file descriptor, close");
+    err.code = "EBADF";
+    err.errno = -9;
+    err.syscall = "close";
+    err.path = undefined;
+    err.fd = fd;
+    return err;
+  }
+
+  function open(path, flags, mode, callback) {
+    if (typeof flags === "function") {
+      callback = flags;
+      flags = "r";
+      mode = undefined;
+    } else if (typeof mode === "function") {
+      callback = mode;
+      mode = undefined;
+    }
+    validateCallback(callback);
+    const cb = onceCallback(callback);
+    fsp.open(path, flags, mode).then(
+      (handle) => {
+        // Use the real OS fd from FileHandle.fd (sync getter). Registry keeps
+        // the handle alive so the fd is not closed until fs.close(fd).
+        const fd = handle.fd;
+        if (typeof fd !== "number" || !Number.isFinite(fd)) {
+          const err = new Error("internal error: FileHandle.fd is not a number");
+          handle.close().then(() => cb(err), () => cb(err));
+          return;
+        }
+        if (handles.has(fd)) {
+          // Collision on a live registry entry is an internal error — never
+          // allocate synthetic fds that could mask the real descriptor.
+          const err = new Error("internal error: fd collision in fs.open registry");
+          handle.close().then(() => cb(err), () => cb(err));
+          return;
+        }
+        handles.set(fd, handle);
+        cb(null, fd);
+      },
+      (error) => cb(error)
+    );
+  }
+
+  function close(fd, callback) {
+    validateCallback(callback);
+    const cb = onceCallback(callback);
+    // Only registry-owned handles may be closed via fs.close(fd).
+    const handle = handles.get(fd);
+    if (!handle) {
+      // Double close / unknown fd → Node EBADF (error-first callback).
+      queueMicrotask(() => cb(createEBADF(fd)));
+      return;
+    }
+    handles.delete(fd);
+    handle.close().then(() => cb(null), (e) => cb(e));
+  }
+
+  function wrap(promiseFn) {
+    return function(...args) {
+      const callback = args[args.length - 1];
+      validateCallback(callback);
+      args.pop();
+      const cb = onceCallback(callback);
+      promiseFn(...args).then(
+        (v) => cb(null, v),
+        (e) => cb(e)
+      );
+    };
+  }
+
+  return {
+    open,
+    close,
+    readFile: wrap((path, opts) => fsp.readFile(path, opts)),
+    writeFile: wrap((path, data, opts) => fsp.writeFile(path, data, opts)),
+  };
+})()"#,
+            )?;
+            default.set("open", cb_helpers.get::<_, Value>("open")?)?;
+            default.set("close", cb_helpers.get::<_, Value>("close")?)?;
+            default.set("readFile", cb_helpers.get::<_, Value>("readFile")?)?;
+            default.set("writeFile", cb_helpers.get::<_, Value>("writeFile")?)?;
             default.set("readFileSync", Func::from(read_file_sync))?;
             default.set("rmdirSync", Func::from(rmdir_sync))?;
             default.set("rmSync", Func::from(rmfile_sync))?;

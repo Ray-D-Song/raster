@@ -2285,6 +2285,9 @@ void JS_SetRuntimeInfo(JSRuntime *rt, const char *s)
         rt->rt_info = s;
 }
 
+/* Forward decls used by FreeRuntime last-resort cleanup. */
+static void free_gc_object(JSRuntime *rt, JSGCObjectHeader *gp);
+
 void JS_FreeRuntime(JSRuntime *rt)
 {
     struct list_head *el, *el1;
@@ -2307,7 +2310,7 @@ void JS_FreeRuntime(JSRuntime *rt)
     /* Ensure native addon gc objects are collected before runtime teardown. */
     if (!list_empty(&rt->gc_obj_list)) {
         int pass;
-        for (pass = 0; pass < 8 && !list_empty(&rt->gc_obj_list); pass++) {
+        for (pass = 0; pass < 16 && !list_empty(&rt->gc_obj_list); pass++) {
             JS_RunGC(rt);
         }
     }
@@ -2353,6 +2356,26 @@ void JS_FreeRuntime(JSRuntime *rt)
     }
 #endif
 
+#ifdef RASTER_QJS_GC_DIAGNOSTICS
+    /* Diagnostic-only: count residual GC objects by type without freeing. */
+    if (!list_empty(&rt->gc_obj_list)) {
+        JSGCObjectHeader *p;
+        int residual = 0;
+        list_for_each(el, &rt->gc_obj_list) {
+            p = list_entry(el, JSGCObjectHeader, link);
+            residual++;
+            fprintf(stderr,
+                    "RASTER_QJS_GC_DIAGNOSTICS: residual gc obj type=%d ref_count=%d\n",
+                    (int)p->gc_obj_type, p->ref_count);
+        }
+        fprintf(stderr, "RASTER_QJS_GC_DIAGNOSTICS: residual gc_obj_list count=%d\n",
+                residual);
+    }
+#endif
+
+    /* Residual GC objects must be collected via proper root release + GC
+       before FreeRuntime. Do not force-free: that masks root leaks and can
+       free live objects still held by N-API / driver state. */
     assert(list_empty(&rt->gc_obj_list));
 
     /* free the classes */

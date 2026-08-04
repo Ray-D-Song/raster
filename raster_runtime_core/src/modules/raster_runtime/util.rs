@@ -27,6 +27,11 @@ fn dimensions(ctx: Ctx<'_>) -> Result<Array<'_>> {
     Ok(array)
 }
 
+/// Unicode display width for readline cursor math (Node getStringWidth).
+fn string_width(s: String) -> usize {
+    unicode_width::UnicodeWidthStr::width(s.as_str())
+}
+
 fn load<'js>(ctx: Ctx<'js>, filename: String, options: Opt<Object<'js>>) -> Result<Value<'js>> {
     let mut eval_options = EvalOptions::default();
     eval_options.strict = false;
@@ -60,6 +65,7 @@ impl ModuleDef for RasterRuntimeUtilModule {
         declare.declare("dimensions")?;
         declare.declare("load")?;
         declare.declare("print")?;
+        declare.declare("stringWidth")?;
         declare.declare("default")?;
         Ok(())
     }
@@ -69,6 +75,7 @@ impl ModuleDef for RasterRuntimeUtilModule {
             default.set("dimensions", Func::from(dimensions))?;
             default.set("load", Func::from(load))?;
             default.set("print", Func::from(print))?;
+            default.set("stringWidth", Func::from(string_width))?;
             Ok(())
         })
     }

@@ -21,7 +21,7 @@ mod types;
 mod value;
 mod wrap;
 
-pub use dlopen::{dlopen_module, prepare_shutdown, shutdown_all};
+pub use dlopen::{begin_shutdown, dlopen_module, finish_shutdown, shutdown_all};
 pub use env::Env;
 pub use types::*;
 
@@ -1936,6 +1936,129 @@ mod tests {
         .await;
     }
 
+    /// napi-rs JsDeferred: `func == null` with non-null `call_js_cb` must deliver.
+    #[tokio::test]
+    async fn tsfn_null_func_with_call_js_cb_delivers_payload() {
+        use std::os::raw::c_void;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+
+        static DELIVERED: AtomicUsize = AtomicUsize::new(0);
+        static LAST_DATA: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn tsfn_call_js(
+            env: crate::types::napi_env,
+            js_callback: crate::types::napi_value,
+            _context: *mut c_void,
+            data: *mut c_void,
+        ) {
+            if env.is_null() {
+                // Teardown path
+                return;
+            }
+            // Deferred-style: no JS callback function.
+            assert!(js_callback.is_null());
+            LAST_DATA.store(data as usize, Ordering::SeqCst);
+            DELIVERED.fetch_add(1, Ordering::SeqCst);
+        }
+
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        let _async_ctx = ctx.clone();
+        ctx.with(|ctx| {
+            DELIVERED.store(0, Ordering::SeqCst);
+            LAST_DATA.store(0, Ordering::SeqCst);
+            let raw = ctx.as_raw();
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let napi_env = env.as_napi_env();
+            let mut tsfn: crate::types::napi_threadsafe_function = std::ptr::null_mut();
+            assert_eq!(
+                unsafe {
+                    crate::async_work::napi_create_threadsafe_function(
+                        napi_env,
+                        std::ptr::null_mut(), // func == null
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        0,
+                        1,
+                        std::ptr::null_mut(),
+                        None,
+                        std::ptr::null_mut(),
+                        Some(tsfn_call_js),
+                        &mut tsfn,
+                    )
+                },
+                napi_status::napi_ok
+            );
+            let payload = 0xC0FFEEusize as *mut c_void;
+            assert_eq!(
+                unsafe {
+                    crate::async_work::napi_call_threadsafe_function(
+                        tsfn,
+                        payload,
+                        crate::types::napi_threadsafe_function_call_mode::napi_tsfn_nonblocking,
+                    )
+                },
+                napi_status::napi_ok
+            );
+
+            let driver = crate::driver::ensure_driver(&mut env);
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while DELIVERED.load(Ordering::SeqCst) == 0 && deadline > std::time::Instant::now() {
+                driver.drain_ready_jobs(&mut env);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert_eq!(DELIVERED.load(Ordering::SeqCst), 1);
+            assert_eq!(LAST_DATA.load(Ordering::SeqCst), 0xC0FFEE);
+
+            assert_eq!(
+                unsafe {
+                    crate::async_work::napi_release_threadsafe_function(
+                        tsfn,
+                        crate::types::napi_threadsafe_function_release_mode::napi_tsfn_release,
+                    )
+                },
+                napi_status::napi_ok
+            );
+            let deadline = std::time::Instant::now() + Duration::from_secs(1);
+            while deadline > std::time::Instant::now() {
+                driver.drain_ready_jobs(&mut env);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            env.scopes.close(raw.as_ptr());
+            env.dispose();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn napi_get_node_version_is_24_3_0_node() {
+        use std::ffi::CStr;
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        ctx.with(|ctx| {
+            let raw = ctx.as_raw();
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let mut version: *const crate::types::napi_node_version = std::ptr::null();
+            assert_eq!(
+                unsafe { crate::api::napi_get_node_version(env.as_napi_env(), &mut version) },
+                napi_status::napi_ok
+            );
+            assert!(!version.is_null());
+            let v = unsafe { &*version };
+            assert_eq!(v.major, 24);
+            assert_eq!(v.minor, 3);
+            assert_eq!(v.patch, 0);
+            let release = unsafe { CStr::from_ptr(v.release) }.to_str().unwrap();
+            assert_eq!(release, "node");
+            env.scopes.close(raw.as_ptr());
+            env.dispose();
+        })
+        .await;
+    }
+
     #[tokio::test]
     async fn async_work_rejects_foreign_env() {
         let rt = AsyncRuntime::new().unwrap();
@@ -1984,6 +2107,596 @@ mod tests {
             foreign.scopes.close(raw.as_ptr());
             owner.dispose();
             foreign.dispose();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn throw_type_and_range_error_use_correct_constructors() {
+        use crate::api::{napi_throw_range_error, napi_throw_type_error};
+
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        ctx.with(|ctx| {
+            let raw = ctx.as_raw();
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let env_ptr = env.as_napi_env();
+
+            assert_eq!(
+                unsafe { napi_throw_type_error(env_ptr, std::ptr::null(), c"type boom".as_ptr()) },
+                napi_status::napi_ok
+            );
+            let exc = env.clear_exception().expect("pending type error");
+            let val = unsafe { rquickjs::Value::from_raw(ctx.clone(), exc) };
+            let obj = val.into_object().expect("error object");
+            let name: String = obj.get("name").unwrap();
+            assert_eq!(name, "TypeError");
+            let check: rquickjs::Function = ctx
+                .eval(r#"(function(e){ return e instanceof TypeError && e instanceof Error; })"#)
+                .unwrap();
+            assert!(check.call::<_, bool>((obj.clone(),)).unwrap());
+
+            assert_eq!(
+                unsafe {
+                    napi_throw_range_error(env_ptr, std::ptr::null(), c"range boom".as_ptr())
+                },
+                napi_status::napi_ok
+            );
+            let exc = env.clear_exception().expect("pending range error");
+            let val = unsafe { rquickjs::Value::from_raw(ctx.clone(), exc) };
+            let obj = val.into_object().expect("error object");
+            let name: String = obj.get("name").unwrap();
+            assert_eq!(name, "RangeError");
+            let check: rquickjs::Function = ctx
+                .eval(r#"(function(e){ return e instanceof RangeError && e instanceof Error; })"#)
+                .unwrap();
+            assert!(check.call::<_, bool>((obj,)).unwrap());
+
+            env.scopes.close(env.ctx_ptr());
+            env.dispose();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn create_error_via_global_constructors() {
+        use crate::api::{
+            napi_create_error, napi_create_range_error, napi_create_string_utf8,
+            napi_create_type_error, napi_get_named_property, napi_get_value_string_utf8,
+            napi_typeof,
+        };
+        use crate::types::napi_valuetype;
+
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        ctx.with(|ctx| {
+            let raw = ctx.as_raw();
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let env_ptr = env.as_napi_env();
+
+            let mut msg = std::ptr::null_mut();
+            assert_eq!(
+                unsafe { napi_create_string_utf8(env_ptr, c"boom".as_ptr(), 4, &mut msg) },
+                napi_status::napi_ok
+            );
+            let mut code = std::ptr::null_mut();
+            assert_eq!(
+                unsafe { napi_create_string_utf8(env_ptr, c"ERR_X".as_ptr(), 5, &mut code) },
+                napi_status::napi_ok
+            );
+
+            // Error with code
+            let mut err = std::ptr::null_mut();
+            assert_eq!(
+                unsafe { napi_create_error(env_ptr, code, msg, &mut err) },
+                napi_status::napi_ok
+            );
+            let mut ty = napi_valuetype::napi_undefined;
+            assert_eq!(
+                unsafe { napi_typeof(env_ptr, err, &mut ty) },
+                napi_status::napi_ok
+            );
+            assert_eq!(ty, napi_valuetype::napi_object);
+
+            // name === "Error"
+            let mut name_h = std::ptr::null_mut();
+            assert_eq!(
+                unsafe { napi_get_named_property(env_ptr, err, c"name".as_ptr(), &mut name_h) },
+                napi_status::napi_ok
+            );
+            let mut buf = [0u8; 32];
+            let mut written = 0usize;
+            assert_eq!(
+                unsafe {
+                    napi_get_value_string_utf8(
+                        env_ptr,
+                        name_h,
+                        buf.as_mut_ptr() as *mut _,
+                        buf.len(),
+                        &mut written,
+                    )
+                },
+                napi_status::napi_ok
+            );
+            assert_eq!(&buf[..written], b"Error");
+
+            // code === "ERR_X"
+            let mut code_h = std::ptr::null_mut();
+            assert_eq!(
+                unsafe { napi_get_named_property(env_ptr, err, c"code".as_ptr(), &mut code_h) },
+                napi_status::napi_ok
+            );
+            written = 0;
+            assert_eq!(
+                unsafe {
+                    napi_get_value_string_utf8(
+                        env_ptr,
+                        code_h,
+                        buf.as_mut_ptr() as *mut _,
+                        buf.len(),
+                        &mut written,
+                    )
+                },
+                napi_status::napi_ok
+            );
+            assert_eq!(&buf[..written], b"ERR_X");
+
+            // instanceof Error via QuickJS
+            let err_js = unsafe { napi_to_value(&env, err) }.unwrap();
+            let global = unsafe { qjs::JS_GetGlobalObject(raw.as_ptr()) };
+            let error_ctor =
+                unsafe { qjs::JS_GetPropertyStr(raw.as_ptr(), global, c"Error".as_ptr()) };
+            let is_inst = unsafe { qjs::JS_IsInstanceOf(raw.as_ptr(), err_js, error_ctor) };
+            assert_eq!(is_inst, 1);
+            // prototype chain: Object.getPrototypeOf(err) === Error.prototype
+            let err_proto = unsafe { qjs::JS_GetPrototype(raw.as_ptr(), err_js) };
+            let error_proto =
+                unsafe { qjs::JS_GetPropertyStr(raw.as_ptr(), error_ctor, c"prototype".as_ptr()) };
+            assert_eq!(
+                unsafe { qjs::JS_IsEqual(raw.as_ptr(), err_proto, error_proto) },
+                1
+            );
+            unsafe {
+                qjs::JS_FreeValue(raw.as_ptr(), err_proto);
+                qjs::JS_FreeValue(raw.as_ptr(), error_proto);
+                qjs::JS_FreeValue(raw.as_ptr(), error_ctor);
+            }
+
+            // TypeError name + instanceof
+            let mut te = std::ptr::null_mut();
+            assert_eq!(
+                unsafe { napi_create_type_error(env_ptr, std::ptr::null_mut(), msg, &mut te) },
+                napi_status::napi_ok
+            );
+            let te_js = unsafe { napi_to_value(&env, te) }.unwrap();
+            let type_error_ctor =
+                unsafe { qjs::JS_GetPropertyStr(raw.as_ptr(), global, c"TypeError".as_ptr()) };
+            assert_eq!(
+                unsafe { qjs::JS_IsInstanceOf(raw.as_ptr(), te_js, type_error_ctor) },
+                1
+            );
+            // Also instanceof Error
+            let error_ctor2 =
+                unsafe { qjs::JS_GetPropertyStr(raw.as_ptr(), global, c"Error".as_ptr()) };
+            assert_eq!(
+                unsafe { qjs::JS_IsInstanceOf(raw.as_ptr(), te_js, error_ctor2) },
+                1
+            );
+            let mut te_name = std::ptr::null_mut();
+            assert_eq!(
+                unsafe { napi_get_named_property(env_ptr, te, c"name".as_ptr(), &mut te_name) },
+                napi_status::napi_ok
+            );
+            written = 0;
+            assert_eq!(
+                unsafe {
+                    napi_get_value_string_utf8(
+                        env_ptr,
+                        te_name,
+                        buf.as_mut_ptr() as *mut _,
+                        buf.len(),
+                        &mut written,
+                    )
+                },
+                napi_status::napi_ok
+            );
+            assert_eq!(&buf[..written], b"TypeError");
+
+            // RangeError
+            let mut re = std::ptr::null_mut();
+            assert_eq!(
+                unsafe { napi_create_range_error(env_ptr, std::ptr::null_mut(), msg, &mut re) },
+                napi_status::napi_ok
+            );
+            let re_js = unsafe { napi_to_value(&env, re) }.unwrap();
+            let range_error_ctor =
+                unsafe { qjs::JS_GetPropertyStr(raw.as_ptr(), global, c"RangeError".as_ptr()) };
+            assert_eq!(
+                unsafe { qjs::JS_IsInstanceOf(raw.as_ptr(), re_js, range_error_ctor) },
+                1
+            );
+
+            // code=null → no code property (undefined)
+            let mut err_no_code = std::ptr::null_mut();
+            assert_eq!(
+                unsafe { napi_create_error(env_ptr, std::ptr::null_mut(), msg, &mut err_no_code) },
+                napi_status::napi_ok
+            );
+            let err_no_code_js = unsafe { napi_to_value(&env, err_no_code) }.unwrap();
+            let code_prop =
+                unsafe { qjs::JS_GetPropertyStr(raw.as_ptr(), err_no_code_js, c"code".as_ptr()) };
+            assert!(unsafe { qjs::JS_IsUndefined(code_prop) });
+            unsafe { qjs::JS_FreeValue(raw.as_ptr(), code_prop) };
+
+            // non-string message → string_expected
+            let num = new_int32(42);
+            let num_h = value_to_napi_owned(&mut env, num);
+            let mut bad = std::ptr::null_mut();
+            assert_eq!(
+                unsafe { napi_create_error(env_ptr, std::ptr::null_mut(), num_h, &mut bad) },
+                napi_status::napi_string_expected
+            );
+
+            // non-string code → string_expected
+            let mut bad2 = std::ptr::null_mut();
+            assert_eq!(
+                unsafe { napi_create_error(env_ptr, num_h, msg, &mut bad2) },
+                napi_status::napi_string_expected
+            );
+
+            // null message → invalid_arg
+            let mut bad3 = std::ptr::null_mut();
+            assert_eq!(
+                unsafe {
+                    napi_create_error(
+                        env_ptr,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        &mut bad3,
+                    )
+                },
+                napi_status::napi_invalid_arg
+            );
+
+            unsafe {
+                qjs::JS_FreeValue(raw.as_ptr(), type_error_ctor);
+                qjs::JS_FreeValue(raw.as_ptr(), error_ctor2);
+                qjs::JS_FreeValue(raw.as_ptr(), range_error_ctor);
+                qjs::JS_FreeValue(raw.as_ptr(), global);
+            }
+            env.scopes.close(raw.as_ptr());
+            env.dispose();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn finish_dispose_refuses_while_inflight_async() {
+        use crate::driver::DriverState;
+        use std::sync::Arc;
+
+        // Pure driver: inflight keepalive blocks finished even after close_sender.
+        let driver = Arc::new(DriverState::new(
+            unsafe { libc::pthread_self() },
+            std::ptr::null_mut(),
+        ));
+        driver.acquire_async_keepalive();
+        driver.close_sender();
+        driver.mark_finished_if_idle();
+        assert!(
+            !driver.is_finished(),
+            "must not finish while inflight_async > 0"
+        );
+
+        driver.release_async_keepalive();
+        driver.mark_finished_if_idle();
+        assert!(driver.is_finished());
+        driver.wait_finished().await;
+    }
+
+    #[tokio::test]
+    async fn finish_dispose_refuses_while_driver_loop_active() {
+        use crate::driver::{ensure_driver, DriverJob};
+        use std::sync::atomic::Ordering;
+
+        let rt = AsyncRuntime::new().unwrap();
+        let actx = AsyncContext::full(&rt).await.unwrap();
+
+        let driver = actx
+            .with(|ctx| {
+                let raw = ctx.as_raw();
+                // Registry-owned env so we can finish after wait outside with().
+                let env_ptr = crate::dlopen::register_env(raw, Box::new(Env::new(raw)));
+                let env = unsafe { &mut *env_ptr };
+                let driver = ensure_driver(env);
+                driver.idle_refs.fetch_add(1, Ordering::SeqCst);
+                assert!(driver.post(env, DriverJob::Wake));
+                driver.ensure_loop(env);
+                driver.drain_ready_jobs(env);
+                env.begin_dispose();
+                // Loop/keepalive active — finish must refuse.
+                assert!(!env.finish_dispose());
+                assert_eq!(env.dispose_state, crate::env::DisposeState::Beginning);
+                assert!(!driver.is_finished());
+                driver.clone()
+            })
+            .await;
+
+        // idle_refs still held — driver must not be finished yet.
+        assert!(!driver.is_finished());
+        // Drop keepalive so the loop can exit once polled.
+        driver.idle_refs.fetch_sub(1, Ordering::SeqCst);
+        driver.wake_if_quiescent();
+        // Drive the JS runtime so the driver future observes quiescence and exits.
+        let _ = rt.idle().await;
+        // Real wait — never force mark_finished.
+        driver.wait_finished().await;
+        assert!(driver.is_finished());
+        assert!(driver.is_quiescent());
+        assert_eq!(driver.inflight_async.load(Ordering::SeqCst), 0);
+
+        actx.with(|ctx| {
+            crate::dlopen::finish_shutdown(&ctx).expect("finish after wait");
+            crate::dlopen::shutdown_all().expect("registry empty");
+            assert_eq!(crate::async_work::registered_tsfn_count(), 0);
+            assert_eq!(crate::async_work::registered_async_work_count(), 0);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn closing_env_rejects_create_async_work() {
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        ctx.with(|ctx| {
+            let raw = ctx.as_raw();
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let napi_env = env.as_napi_env();
+            let registry_before = crate::async_work::registered_async_work_count();
+            env.begin_dispose();
+            let sentinel = 0xDEAD_BEEFusize as crate::types::napi_async_work;
+            let mut result = sentinel;
+            assert_eq!(
+                unsafe {
+                    crate::async_work::napi_create_async_work(
+                        napi_env,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        None,
+                        None,
+                        std::ptr::null_mut(),
+                        &mut result,
+                    )
+                },
+                napi_status::napi_closing
+            );
+            assert_eq!(result, sentinel);
+            assert_eq!(
+                crate::async_work::registered_async_work_count(),
+                registry_before
+            );
+            env.scopes.close(raw.as_ptr());
+            env.finish_dispose();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn closing_env_rejects_queue_async_work() {
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        ctx.with(|ctx| {
+            let raw = ctx.as_raw();
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let napi_env = env.as_napi_env();
+            let mut work: crate::types::napi_async_work = std::ptr::null_mut();
+            assert_eq!(
+                unsafe {
+                    crate::async_work::napi_create_async_work(
+                        napi_env,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        None,
+                        None,
+                        std::ptr::null_mut(),
+                        &mut work,
+                    )
+                },
+                napi_status::napi_ok
+            );
+            assert_eq!(
+                crate::async_work::async_work_status_for_test(work),
+                Some(crate::async_work::AW_CREATED_FOR_TEST)
+            );
+            env.begin_dispose();
+            assert_eq!(
+                unsafe { crate::async_work::napi_queue_async_work(napi_env, work) },
+                napi_status::napi_closing
+            );
+            assert_eq!(
+                crate::async_work::async_work_status_for_test(work),
+                Some(crate::async_work::AW_CREATED_FOR_TEST)
+            );
+            assert!(env.driver.is_none());
+            assert_eq!(
+                unsafe { crate::async_work::napi_delete_async_work(napi_env, work) },
+                napi_status::napi_ok
+            );
+            env.scopes.close(raw.as_ptr());
+            env.finish_dispose();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn closing_env_rejects_create_threadsafe_function() {
+        use std::os::raw::c_void;
+
+        unsafe extern "C" fn tsfn_call_js(
+            _env: crate::types::napi_env,
+            _js_callback: crate::types::napi_value,
+            _context: *mut c_void,
+            _data: *mut c_void,
+        ) {
+        }
+
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        ctx.with(|ctx| {
+            let raw = ctx.as_raw();
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let napi_env = env.as_napi_env();
+            let tsfn_before = crate::async_work::registered_tsfn_count();
+            env.begin_dispose();
+            let sentinel = 0xFEED_FACEusize as crate::types::napi_threadsafe_function;
+            let mut result = sentinel;
+            assert_eq!(
+                unsafe {
+                    crate::async_work::napi_create_threadsafe_function(
+                        napi_env,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        0,
+                        1,
+                        std::ptr::null_mut(),
+                        None,
+                        std::ptr::null_mut(),
+                        Some(tsfn_call_js),
+                        &mut result,
+                    )
+                },
+                napi_status::napi_closing
+            );
+            assert_eq!(result, sentinel);
+            assert_eq!(crate::async_work::registered_tsfn_count(), tsfn_before);
+            assert!(env.driver.is_none());
+            env.scopes.close(raw.as_ptr());
+            env.finish_dispose();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn active_env_async_work_and_tsfn_still_ok() {
+        use std::os::raw::c_void;
+
+        unsafe extern "C" fn tsfn_call_js(
+            _env: crate::types::napi_env,
+            _js_callback: crate::types::napi_value,
+            _context: *mut c_void,
+            _data: *mut c_void,
+        ) {
+        }
+
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        ctx.with(|ctx| {
+            let raw = ctx.as_raw();
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let napi_env = env.as_napi_env();
+            let mut work: crate::types::napi_async_work = std::ptr::null_mut();
+            assert_eq!(
+                unsafe {
+                    crate::async_work::napi_create_async_work(
+                        napi_env,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        None,
+                        None,
+                        std::ptr::null_mut(),
+                        &mut work,
+                    )
+                },
+                napi_status::napi_ok
+            );
+            assert_eq!(
+                unsafe { crate::async_work::napi_queue_async_work(napi_env, work) },
+                napi_status::napi_ok
+            );
+            let driver = crate::driver::ensure_driver(&mut env);
+            driver.drain_ready_jobs(&mut env);
+            assert_eq!(
+                unsafe { crate::async_work::napi_delete_async_work(napi_env, work) },
+                napi_status::napi_ok
+            );
+
+            let mut tsfn: crate::types::napi_threadsafe_function = std::ptr::null_mut();
+            assert_eq!(
+                unsafe {
+                    crate::async_work::napi_create_threadsafe_function(
+                        napi_env,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        0,
+                        1,
+                        std::ptr::null_mut(),
+                        None,
+                        std::ptr::null_mut(),
+                        Some(tsfn_call_js),
+                        &mut tsfn,
+                    )
+                },
+                napi_status::napi_ok
+            );
+            assert!(!tsfn.is_null());
+            unsafe {
+                crate::async_work::napi_release_threadsafe_function(
+                    tsfn,
+                    crate::types::napi_threadsafe_function_release_mode::napi_tsfn_release,
+                );
+            }
+            driver.drain_ready_jobs(&mut env);
+            env.scopes.close(raw.as_ptr());
+            env.dispose();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn begin_dispose_is_idempotent() {
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        ctx.with(|ctx| {
+            let raw = ctx.as_raw();
+            let mut env = Env::new(raw);
+            env.begin_dispose();
+            assert_eq!(env.dispose_state, crate::env::DisposeState::Beginning);
+            env.begin_dispose(); // second call no-op
+            assert_eq!(env.dispose_state, crate::env::DisposeState::Beginning);
+            assert!(env.finish_dispose());
+            assert_eq!(env.dispose_state, crate::env::DisposeState::Finished);
+            assert!(env.finish_dispose()); // already finished
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn shutdown_all_errors_on_residual_registry() {
+        use std::ptr::NonNull;
+
+        assert!(crate::dlopen::shutdown_all().is_ok());
+
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        ctx.with(|ctx| {
+            let raw = ctx.as_raw();
+            let _ptr = crate::dlopen::register_env(raw, Box::new(Env::new(raw)));
+            let err = crate::dlopen::shutdown_all().expect_err("residual env");
+            assert!(err.contains("shutdown incomplete"), "unexpected: {err}");
+            // Proper cleanup: two-phase without force-mark.
+            let driver = crate::dlopen::begin_shutdown(&ctx).unwrap();
+            drop(driver);
+            crate::dlopen::finish_shutdown(&ctx).unwrap();
+            assert!(crate::dlopen::shutdown_all().is_ok());
+            let _ = NonNull::new(raw.as_ptr());
         })
         .await;
     }

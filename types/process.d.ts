@@ -44,6 +44,12 @@ declare module "process" {
   }
   interface Process extends EventEmitter {
     hrtime: HRTime;
+    /** Standard input stream (`tty.ReadStream` when fd 0 is a TTY). */
+    stdin: import("tty").ReadStream;
+    /** Standard output stream (`tty.WriteStream` when fd 1 is a TTY). */
+    stdout: import("tty").WriteStream;
+    /** Standard error stream (`tty.WriteStream` when fd 2 is a TTY). */
+    stderr: import("tty").WriteStream;
     /**
      * The `process.cwd()` method returns the current working directory of the raster_runtime
      * process.
@@ -165,14 +171,14 @@ declare module "process" {
     readonly release: ProcessRelease;
     /**
      * The `process.version` property contains the Node-compat version string
-     * (`v22.18.0`). The real Raster runtime version remains in
+     * (`v24.3.0`). The real Raster runtime version remains in
      * `process.versions.raster_runtime` and in the CLI `--version` output.
      *
      * ```js
      * import { version } from 'process';
      *
      * console.log(`Version: ${version}`);
-     * // Version: v22.18.0
+     * // Version: v24.3.0
      * ```
      */
     readonly version: string;
@@ -191,7 +197,7 @@ declare module "process" {
      * ```console
      * {
      *   raster_runtime: '0.8.1-beta',
-     *   node: '22.18.0'
+     *   node: '24.3.0'
      * }
      * ```
      */
@@ -548,6 +554,9 @@ declare module "process" {
   export function kill(pid: number, signal?: QuickJS.Signals | number): void;
   export let exitCode: number | null;
   export const hrtime: HRTime;
+  export const stdin: import("tty").ReadStream;
+  export const stdout: import("tty").WriteStream;
+  export const stderr: import("tty").WriteStream;
   const process: Process;
   export default process;
 }

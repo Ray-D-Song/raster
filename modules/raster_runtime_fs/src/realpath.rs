@@ -18,17 +18,12 @@ use crate::errors::{create_fs_error, defer_fs_callback, throw_fs_error};
 
 const SYSCALL: &str = "realpath";
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 enum ParsedEncoding {
+    #[default]
     Utf8,
     Buffer,
     Other(Encoder),
-}
-
-impl Default for ParsedEncoding {
-    fn default() -> Self {
-        Self::Utf8
-    }
 }
 
 #[derive(Clone, Default)]
@@ -108,7 +103,7 @@ pub(crate) fn path_from_value<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> Result<
     }
 
     if let Some(string) = value.as_string() {
-        return Ok(string.to_string()?);
+        return string.to_string();
     }
 
     Err(Exception::throw_type(
@@ -169,7 +164,7 @@ pub(crate) fn path_from_value_create_read_stream<'js>(
     }
 
     if let Some(string) = value.as_string() {
-        return Ok(string.to_string()?);
+        return string.to_string();
     }
 
     Err(Exception::throw_type(

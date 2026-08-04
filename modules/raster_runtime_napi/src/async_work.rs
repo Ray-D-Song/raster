@@ -12,7 +12,7 @@ use parking_lot::Mutex;
 use rquickjs::qjs::{self, JSValue};
 
 use crate::driver::{ensure_driver, DriverJob, DriverState};
-use crate::env::Env;
+use crate::env::{DisposeState, Env};
 use crate::types::{
     napi_async_complete_callback, napi_async_execute_callback, napi_async_work, napi_deferred,
     napi_env, napi_ref, napi_status, napi_threadsafe_function, napi_threadsafe_function_call_js,
@@ -117,6 +117,10 @@ pub unsafe extern "C" fn napi_create_async_work(
     if env.is_null() || result.is_null() {
         return napi_status::napi_invalid_arg;
     }
+    let env_ref = unsafe { Env::from_napi_env(env) };
+    if env_ref.dispose_state != DisposeState::Active {
+        return napi_status::napi_closing;
+    }
     let state = Arc::new(AsyncWorkState {
         env,
         execute,
@@ -166,6 +170,10 @@ pub unsafe extern "C" fn napi_queue_async_work(
     if work_state.env != env {
         return napi_status::napi_invalid_arg;
     }
+    let env_ref = unsafe { Env::from_napi_env(env) };
+    if env_ref.dispose_state != DisposeState::Active {
+        return napi_status::napi_closing;
+    }
     if work_state
         .status
         .compare_exchange(AW_CREATED, AW_QUEUED, Ordering::AcqRel, Ordering::Acquire)
@@ -173,7 +181,6 @@ pub unsafe extern "C" fn napi_queue_async_work(
     {
         return napi_status::napi_invalid_arg;
     }
-    let env_ref = unsafe { Env::from_napi_env(env) };
     let driver = ensure_driver(env_ref);
     let execute = work_state.execute;
     let data_addr = work_state.data as usize;
@@ -572,6 +579,8 @@ pub(crate) fn close_all_tsfn_for_env(env: napi_env) {
     }
 }
 
+/// Emergency path only — not used by normal prepare_shutdown / shutdown_all.
+#[allow(dead_code)]
 pub(crate) fn shutdown_all_tsfn() {
     let list = tsfn_snapshot_all();
     for tsfn in list {
@@ -580,6 +589,25 @@ pub(crate) fn shutdown_all_tsfn() {
     }
     TSFN_REGISTRY.lock().clear();
 }
+
+/// Count of TSFNs still registered (postcondition for `shutdown_all`).
+pub(crate) fn registered_tsfn_count() -> usize {
+    TSFN_REGISTRY.lock().len()
+}
+
+/// Count of async works still registered.
+#[cfg(test)]
+pub(crate) fn registered_async_work_count() -> usize {
+    ASYNC_WORK_REGISTRY.lock().len()
+}
+
+#[cfg(test)]
+pub(crate) fn async_work_status_for_test(work: napi_async_work) -> Option<u8> {
+    lookup_async_work(work).map(|s| s.status.load(Ordering::Acquire))
+}
+
+#[cfg(test)]
+pub(crate) const AW_CREATED_FOR_TEST: u8 = AW_CREATED;
 
 fn tsfn_is_open(tsfn: &ThreadsafeFunction) -> bool {
     tsfn.state.load(Ordering::Acquire) == TSFN_OPEN
@@ -704,33 +732,41 @@ fn invoke_tsfn_teardown(tsfn: &ThreadsafeFunction, data: *mut c_void) {
 }
 
 fn invoke_tsfn_call(tsfn: &ThreadsafeFunction, data: *mut c_void) {
-    let _ = data;
-    if let Some(call_js) = tsfn.call_js {
-        let mut func_val = std::ptr::null_mut();
-        if unsafe { crate::refs::napi_get_reference_value(tsfn.env, tsfn.func_ref, &mut func_val) }
+    // Node allows `func == null` with a non-null `call_js_cb` (napi-rs JsDeferred).
+    // Resolve the JS callback only when a function reference was registered.
+    let js_callback = if tsfn.func_ref.is_null() {
+        std::ptr::null_mut()
+    } else {
+        let mut value = std::ptr::null_mut();
+        if unsafe { crate::refs::napi_get_reference_value(tsfn.env, tsfn.func_ref, &mut value) }
             != napi_status::napi_ok
         {
+            // Reference gone — still must release the payload exactly once.
+            invoke_tsfn_teardown(tsfn, data);
             return;
         }
+        value
+    };
+
+    if let Some(call_js) = tsfn.call_js {
         unsafe {
-            call_js(tsfn.env, func_val, tsfn.context, data);
+            call_js(tsfn.env, js_callback, tsfn.context, data);
         }
         return;
     }
-    if tsfn.func_ref.is_null() {
-        return;
-    }
-    let mut func_val = std::ptr::null_mut();
-    if unsafe { crate::refs::napi_get_reference_value(tsfn.env, tsfn.func_ref, &mut func_val) }
-        != napi_status::napi_ok
-    {
+
+    // Default path: call the registered JS function with no args.
+    if js_callback.is_null() {
         return;
     }
     let env_ref = unsafe { Env::from_napi_env(tsfn.env) };
     let ctx = env_ref.ctx_ptr();
-    let func_js = match unsafe { crate::value::napi_to_value_dup(env_ref, func_val) } {
+    let func_js = match unsafe { crate::value::napi_to_value_dup(env_ref, js_callback) } {
         Some(v) => v,
-        None => return,
+        None => {
+            invoke_tsfn_teardown(tsfn, data);
+            return;
+        },
     };
     unsafe {
         let _ = qjs::JS_Call(ctx, func_js, qjs::JS_UNDEFINED, 0, std::ptr::null_mut());
@@ -783,6 +819,9 @@ pub unsafe extern "C" fn napi_create_threadsafe_function(
         return napi_status::napi_invalid_arg;
     }
     let env_ref = unsafe { Env::from_napi_env(env) };
+    if env_ref.dispose_state != DisposeState::Active {
+        return napi_status::napi_closing;
+    }
     let driver = ensure_driver(env_ref);
     let mut func_ref = std::ptr::null_mut();
     if !func.is_null()
@@ -845,9 +884,16 @@ pub unsafe extern "C" fn napi_call_threadsafe_function(
     };
     let status = match admission {
         QueueAdmissionResult::Ok => napi_status::napi_ok,
-        QueueAdmissionResult::Full => napi_status::napi_queue_full,
+        QueueAdmissionResult::Full => {
+            // Non-blocking full queue: caller owns `data`; do not free here.
+            napi_status::napi_queue_full
+        },
+        QueueAdmissionResult::PostFailed => {
+            // Admission was rolled back (payload not owned by TSFN). Caller retains `data`.
+            // Do not call call_js teardown here — that would free caller-owned memory.
+            napi_status::napi_generic_failure
+        },
         QueueAdmissionResult::Closing => napi_status::napi_closing,
-        QueueAdmissionResult::PostFailed => napi_status::napi_generic_failure,
     };
     if status != napi_status::napi_ok {
         return status;

@@ -4,13 +4,15 @@
 use std::os::unix::fs::FileTypeExt;
 use std::{fs::Metadata, path::PathBuf};
 
+use raster_runtime_context::CtxExtension;
 use raster_runtime_path::{ends_with_sep, CURRENT_DIR_STR};
 use raster_runtime_utils::fs::DirectoryWalker;
 use rquickjs::{
-    atom::PredefinedAtom, prelude::Opt, Array, Class, Ctx, IntoJs, Object, Result, Value,
+    atom::PredefinedAtom, function::Rest, prelude::Opt, Array, Class, Ctx, Exception, FromJs,
+    Function, IntoJs, Object, Result, Value,
 };
 
-use crate::errors::throw_fs_error;
+use crate::errors::{create_fs_error, defer_fs_callback, throw_fs_error};
 
 #[derive(rquickjs::class::Trace, rquickjs::JsLifetime)]
 #[rquickjs::class]
@@ -132,6 +134,92 @@ pub async fn read_dir(ctx: Ctx<'_>, mut path: String, options: Opt<Object<'_>>) 
     items.sort_by(|a, b| a.name.partial_cmp(&b.name).unwrap());
 
     Ok(ReadDir { items, root: path })
+}
+
+/// Callback-style `fs.readdir(path[, options], callback)`.
+pub fn readdir_callback<'js>(ctx: Ctx<'js>, path: String, args: Rest<Value<'js>>) -> Result<()> {
+    let mut args = args.0;
+    let (options, callback) = match args.len() {
+        0 => {
+            return Err(Exception::throw_type(
+                &ctx,
+                "The \"cb\" argument must be of type function",
+            ));
+        },
+        1 => {
+            let only = args.remove(0);
+            if only.as_function().is_some() {
+                (None, Function::from_js(&ctx, only)?)
+            } else {
+                return Err(Exception::throw_type(
+                    &ctx,
+                    "The \"cb\" argument must be of type function",
+                ));
+            }
+        },
+        _ => {
+            let maybe_opts = args.remove(0);
+            if maybe_opts.as_function().is_some() {
+                (None, Function::from_js(&ctx, maybe_opts)?)
+            } else {
+                let opts = if maybe_opts.is_null() || maybe_opts.is_undefined() {
+                    None
+                } else {
+                    Some(Object::from_js(&ctx, maybe_opts)?)
+                };
+                let callback = Function::from_js(&ctx, args.remove(0)).map_err(|_| {
+                    Exception::throw_type(&ctx, "The \"cb\" argument must be of type function")
+                })?;
+                (opts, callback)
+            }
+        },
+    };
+
+    ctx.clone().spawn_exit_simple(async move {
+        // Inline the walk so callback failures can use create_fs_error without
+        // going through throw_fs_error (which is for sync Result throws).
+        let mut path_mut = path.clone();
+        let walk_result = async {
+            let (with_file_types, skip_root_pos, mut directory_walker) =
+                process_options_and_create_directory_walker(&mut path_mut, Opt(options));
+            let mut items = Vec::with_capacity(64);
+            loop {
+                match directory_walker.walk().await {
+                    Ok(Some((child, metadata))) => {
+                        append_directory_and_metadata_to_vec(
+                            with_file_types,
+                            skip_root_pos,
+                            &mut items,
+                            child,
+                            metadata,
+                        );
+                    },
+                    Ok(None) => break,
+                    Err(err) => return Err(err),
+                }
+            }
+            items.sort_by(|a, b| a.name.partial_cmp(&b.name).unwrap());
+            Ok(ReadDir {
+                items,
+                root: path_mut,
+            })
+        }
+        .await;
+
+        match walk_result {
+            Ok(entries) => {
+                let value = entries.into_js(&ctx)?;
+                defer_fs_callback(&ctx, callback, None, Some(value))?;
+            },
+            Err(err) => {
+                let exception = create_fs_error(&ctx, err, "scandir", &path)?;
+                defer_fs_callback(&ctx, callback, Some(exception), None)?;
+            },
+        }
+        Ok(())
+    });
+
+    Ok(())
 }
 
 pub fn read_dir_sync(ctx: Ctx<'_>, mut path: String, options: Opt<Object<'_>>) -> Result<ReadDir> {

@@ -85,6 +85,13 @@ pub fn structured_clone<'js>(
                             "A Proxy value could not be cloned",
                         ));
                     },
+                    // Structured clone cannot transfer callable objects by reference.
+                    Type::Function | Type::Constructor => {
+                        return Err(Exception::throw_type(
+                            ctx,
+                            "The object could not be cloned.",
+                        ));
+                    },
                     Type::Object => {
                         if check_circular(
                             &mut tape,

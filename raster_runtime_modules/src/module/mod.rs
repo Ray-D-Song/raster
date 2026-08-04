@@ -118,6 +118,7 @@ pub fn register_hooks<'js>(ctx: Ctx<'js>, hooks_obj: Object<'js>) -> Result<()> 
 
 impl ModuleDef for ModuleModule {
     fn declare(declare: &Declarations) -> Result<()> {
+        declare.declare("Module")?;
         declare.declare("builtinModules")?;
         declare.declare("createRequire")?;
         declare.declare("isBuiltin")?;
@@ -144,6 +145,8 @@ impl ModuleDef for ModuleModule {
         };
 
         exports.export("default", module_ctor.clone())?;
+        // Named `Module` is the same constructor as `default` / `require("module").Module`.
+        exports.export("Module", module_ctor.clone())?;
         exports.export(
             "builtinModules",
             module_ctor.get::<_, Value>("builtinModules")?,

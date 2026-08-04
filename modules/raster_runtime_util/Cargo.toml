@@ -17,3 +17,9 @@ raster_runtime_encoding = { version = "0.8.1-beta", path = "../../libs/raster_ru
 raster_runtime_logging = { version = "0.8.1-beta", path = "../../libs/raster_runtime_logging" }
 raster_runtime_utils = { version = "0.8.1-beta", path = "../../libs/raster_runtime_utils", default-features = false }
 rquickjs = { version = "=0.12.1", default-features = false }
+unicode-width = { version = "0.2", default-features = false }
+
+[dev-dependencies]
+raster_runtime_test = { path = "../../libs/raster_runtime_test" }
+rquickjs = { version = "=0.12.1", features = ["futures"], default-features = false }
+tokio = { version = "1", features = ["macros", "rt"], default-features = false }

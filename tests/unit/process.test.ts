@@ -214,9 +214,9 @@ it("should have a process exit", () => {
 });
 
 describe("Node compat identity", () => {
-  it("should advertise Node 22.18.0 identity", () => {
-    expect(process.version).toBe("v22.18.0");
-    expect(process.versions.node).toBe("22.18.0");
+  it("should advertise Node 24.3.0 identity", () => {
+    expect(process.version).toBe("v24.3.0");
+    expect(process.versions.node).toBe("24.3.0");
     expect(typeof process.versions.raster_runtime).toBe("string");
     expect(process.versions.raster_runtime.length > 0).toBeTruthy();
     expect(process.release.name).toBe("raster_runtime");

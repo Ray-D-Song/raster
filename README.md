@@ -64,8 +64,8 @@ The test runner also has support for filters. Using filters is as simple as addi
 | node:perf_hooks                                  | ✔︎       | ✔︎⚠️            |
 | node:process                                     | ✔︎       | ✔︎⚠️            |
 | node:querystring                                 | ✔︎       | ✔︎⚠️            |
-| node:readline                                    | ✔︎       | ✘              |
-| node:readline/promises                           | ✔︎       | ✘              |
+| node:readline                                    | ✔︎       | ✔︎              |
+| node:readline/promises                           | ✔︎       | ✔︎              |
 | node:repl                                        | ✔︎       | ✘              |
 | node:sqlite                                      | ✔︎       | ✘              |
 | node:stream                                      | ✔︎       | ✔︎\*            |

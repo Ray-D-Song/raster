@@ -81,12 +81,21 @@ fn build_search_paths(ctx: &Ctx<'_>, options: Opt<Object<'_>>) -> Result<Option<
         return Ok(None);
     }
 
-    let array = paths_value
-        .as_array()
-        .ok_or_else(|| Exception::throw_type(ctx, "options.paths must be an array"))?;
-    let mut paths = Vec::with_capacity(array.len());
-    for value in array.iter::<String>() {
-        paths.push(value?);
+    let paths_array = paths_value.as_array().ok_or_else(|| {
+        Exception::throw_type(ctx, "The \"paths\" argument must be of type string[]")
+    })?;
+    let length = paths_array.len();
+    let mut paths = Vec::with_capacity(length);
+    // Node 24.3: every entry (including sparse-array holes → undefined) must be a string.
+    for index in 0..length {
+        let value: Value = paths_array.get(index)?;
+        let path = value.as_string().ok_or_else(|| {
+            Exception::throw_type(
+                ctx,
+                &format!("The \"paths[{index}]\" argument must be of type string"),
+            )
+        })?;
+        paths.push(path.to_string()?);
     }
 
     Ok(Some(paths))
@@ -101,7 +110,7 @@ pub fn default_resolve_filename(
 ) -> Result<String> {
     let parent_object = match parent.0 {
         Some(value) if value.is_null() || value.is_undefined() => None,
-        Some(value) => value.as_object().map(|object| object.clone()),
+        Some(value) => value.as_object().cloned(),
         None => None,
     };
 
@@ -253,7 +262,7 @@ fn require_resolve_fn<'js>(
 ) -> Result<String> {
     let parent_object = match parent.0 {
         Some(value) if value.is_null() || value.is_undefined() => None,
-        Some(value) => value.as_object().map(|object| object.clone()),
+        Some(value) => value.as_object().cloned(),
         None => None,
     };
     call_resolve_filename(&ctx, &request, parent_object, options.0)
@@ -485,4 +494,122 @@ pub fn init_global_require(ctx: &Ctx<'_>) -> Result<()> {
 
     ctx.globals().set("require", require_fn)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use raster_runtime_test::test_async_with;
+    use rquickjs::{Array, CatchResultExt, Object};
+
+    #[tokio::test]
+    async fn build_search_paths_valid_strings() {
+        test_async_with(|ctx| {
+            Box::pin(async move {
+                let opts = Object::new(ctx.clone()).unwrap();
+                let arr = Array::new(ctx.clone()).unwrap();
+                arr.set(0, "/a").unwrap();
+                arr.set(1, "/b").unwrap();
+                opts.set("paths", arr).unwrap();
+                let result = build_search_paths(&ctx, Opt(Some(opts))).unwrap();
+                assert_eq!(result, Some(vec!["/a".to_string(), "/b".to_string()]));
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn build_search_paths_rejects_non_array() {
+        test_async_with(|ctx| {
+            Box::pin(async move {
+                let opts = Object::new(ctx.clone()).unwrap();
+                opts.set("paths", "not-an-array").unwrap();
+                let err = build_search_paths(&ctx, Opt(Some(opts)))
+                    .catch(&ctx)
+                    .unwrap_err();
+                let msg = err.to_string();
+                assert!(
+                    msg.contains("paths") || msg.contains("array") || msg.contains("string"),
+                    "unexpected: {msg}"
+                );
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn build_search_paths_rejects_number_null_undefined() {
+        test_async_with(|ctx| {
+            Box::pin(async move {
+                for (index, bad) in [
+                    (0usize, Value::new_int(ctx.clone(), 1)),
+                    (0, Value::new_null(ctx.clone())),
+                    (0, Value::new_undefined(ctx.clone())),
+                ] {
+                    let opts = Object::new(ctx.clone()).unwrap();
+                    let arr = Array::new(ctx.clone()).unwrap();
+                    arr.set(0, bad).unwrap();
+                    opts.set("paths", arr).unwrap();
+                    let err = build_search_paths(&ctx, Opt(Some(opts)))
+                        .catch(&ctx)
+                        .unwrap_err();
+                    let msg = err.to_string();
+                    assert!(
+                        msg.contains(&format!("paths[{index}]")),
+                        "expected paths[{index}] in: {msg}"
+                    );
+                }
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn build_search_paths_sparse_array_hole_is_type_error() {
+        test_async_with(|ctx| {
+            Box::pin(async move {
+                let opts = Object::new(ctx.clone()).unwrap();
+                // Sparse array: length 2, only index 1 set → hole at 0 is undefined.
+                let arr: Array = ctx
+                    .eval::<Array, _>("(() => { const a = []; a[1] = '/tmp'; return a; })()")
+                    .unwrap();
+                opts.set("paths", arr).unwrap();
+                let err = build_search_paths(&ctx, Opt(Some(opts)))
+                    .catch(&ctx)
+                    .unwrap_err();
+                let msg = err.to_string();
+                assert!(
+                    msg.contains("paths[0]"),
+                    "sparse hole should report paths[0]: {msg}"
+                );
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn build_search_paths_error_message_exact_index() {
+        test_async_with(|ctx| {
+            Box::pin(async move {
+                let opts = Object::new(ctx.clone()).unwrap();
+                let arr = Array::new(ctx.clone()).unwrap();
+                arr.set(0, "/ok").unwrap();
+                arr.set(1, 42).unwrap();
+                opts.set("paths", arr).unwrap();
+                let err = build_search_paths(&ctx, Opt(Some(opts)))
+                    .catch(&ctx)
+                    .unwrap_err();
+                let msg = err.to_string();
+                assert!(
+                    msg.contains("paths[1]"),
+                    "error should include exact index: {msg}"
+                );
+                assert!(
+                    msg.contains("must be of type string"),
+                    "error should match Node-style message: {msg}"
+                );
+            })
+        })
+        .await;
+    }
 }

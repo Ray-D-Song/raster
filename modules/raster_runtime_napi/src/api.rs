@@ -6,7 +6,6 @@ use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_void};
 use std::ptr;
 use std::ptr::NonNull;
-use std::sync::OnceLock;
 
 use rquickjs::function::{MutFn, Rest, This};
 use rquickjs::qjs::{self, JSValue};
@@ -28,7 +27,20 @@ thread_local! {
     static PENDING_MODULE: RefCell<Option<napi_module>> = const { RefCell::new(None) };
 }
 
-static NODE_VERSION: OnceLock<napi_node_version> = OnceLock::new();
+/// Stable C string for `napi_node_version.release` (must outlive the process).
+static NODE_RELEASE: &[u8] = b"node\0";
+
+#[repr(transparent)]
+struct StaticNodeVersion(napi_node_version);
+// SAFETY: only contains POD + a pointer into static `NODE_RELEASE`.
+unsafe impl Sync for StaticNodeVersion {}
+
+static NODE_VERSION: StaticNodeVersion = StaticNodeVersion(napi_node_version {
+    major: 24,
+    minor: 3,
+    patch: 0,
+    release: NODE_RELEASE.as_ptr().cast(),
+});
 
 fn with_env<F, R>(env: napi_env, f: F) -> R
 where
@@ -106,12 +118,7 @@ pub unsafe extern "C" fn napi_get_node_version(
         return napi_status::napi_invalid_arg;
     }
     unsafe {
-        *version = NODE_VERSION.get_or_init(|| napi_node_version {
-            version: 0x160C0000,
-            napi_version: crate::NAPI_VERSION,
-            is_release: 1,
-            is_lts: 1,
-        });
+        *version = &NODE_VERSION.0;
     }
     napi_status::napi_ok
 }
@@ -266,6 +273,66 @@ pub unsafe extern "C" fn napi_throw(env: napi_env, error: napi_value) -> napi_st
     })
 }
 
+/// Throw via the matching global constructor (Error / TypeError / RangeError).
+fn throw_error_kind(
+    e: &mut Env,
+    code: *const c_char,
+    msg: *const c_char,
+    ctor_name: &str,
+) -> napi_status {
+    let ctx = e.ctx_ptr();
+    let message = if msg.is_null() {
+        "Error"
+    } else {
+        unsafe { CStr::from_ptr(msg) }.to_str().unwrap_or("Error")
+    };
+
+    let global = unsafe { qjs::JS_GetGlobalObject(ctx) };
+    let ctor_c = CString::new(ctor_name).unwrap();
+    let ctor = unsafe { qjs::JS_GetPropertyStr(ctx, global, ctor_c.as_ptr()) };
+    unsafe { qjs::JS_FreeValue(ctx, global) };
+    if unsafe { qjs::JS_IsException(ctor) } {
+        return e.status_from_throw();
+    }
+
+    let msg_c = CString::new(message).unwrap();
+    let msg_val = unsafe { qjs::JS_NewStringLen(ctx, msg_c.as_ptr(), message.len() as u64) };
+    if unsafe { qjs::JS_IsException(msg_val) } {
+        unsafe { qjs::JS_FreeValue(ctx, ctor) };
+        return e.status_from_throw();
+    }
+
+    let mut argv = [msg_val];
+    let err_obj = unsafe { qjs::JS_CallConstructor(ctx, ctor, 1, argv.as_mut_ptr()) };
+    // CallConstructor consumes argv ownership on success paths; free temps.
+    unsafe {
+        qjs::JS_FreeValue(ctx, ctor);
+        // msg_val may have been consumed by constructor; free only if still valid
+        // — QuickJS CallConstructor dups args, so free our msg_val.
+        qjs::JS_FreeValue(ctx, msg_val);
+    }
+    if unsafe { qjs::JS_IsException(err_obj) } {
+        return e.status_from_throw();
+    }
+
+    if !code.is_null() {
+        let code_str = unsafe { CStr::from_ptr(code) }.to_string_lossy();
+        let code_c = CString::new(code_str.as_ref()).unwrap();
+        let code_val = unsafe { qjs::JS_NewStringLen(ctx, code_c.as_ptr(), code_str.len() as u64) };
+        if unsafe { qjs::JS_IsException(code_val) } {
+            unsafe { qjs::JS_FreeValue(ctx, err_obj) };
+            return e.status_from_throw();
+        }
+        if unsafe { qjs::JS_SetPropertyStr(ctx, err_obj, c"code".as_ptr(), code_val) } < 0 {
+            unsafe { qjs::JS_FreeValue(ctx, err_obj) };
+            return e.status_from_throw();
+        }
+    }
+
+    e.set_pending_exception(err_obj);
+    napi_status::napi_ok
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn napi_throw_error(
     env: napi_env,
@@ -275,29 +342,7 @@ pub unsafe extern "C" fn napi_throw_error(
     if env.is_null() {
         return napi_status::napi_invalid_arg;
     }
-    with_env(env, |e| {
-        let ctx = e.ctx_ptr();
-        let message = if msg.is_null() {
-            "Error"
-        } else {
-            unsafe { CStr::from_ptr(msg) }.to_str().unwrap_or("Error")
-        };
-        let err = unsafe {
-            let err_obj = qjs::JS_NewError(ctx);
-            let msg_atom = CString::new(message).unwrap();
-            let msg_val = qjs::JS_NewStringLen(ctx, msg_atom.as_ptr(), message.len() as u64);
-            qjs::JS_SetPropertyStr(ctx, err_obj, c"message".as_ptr(), msg_val);
-            if !code.is_null() {
-                let code_str = CStr::from_ptr(code).to_string_lossy();
-                let code_c = CString::new(code_str.as_ref()).unwrap();
-                let code_val = qjs::JS_NewStringLen(ctx, code_c.as_ptr(), code_str.len() as u64);
-                qjs::JS_SetPropertyStr(ctx, err_obj, c"code".as_ptr(), code_val);
-            }
-            err_obj
-        };
-        e.set_pending_exception(err);
-        napi_status::napi_ok
-    })
+    with_env(env, |e| throw_error_kind(e, code, msg, "Error"))
 }
 
 #[no_mangle]
@@ -306,7 +351,10 @@ pub unsafe extern "C" fn napi_throw_type_error(
     code: *const c_char,
     msg: *const c_char,
 ) -> napi_status {
-    napi_throw_error(env, code, msg)
+    if env.is_null() {
+        return napi_status::napi_invalid_arg;
+    }
+    with_env(env, |e| throw_error_kind(e, code, msg, "TypeError"))
 }
 
 #[no_mangle]
@@ -315,7 +363,148 @@ pub unsafe extern "C" fn napi_throw_range_error(
     code: *const c_char,
     msg: *const c_char,
 ) -> napi_status {
-    napi_throw_error(env, code, msg)
+    if env.is_null() {
+        return napi_status::napi_invalid_arg;
+    }
+    with_env(env, |e| throw_error_kind(e, code, msg, "RangeError"))
+}
+
+/// Create an Error object without throwing (napi_create_error family).
+///
+/// Constructs via the global `Error` / `TypeError` / `RangeError` constructor so
+/// the instance has the correct prototype and `instanceof` behavior.
+fn create_error_object(
+    e: &mut Env,
+    code: napi_value,
+    msg: napi_value,
+    result: *mut napi_value,
+    name: &str,
+) -> napi_status {
+    let ctx = e.ctx_ptr();
+
+    // message is required and must be a string.
+    if msg.is_null() {
+        e.set_last_error(napi_status::napi_invalid_arg, Some("msg must be a string"));
+        return napi_status::napi_invalid_arg;
+    }
+    let msg_js = match unsafe { crate::value::napi_to_value(e, msg) } {
+        Some(v) => v,
+        None => {
+            e.set_last_error(napi_status::napi_invalid_arg, Some("invalid msg handle"));
+            return napi_status::napi_invalid_arg;
+        },
+    };
+    if !unsafe { qjs::JS_IsString(msg_js) } {
+        e.set_last_error(
+            napi_status::napi_string_expected,
+            Some("msg must be a string"),
+        );
+        return napi_status::napi_string_expected;
+    }
+
+    // code: null = omit; non-null non-string = invalid; non-null string = set.
+    let code_js = if code.is_null() {
+        None
+    } else {
+        match unsafe { crate::value::napi_to_value(e, code) } {
+            Some(v) if unsafe { qjs::JS_IsString(v) } => Some(v),
+            Some(_) => {
+                e.set_last_error(
+                    napi_status::napi_string_expected,
+                    Some("code must be a string"),
+                );
+                return napi_status::napi_string_expected;
+            },
+            None => {
+                e.set_last_error(napi_status::napi_invalid_arg, Some("invalid code handle"));
+                return napi_status::napi_invalid_arg;
+            },
+        }
+    };
+
+    // Resolve global constructor: Error | TypeError | RangeError.
+    let global = unsafe { qjs::JS_GetGlobalObject(ctx) };
+    if unsafe { qjs::JS_IsException(global) } {
+        return e.status_from_throw();
+    }
+    let name_c = match CString::new(name) {
+        Ok(s) => s,
+        Err(_) => {
+            unsafe { qjs::JS_FreeValue(ctx, global) };
+            e.set_last_error(napi_status::napi_invalid_arg, Some("invalid error name"));
+            return napi_status::napi_invalid_arg;
+        },
+    };
+    let ctor = unsafe { qjs::JS_GetPropertyStr(ctx, global, name_c.as_ptr()) };
+    unsafe { qjs::JS_FreeValue(ctx, global) };
+    if unsafe { qjs::JS_IsException(ctor) } {
+        return e.status_from_throw();
+    }
+
+    // Construct with the message string (argv is borrowed; CallConstructor does not take ownership).
+    let mut argv = [msg_js];
+    let err_obj = unsafe { qjs::JS_CallConstructor(ctx, ctor, 1, argv.as_mut_ptr()) };
+    unsafe { qjs::JS_FreeValue(ctx, ctor) };
+    if unsafe { qjs::JS_IsException(err_obj) } {
+        return e.status_from_throw();
+    }
+
+    if let Some(code_val) = code_js {
+        let code_dup = unsafe { qjs::JS_DupValue(ctx, code_val) };
+        let set_rc = unsafe { qjs::JS_SetPropertyStr(ctx, err_obj, c"code".as_ptr(), code_dup) };
+        if set_rc < 0 {
+            unsafe { qjs::JS_FreeValue(ctx, err_obj) };
+            return e.status_from_throw();
+        }
+    }
+
+    unsafe {
+        *result = value_to_napi_owned(e, err_obj);
+    }
+    napi_status::napi_ok
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn napi_create_error(
+    env: napi_env,
+    code: napi_value,
+    msg: napi_value,
+    result: *mut napi_value,
+) -> napi_status {
+    if env.is_null() || result.is_null() {
+        return napi_status::napi_invalid_arg;
+    }
+    with_env(env, |e| create_error_object(e, code, msg, result, "Error"))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn napi_create_type_error(
+    env: napi_env,
+    code: napi_value,
+    msg: napi_value,
+    result: *mut napi_value,
+) -> napi_status {
+    if env.is_null() || result.is_null() {
+        return napi_status::napi_invalid_arg;
+    }
+    with_env(env, |e| {
+        create_error_object(e, code, msg, result, "TypeError")
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn napi_create_range_error(
+    env: napi_env,
+    code: napi_value,
+    msg: napi_value,
+    result: *mut napi_value,
+) -> napi_status {
+    if env.is_null() || result.is_null() {
+        return napi_status::napi_invalid_arg;
+    }
+    with_env(env, |e| {
+        create_error_object(e, code, msg, result, "RangeError")
+    })
 }
 
 #[no_mangle]
@@ -618,6 +807,115 @@ pub unsafe extern "C" fn napi_get_value_bool(
         };
         unsafe {
             *result = qjs::JS_ToBool(e.ctx_ptr(), val) != 0;
+        }
+        napi_status::napi_ok
+    })
+}
+
+// --- Coerce (ToBoolean / ToNumber / ToObject / ToString) ---
+
+#[no_mangle]
+pub unsafe extern "C" fn napi_coerce_to_bool(
+    env: napi_env,
+    value: napi_value,
+    result: *mut napi_value,
+) -> napi_status {
+    if env.is_null() || value.is_null() || result.is_null() {
+        return napi_status::napi_invalid_arg;
+    }
+    with_env(env, |e| {
+        let ctx = e.ctx_ptr();
+        let val = match crate::value::napi_to_value(e, value) {
+            Some(v) => v,
+            None => return napi_status::napi_invalid_arg,
+        };
+        let b = unsafe { qjs::JS_ToBool(ctx, val) };
+        if b < 0 {
+            return e.status_from_throw();
+        }
+        let out = if b != 0 { qjs::JS_TRUE } else { qjs::JS_FALSE };
+        unsafe {
+            *result = value_to_napi_owned(e, out);
+        }
+        napi_status::napi_ok
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn napi_coerce_to_number(
+    env: napi_env,
+    value: napi_value,
+    result: *mut napi_value,
+) -> napi_status {
+    if env.is_null() || value.is_null() || result.is_null() {
+        return napi_status::napi_invalid_arg;
+    }
+    with_env(env, |e| {
+        let ctx = e.ctx_ptr();
+        let val = match crate::value::napi_to_value(e, value) {
+            Some(v) => v,
+            None => return napi_status::napi_invalid_arg,
+        };
+        let mut num: f64 = 0.0;
+        if unsafe { qjs::JS_ToFloat64(ctx, &mut num, val) } < 0 {
+            return e.status_from_throw();
+        }
+        let out = qjs::JS_NewFloat64(num);
+        unsafe {
+            *result = value_to_napi_owned(e, out);
+        }
+        napi_status::napi_ok
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn napi_coerce_to_object(
+    env: napi_env,
+    value: napi_value,
+    result: *mut napi_value,
+) -> napi_status {
+    if env.is_null() || value.is_null() || result.is_null() {
+        return napi_status::napi_invalid_arg;
+    }
+    with_env(env, |e| {
+        let ctx = e.ctx_ptr();
+        let val = match crate::value::napi_to_value(e, value) {
+            Some(v) => v,
+            None => return napi_status::napi_invalid_arg,
+        };
+        // Node: ToObject — null/undefined throw TypeError (napi_pending_exception).
+        let out = unsafe { qjs::JS_ToObject(ctx, val) };
+        if unsafe { qjs::JS_IsException(out) } {
+            return e.status_from_throw();
+        }
+        unsafe {
+            *result = value_to_napi_owned(e, out);
+        }
+        napi_status::napi_ok
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn napi_coerce_to_string(
+    env: napi_env,
+    value: napi_value,
+    result: *mut napi_value,
+) -> napi_status {
+    if env.is_null() || value.is_null() || result.is_null() {
+        return napi_status::napi_invalid_arg;
+    }
+    with_env(env, |e| {
+        let ctx = e.ctx_ptr();
+        let val = match crate::value::napi_to_value(e, value) {
+            Some(v) => v,
+            None => return napi_status::napi_invalid_arg,
+        };
+        let out = unsafe { qjs::JS_ToString(ctx, val) };
+        if unsafe { qjs::JS_IsException(out) } {
+            return e.status_from_throw();
+        }
+        unsafe {
+            *result = value_to_napi_owned(e, out);
         }
         napi_status::napi_ok
     })
@@ -1279,16 +1577,20 @@ pub unsafe extern "C" fn napi_create_function(
             let slice = unsafe { std::slice::from_raw_parts(utf8name as *const u8, len) };
             CString::new(slice).unwrap_or_default()
         };
+        // Temporary Ctx for Function construction only. Capture raw ctx pointer
+        // (not Ctx) in the MutFn — permanent Ctx would DupContext until GC and
+        // leave residual JS_CONTEXT at FreeRuntime.
         let ctx_js = unsafe { Ctx::from_raw(NonNull::new_unchecked(ctx)) };
         let env_ptr = env as *mut Env;
+        let ctx_ptr = ctx;
         let user_callback = cb;
         let user_data = data;
-        let ctx_for_fn = ctx_js.clone();
         let func_result = Function::new(
-            ctx_js.clone(),
+            ctx_js,
             MutFn::new(
                 move |this: This<Value<'_>>, args: Rest<Value<'_>>| -> JsResult<Value<'_>> {
-                    let ctx = ctx_for_fn.clone();
+                    // Ephemeral DupContext for this call only; dropped before return.
+                    let ctx = unsafe { Ctx::from_raw(NonNull::new_unchecked(ctx_ptr)) };
                     let env = unsafe { &mut *env_ptr };
                     let env_box = env.as_napi_env();
                     env.scopes.open();
@@ -1684,6 +1986,11 @@ pub unsafe extern "C" fn napi_define_class(
         {
             unsafe { qjs::JS_FreeValue(ctx, ctor_val) };
             return e.status_from_throw();
+        }
+        // Mark as constructor so `class X extends NapiClass` works in QuickJS
+        // (JS_IsConstructor must be true for the parent).
+        unsafe {
+            qjs::JS_SetConstructorBit(ctx, ctor_val, true);
         }
         unsafe { qjs::JS_FreeValue(ctx, ctor_val) };
         unsafe {

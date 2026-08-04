@@ -148,7 +148,13 @@ impl Loader for EmbeddedLoader {
         let (module, url) = Self::load_module(name, ctx)?;
         if let Some(url) = url {
             let meta: Object = module.meta()?;
-            meta.prop("url", url)?;
+            meta.prop("url", url.as_str())?;
+            // Node 20.11+ / 24.x: import.meta.dirname / filename
+            let file_path = url.strip_prefix("file://").unwrap_or(url.as_str());
+            if let Some(parent) = std::path::Path::new(file_path).parent() {
+                meta.prop("dirname", parent.to_string_lossy().as_ref())?;
+            }
+            meta.prop("filename", file_path)?;
         }
 
         Ok(module)

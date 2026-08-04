@@ -2547,6 +2547,7 @@ dependencies = [
  "terminal_size",
  "tokio",
  "tracing",
+ "unicode-width",
  "uuid",
  "walkdir",
  "wiremock",
@@ -2723,6 +2724,7 @@ dependencies = [
  "raster_runtime_utils",
  "rquickjs",
  "tokio",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2971,6 +2973,7 @@ dependencies = [
  "raster_runtime_hooking",
  "raster_runtime_napi",
  "raster_runtime_test",
+ "raster_runtime_tty",
  "raster_runtime_utils",
  "rquickjs",
  "tokio",
@@ -3102,11 +3105,16 @@ dependencies = [
 name = "raster_runtime_tty"
 version = "0.8.1-beta"
 dependencies = [
+ "crossterm",
  "libc",
+ "raster_runtime_buffer",
+ "raster_runtime_context",
+ "raster_runtime_events",
  "raster_runtime_test",
  "raster_runtime_utils",
  "rquickjs",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -3127,8 +3135,11 @@ dependencies = [
  "raster_runtime_context",
  "raster_runtime_encoding",
  "raster_runtime_logging",
+ "raster_runtime_test",
  "raster_runtime_utils",
  "rquickjs",
+ "tokio",
+ "unicode-width",
 ]
 
 [[package]]

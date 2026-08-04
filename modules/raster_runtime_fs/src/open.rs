@@ -14,8 +14,9 @@ pub async fn open(
     flags: Opt<String>,
     mode: Opt<u32>,
 ) -> Result<FileHandle> {
+    let flag_str = flags.0.as_deref().unwrap_or("r");
     let mut options = OpenOptions::new();
-    match flags.0.as_deref().unwrap_or("r") {
+    match flag_str {
         // We are not supporting the sync modes
         "a" => options.append(true).create(true),
         "ax" => options.append(true).create_new(true),
@@ -49,7 +50,8 @@ pub async fn open(
         .await
         .or_throw_msg(&ctx, "Cannot open file")?;
 
-    Ok(FileHandle::new(file, path))
+    let crt = super::file_handle::crt_flags_for_node_open(flag_str);
+    FileHandle::new_with_crt_flags(file, path, crt).or_throw_msg(&ctx, "Cannot open file")
 }
 
 #[cfg(test)]

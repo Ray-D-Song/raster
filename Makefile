@@ -158,6 +158,9 @@ compat-next: js
 	node compat/run.mjs next $(RASTER_RUNTIME)
 
 compat-vite-plus: js
+	$(CARGO) build --features napi
+	# Install baseline must satisfy vite-plus engines (^20.19 || ^22.18 || >=24.11).
+	# Raster process identity is 24.3.0; do not use system Node 24.3 for yarn install.
 	cd compat/vite-plus && yarn install --frozen-lockfile
 	node compat/run.mjs vite-plus $(RASTER_RUNTIME)
 

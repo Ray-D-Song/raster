@@ -530,7 +530,7 @@ _process is available globally_
 
 Process is an EventEmitter. Explicit `process.exit(code)` emits `"exit"` synchronously before terminating. OS signal bridging and natural event-loop drain exit events are not implemented yet.
 
-`process.version` / `process.versions.node` advertise Node `22.18.0` for ecosystem gates; `process.versions.raster_runtime` and CLI `--version` remain the real Raster version.
+`process.version` / `process.versions.node` advertise Node `24.3.0` for ecosystem gates; `process.versions.raster_runtime` and CLI `--version` remain the real Raster version.
 
 [arch](https://nodejs.org/api/process.html#processarch)
 

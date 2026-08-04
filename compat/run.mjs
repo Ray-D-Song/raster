@@ -130,7 +130,48 @@ if (name === "next") {
 async function runVitePlusBuild(testCase, directory, raster, logPath, root) {
   const output = path.join(directory, testCase.output);
   const command = path.join(directory, testCase.command);
+  const logParts = [];
 
+  // Phase 1: vp --version must exit cleanly (no abort/assert/JS_CONTEXT hang).
+  const versionResult = await spawnCollect(
+    raster,
+    [command, "--version"],
+    { cwd: directory, env: { ...process.env } },
+    SCRIPT_TIMEOUT_MS
+  );
+  logParts.push(
+    `$ ${raster} ${command} --version\n\n` +
+      `exit: ${versionResult.code ?? versionResult.signal}${versionResult.timedOut ? " (timed out)" : ""}\n\n` +
+      `stdout:\n${versionResult.stdout}\n\nstderr:\n${versionResult.stderr}\n`
+  );
+  process.stdout.write(versionResult.stdout);
+  process.stderr.write(versionResult.stderr);
+
+  if (versionResult.timedOut || versionResult.code !== 0) {
+    await fs.writeFile(logPath, logParts.join("\n"));
+    throw new Error(
+      `${name} vp --version exited with ${versionResult.code ?? versionResult.signal}` +
+        (versionResult.timedOut ? " (timed out)" : "") +
+        `. See ${path.relative(root, logPath)}.`
+    );
+  }
+  const versionOut = `${versionResult.stdout}\n${versionResult.stderr}`;
+  const INVALID_TEARDOWN =
+    /abort|Assertion|JS_CONTEXT|gc_obj_list|shutdown incomplete|driver has not finished|leaking env/i;
+  if (INVALID_TEARDOWN.test(versionOut)) {
+    await fs.writeFile(logPath, logParts.join("\n"));
+    throw new Error(
+      `${name} vp --version output contains abort/assert residual. See ${path.relative(root, logPath)}.`
+    );
+  }
+  if (!/\d+\.\d+\.\d+/.test(versionResult.stdout)) {
+    await fs.writeFile(logPath, logParts.join("\n"));
+    throw new Error(
+      `${name} vp --version stdout missing version string. See ${path.relative(root, logPath)}.`
+    );
+  }
+
+  // Phase 2: single verified build (artifacts + manifest parse).
   await fs.rm(output, { recursive: true, force: true });
 
   const result = await spawnCollect(
@@ -144,17 +185,18 @@ async function runVitePlusBuild(testCase, directory, raster, logPath, root) {
   );
 
   const timedOut = result.timedOut ? " (timed out)" : "";
-  const log =
+  logParts.push(
     `$ ${raster} ${command} ${testCase.args.join(" ")}\n\n` +
-    `exit: ${result.code ?? result.signal}${timedOut}\n\n` +
-    `stdout:\n${result.stdout}\n\nstderr:\n${result.stderr}\n`;
-  await fs.writeFile(logPath, log);
+      `exit: ${result.code ?? result.signal}${timedOut}\n\n` +
+      `stdout:\n${result.stdout}\n\nstderr:\n${result.stderr}\n`
+  );
   process.stdout.write(result.stdout);
   process.stderr.write(result.stderr);
 
   const outputExists = await pathExists(output);
 
   if (result.timedOut) {
+    await fs.writeFile(logPath, logParts.join("\n"));
     throw new Error(
       `${name} build timed out after ${BUILD_TIMEOUT_MS}ms. ` +
         `See ${path.relative(root, logPath)} for captured output.`
@@ -162,12 +204,14 @@ async function runVitePlusBuild(testCase, directory, raster, logPath, root) {
   }
 
   if (result.code !== 0) {
+    await fs.writeFile(logPath, logParts.join("\n"));
     throw new Error(
       `${name} build exited with ${result.code ?? result.signal}`
     );
   }
 
   if (!outputExists) {
+    await fs.writeFile(logPath, logParts.join("\n"));
     throw new Error(
       `${name} exited 0 but produced no ${testCase.output}/ directory. ` +
         `stdout empty=${result.stdout.length === 0}, stderr empty=${result.stderr.length === 0}. ` +
@@ -179,24 +223,120 @@ async function runVitePlusBuild(testCase, directory, raster, logPath, root) {
     await fs.access(path.join(output, ...segments));
   }
 
-  const [esm, cjs, css, manifest] = await Promise.all([
+  const [esm, cjs, css, manifestText] = await Promise.all([
     fs.readFile(path.join(output, "index.js"), "utf8"),
     fs.readFile(path.join(output, "index.cjs"), "utf8"),
     fs.readFile(path.join(output, "style.css"), "utf8"),
     fs.readFile(path.join(output, ".vite", "manifest.json"), "utf8"),
   ]);
+  let manifest;
+  try {
+    manifest = JSON.parse(manifestText);
+  } catch (err) {
+    await fs.writeFile(logPath, logParts.join("\n"));
+    throw new Error(
+      `${name} dist/.vite/manifest.json is not valid JSON: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
   if (
     !esm.includes("Button") ||
     !cjs.includes("Button") ||
     !css.includes(".raster-button") ||
-    !manifest.includes("src/index.tsx")
+    !manifestText.includes("src/index.tsx") ||
+    typeof manifest !== "object" ||
+    manifest === null
   ) {
+    await fs.writeFile(logPath, logParts.join("\n"));
     throw new Error(
       "Vite+ build output is missing an expected library artifact"
     );
   }
 
-  console.log(`${name} compatibility build passed`);
+  // Phase 3: stability gate (vp --version ×N, vp build ×M into a temp dir).
+  // Defaults match the plan; override with COMPAT_VP_VERSION_LOOPS / COMPAT_VP_BUILD_LOOPS.
+  const versionLoops = Math.max(
+    0,
+    Number.parseInt(process.env.COMPAT_VP_VERSION_LOOPS ?? "100", 10) || 0
+  );
+  const buildLoops = Math.max(
+    0,
+    Number.parseInt(process.env.COMPAT_VP_BUILD_LOOPS ?? "20", 10) || 0
+  );
+
+  for (let i = 1; i <= versionLoops; i++) {
+    const r = await spawnCollect(
+      raster,
+      [command, "--version"],
+      { cwd: directory, env: { ...process.env } },
+      SCRIPT_TIMEOUT_MS
+    );
+    if (r.timedOut || r.code !== 0) {
+      logParts.push(
+        `\n# stability vp --version #${i}\nexit: ${r.code ?? r.signal}\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`
+      );
+      await fs.writeFile(logPath, logParts.join("\n"));
+      throw new Error(
+        `${name} stability: vp --version failed on iteration ${i}/${versionLoops} ` +
+          `(exit ${r.code ?? r.signal})`
+      );
+    }
+    if (INVALID_TEARDOWN.test(`${r.stdout}\n${r.stderr}`)) {
+      logParts.push(
+        `\n# stability vp --version #${i}\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`
+      );
+      await fs.writeFile(logPath, logParts.join("\n"));
+      throw new Error(
+        `${name} stability: vp --version abort/assert on iteration ${i}/${versionLoops}`
+      );
+    }
+  }
+
+  if (buildLoops > 0) {
+    const stabilityDist = await fs.mkdtemp(
+      path.join(os.tmpdir(), "raster-vp-build-")
+    );
+    try {
+      for (let i = 1; i <= buildLoops; i++) {
+        // Wipe fixture dist each iteration; keep repo user artifacts elsewhere.
+        await fs.rm(output, { recursive: true, force: true });
+        const r = await spawnCollect(
+          raster,
+          [command, ...testCase.args],
+          { cwd: directory, env: { ...process.env } },
+          BUILD_TIMEOUT_MS
+        );
+        if (r.timedOut || r.code !== 0) {
+          logParts.push(
+            `\n# stability vp build #${i}\nexit: ${r.code ?? r.signal}\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`
+          );
+          await fs.writeFile(logPath, logParts.join("\n"));
+          throw new Error(
+            `${name} stability: vp build failed on iteration ${i}/${buildLoops} ` +
+              `(exit ${r.code ?? r.signal})`
+          );
+        }
+        for (const segments of testCase.checks) {
+          await fs.access(path.join(output, ...segments));
+        }
+        // Preserve last good dist copy for diagnostics (temp, not repo).
+        if (i === buildLoops) {
+          await fs.cp(output, path.join(stabilityDist, "dist"), {
+            recursive: true,
+          });
+        }
+      }
+    } finally {
+      await fs.rm(stabilityDist, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+
+  logParts.push(
+    `\n# stability\nvp --version ×${versionLoops} ok\nvp build ×${buildLoops} ok`
+  );
+  await fs.writeFile(logPath, logParts.join("\n"));
+  console.log(
+    `${name} compatibility build passed (version×${versionLoops}, build×${buildLoops})`
+  );
 }
 
 async function runScriptCompat(testCase, directory, raster, logPath, root) {

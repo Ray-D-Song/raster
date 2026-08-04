@@ -217,7 +217,12 @@ impl Loader for PackageLoader {
         let (module, url) = Self::load_module(ctx, name, &attr)?;
         if let Some(url) = url {
             let meta: Object = module.meta()?;
-            meta.prop("url", url)?;
+            meta.prop("url", url.as_str())?;
+            // Node 20.11+ / 24.x: import.meta.dirname and import.meta.filename
+            let file_path = url.strip_prefix("file://").unwrap_or(url.as_str());
+            let dirname = path::dirname(file_path);
+            meta.prop("dirname", dirname)?;
+            meta.prop("filename", file_path)?;
         }
 
         Ok(module)

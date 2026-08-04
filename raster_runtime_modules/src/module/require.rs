@@ -63,9 +63,6 @@ pub fn require_from_module<'js>(
         if is_builtin {
             import_name = normalized.into();
             import_specifier = import_name.clone();
-        } else if is_bytecode {
-            import_name = resolved.clone().into();
-            import_specifier = import_name.clone();
         } else {
             import_name = resolved.clone().into();
             import_specifier = import_name.clone();

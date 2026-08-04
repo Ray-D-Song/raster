@@ -23,6 +23,13 @@ use crate::wrap::WrapTable;
 
 static ENV_ID: AtomicU64 = AtomicU64::new(1);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisposeState {
+    Active,
+    Beginning,
+    Finished,
+}
+
 pub struct Env {
     pub id: u64,
     pub ctx: NonNull<JSContext>,
@@ -40,6 +47,9 @@ pub struct Env {
     pub cleanup_hooks: Vec<(EnvCleanupHook, *mut c_void)>,
     pub external_memory: i64,
     pub external_class_acquired: bool,
+    pub dispose_state: DisposeState,
+    /// JS roots released (idempotent gate for begin/finish).
+    roots_released: bool,
 }
 
 impl Env {
@@ -66,6 +76,8 @@ impl Env {
             cleanup_hooks: Vec::new(),
             external_memory: 0,
             external_class_acquired: false,
+            dispose_state: DisposeState::Active,
+            roots_released: false,
         }
     }
 
@@ -152,13 +164,47 @@ impl Env {
         self.scopes.close_all(self.ctx_ptr());
     }
 
-    /// Run cleanup hooks and release all JS roots held by this env.
-    pub fn dispose(&mut self) {
-        crate::async_work::close_all_tsfn_for_env(self.as_napi_env());
-        let ctx = self.ctx_ptr();
-        for (hook, arg) in self.cleanup_hooks.drain(..) {
+    /// Phase 1: cleanup hooks, close TSFNs, close driver sender.
+    ///
+    /// JS roots are released here only when `inflight_async == 0` (no worker
+    /// may still complete into this Env). If async work is still in flight,
+    /// roots stay until [`finish_dispose`] after `wait_finished`.
+    pub fn begin_dispose(&mut self) {
+        if self.dispose_state != DisposeState::Active {
+            return;
+        }
+        self.dispose_state = DisposeState::Beginning;
+
+        // LIFO: last-registered cleanup hook runs first.
+        while let Some((hook, arg)) = self.cleanup_hooks.pop() {
             unsafe { hook(arg) };
         }
+        crate::async_work::close_all_tsfn_for_env(self.as_napi_env());
+
+        let inflight = self
+            .driver
+            .as_ref()
+            .map(|d| d.inflight_async.load(std::sync::atomic::Ordering::Acquire))
+            .unwrap_or(0);
+
+        if let Some(ref driver) = self.driver {
+            driver.close_sender();
+        }
+
+        // Safe to free roots when no in-flight async work remains; idle can GC.
+        if inflight == 0 {
+            self.release_js_roots();
+        }
+    }
+
+    /// Release JS roots and GC. Idempotent.
+    fn release_js_roots(&mut self) {
+        if self.roots_released {
+            return;
+        }
+        self.roots_released = true;
+
+        let ctx = self.ctx_ptr();
         if let Some((finalize, hint)) = self.instance_finalize.take() {
             let data = self
                 .instance_data
@@ -172,18 +218,108 @@ impl Env {
         }
         self.refs.release_all(ctx);
         self.close_all_scopes();
+        self.wraps.clear();
         let rt = unsafe { qjs::JS_GetRuntime(ctx) };
-        unsafe {
-            qjs::JS_RunGC(rt);
+        const MAX_GC_ROUNDS: usize = 32;
+        for round in 0..MAX_GC_ROUNDS {
+            unsafe {
+                qjs::JS_RunGC(rt);
+            }
+            crate::gc_hook::drain_pending_finalizers(self);
+            crate::gc_hook::run_all_remaining(self);
+            crate::external::finalize_surviving_externals(self.as_napi_env());
+            if !crate::gc_hook::has_pending_finalizers() {
+                if round > 0 {
+                    tracing::trace!(round, "napi env dispose GC stabilized");
+                }
+                break;
+            }
+            if round + 1 == MAX_GC_ROUNDS {
+                tracing::warn!(
+                    round,
+                    "napi env dispose: finalizers still pending after GC cap"
+                );
+            }
         }
-        crate::gc_hook::drain_pending_finalizers(self);
-        crate::gc_hook::run_all_remaining(self);
-        crate::external::finalize_surviving_externals(self.as_napi_env());
         if self.external_class_acquired {
             crate::external::release_external_class_for_env(rt);
             self.external_class_acquired = false;
         }
+    }
+
+    /// Phase 2: only after driver finished — release JS roots (if deferred), take driver.
+    ///
+    /// Returns `Ok(())` when finished, or `Err(reason)` describing why not.
+    pub fn try_finish_dispose(&mut self) -> Result<(), String> {
+        if self.dispose_state == DisposeState::Finished {
+            return Ok(());
+        }
+        if self.dispose_state != DisposeState::Beginning {
+            return Err(format!(
+                "N-API Env {} dispose_state={:?}",
+                self.id, self.dispose_state
+            ));
+        }
+        if let Some(driver) = self.driver.clone() {
+            // Drain any jobs left in the channel before checking finished.
+            driver.drain_ready_jobs(self);
+            driver.mark_finished_if_idle();
+            if !driver.is_finished() {
+                return Err(format!(
+                    "N-API Env {} driver has not finished (loop_running={} pending={} inflight={} idle_refs={})",
+                    self.id,
+                    driver.is_loop_running(),
+                    driver.pending_count(),
+                    driver.inflight_async.load(std::sync::atomic::Ordering::Acquire),
+                    driver.idle_refs.load(std::sync::atomic::Ordering::Acquire),
+                ));
+            }
+            if !driver.is_quiescent() {
+                return Err(format!(
+                    "N-API Env {} driver finished flag set but work remains \
+                     (pending={} inflight={} idle_refs={})",
+                    self.id,
+                    driver.pending_count(),
+                    driver
+                        .inflight_async
+                        .load(std::sync::atomic::Ordering::Acquire),
+                    driver.idle_refs.load(std::sync::atomic::Ordering::Acquire),
+                ));
+            }
+        }
+        self.release_js_roots();
         crate::driver::shutdown_driver(self);
-        self.wraps.clear();
+        self.dispose_state = DisposeState::Finished;
+        Ok(())
+    }
+
+    pub fn finish_dispose(&mut self) -> bool {
+        self.try_finish_dispose().is_ok()
+    }
+
+    /// Unit-test helper for stack-owned envs.
+    ///
+    /// Production: begin → idle → wait_finished → finish.
+    /// Never marks finished while `inflight_async > 0`.
+    pub fn dispose(&mut self) {
+        self.begin_dispose();
+        if let Some(driver) = self.driver.clone() {
+            driver.drain_ready_jobs(self);
+            driver.mark_finished_if_idle();
+            if !driver.is_finished()
+                && driver.pending_count() == 0
+                && driver
+                    .inflight_async
+                    .load(std::sync::atomic::Ordering::Acquire)
+                    == 0
+            {
+                // Safe when no work remains: loop can only exit, not dispatch.
+                driver.mark_finished();
+            }
+        }
+        assert!(
+            self.finish_dispose(),
+            "napi dispose: driver not finished; wait_finished before free when work remains"
+        );
     }
 }

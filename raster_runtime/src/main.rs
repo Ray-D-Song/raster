@@ -129,13 +129,40 @@ async fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
 
     #[cfg(feature = "napi")]
     {
-        vm.run_with(|ctx| {
-            raster_runtime_napi::prepare_shutdown(&ctx);
-            Ok(())
-        })
-        .await;
-        raster_runtime_napi::shutdown_all();
+        // Two-phase N-API shutdown with explicit driver wait (no swallowed errors):
+        // 1) begin_dispose + return driver Arc
+        // 2) idle (run pending JS futures)
+        // 3) wait_finished on driver
+        // 4) finish_dispose + free Env
+        // 5) postcondition: no residual envs/TSFNs
+        let driver = vm
+            .ctx
+            .with(|ctx| raster_runtime_napi::begin_shutdown(&ctx))
+            .await
+            .map_err(std::io::Error::other)?;
+
+        // Let the driver loop observe sender disconnect and drain TSFN release jobs.
+        vm.idle().await?;
+
+        if let Some(ref driver) = driver {
+            driver.wait_finished().await;
+        }
+
+        // Another idle so any finalizer/GC work scheduled during finish prep runs.
+        vm.idle().await?;
+
+        vm.ctx
+            .with(|ctx| raster_runtime_napi::finish_shutdown(&ctx))
+            .await
+            .map_err(std::io::Error::other)?;
+
+        raster_runtime_napi::shutdown_all().map_err(std::io::Error::other)?;
     }
+
+    // Drop AsyncContext before AsyncRuntime so no JS_CONTEXT roots remain.
+    let Vm { ctx, runtime, .. } = vm;
+    drop(ctx);
+    drop(runtime);
 
     Ok(ExitCode::from(EXIT_CODE.load(Ordering::Relaxed)))
 }
