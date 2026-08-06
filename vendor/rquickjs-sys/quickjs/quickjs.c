@@ -2294,6 +2294,7 @@ void JS_FreeRuntime(JSRuntime *rt)
     bool leak = false;
     int i;
 
+
     rt->in_free = true;
     JS_FreeValueRT(rt, rt->current_exception);
 
@@ -2356,22 +2357,6 @@ void JS_FreeRuntime(JSRuntime *rt)
     }
 #endif
 
-#ifdef RASTER_QJS_GC_DIAGNOSTICS
-    /* Diagnostic-only: count residual GC objects by type without freeing. */
-    if (!list_empty(&rt->gc_obj_list)) {
-        JSGCObjectHeader *p;
-        int residual = 0;
-        list_for_each(el, &rt->gc_obj_list) {
-            p = list_entry(el, JSGCObjectHeader, link);
-            residual++;
-            fprintf(stderr,
-                    "RASTER_QJS_GC_DIAGNOSTICS: residual gc obj type=%d ref_count=%d\n",
-                    (int)p->gc_obj_type, p->ref_count);
-        }
-        fprintf(stderr, "RASTER_QJS_GC_DIAGNOSTICS: residual gc_obj_list count=%d\n",
-                residual);
-    }
-#endif
 
     /* Residual GC objects must be collected via proper root release + GC
        before FreeRuntime. Do not force-free: that masks root leaks and can
@@ -2648,6 +2633,28 @@ JSContext *JS_DupContext(JSContext *ctx)
     return ctx;
 }
 
+
+void JS_FreeAllModules(JSContext *ctx)
+{
+    js_free_modules(ctx, JS_FREE_MODULE_ALL);
+}
+
+/* Release class prototype roots before context teardown so GC can collect
+   native-addon template graphs (cfunc/bytecode realm holders). */
+void JS_ReleaseContextClassProtos(JSContext *ctx)
+{
+    JSRuntime *rt = ctx->rt;
+    int i;
+
+    for (i = 0; i < rt->class_count; i++) {
+        JS_FreeValue(ctx, ctx->class_proto[i]);
+        ctx->class_proto[i] = JS_UNDEFINED;
+    }
+}
+
+static JSContext *js_autoinit_get_realm(JSProperty *pr);
+static void js_autoinit_free(JSRuntime *rt, JSProperty *pr);
+
 /* used by the GC */
 static void JS_MarkContext(JSRuntime *rt, JSContext *ctx,
                            JS_MarkFunc *mark_func)
@@ -2709,8 +2716,9 @@ void JS_FreeContext(JSContext *ctx)
     JSRuntime *rt = ctx->rt;
     int i;
 
-    if (--ctx->header.ref_count > 0)
+    if (--ctx->header.ref_count > 0) {
         return;
+    }
     assert(ctx->header.ref_count == 0);
 
 #ifdef ENABLE_DUMPS // JS_DUMP_ATOMS
@@ -7108,16 +7116,11 @@ static void gc_free_cycles(JSRuntime *rt)
 
 void JS_RunGC(JSRuntime *rt)
 {
-    /* decrement the reference of the children of each object. mark =
-       1 after this pass. */
     gc_decref(rt);
-
-    /* keep the GC objects with a non zero refcount and their childs */
     gc_scan(rt);
-
-    /* free the GC objects in a cycle */
     gc_free_cycles(rt);
 }
+
 
 /* Return false if not an object or if the object has already been
    freed (zombie objects are visible in finalizers when freeing

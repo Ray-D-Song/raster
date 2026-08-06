@@ -90,6 +90,14 @@ impl WrapTable {
     pub fn clear(&mut self) {
         self.by_id.clear();
     }
+
+    pub fn len(&self) -> usize {
+        self.by_id.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_id.is_empty()
+    }
 }
 
 #[no_mangle]

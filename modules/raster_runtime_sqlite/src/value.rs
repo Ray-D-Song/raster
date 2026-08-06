@@ -98,19 +98,16 @@ pub fn js_to_sqlite_result<'js>(
             return;
         }
         if let Some(s) = value.as_string() {
-            match s.to_string() {
-                Ok(text) => {
-                    let bytes = text.as_bytes();
-                    if let Ok(len) = checked_sqlite_len(ctx, bytes.len()) {
-                        ffi::raster_sqlite3_result_text_transient(
-                            sqlite_ctx,
-                            bytes.as_ptr().cast(),
-                            len,
-                        );
-                        return;
-                    }
-                },
-                Err(_) => {},
+            if let Ok(text) = s.to_string() {
+                let bytes = text.as_bytes();
+                if let Ok(len) = checked_sqlite_len(ctx, bytes.len()) {
+                    ffi::raster_sqlite3_result_text_transient(
+                        sqlite_ctx,
+                        bytes.as_ptr().cast(),
+                        len,
+                    );
+                    return;
+                }
             }
             ffi::sqlite3_result_error(sqlite_ctx, c"invalid string".as_ptr(), -1);
             return;

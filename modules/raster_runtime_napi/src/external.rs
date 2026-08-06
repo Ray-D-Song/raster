@@ -118,6 +118,11 @@ fn clear_runtime_external_registry(rt: *mut JSRuntime) {
 }
 
 /// Reclaim opaque boxes still tracked after all JS class finalizers have run.
+pub(crate) fn drain_runtime_externals(rt: *mut JSRuntime) {
+    drain_residual_external_opaques(rt);
+    clear_runtime_external_registry(rt);
+}
+
 fn drain_residual_external_opaques(rt: *mut JSRuntime) {
     let rt_key = rt as usize;
     let opaques = LIVING_EXTERNALS_BY_RUNTIME

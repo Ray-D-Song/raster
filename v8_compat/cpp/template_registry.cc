@@ -1,5 +1,7 @@
 #include "template_registry.h"
 
+#include "registry_ownership.h"
+
 namespace raster_v8 {
 
 TemplateRegistry& TemplateRegistry::instance() {
@@ -11,6 +13,8 @@ uint32_t TemplateRegistry::register_object_template() {
   std::lock_guard<std::mutex> lock(mutex_);
   uint32_t id = next_object_template_id_++;
   object_templates_[id] = ObjectTemplateRecord{};
+  RegistryOwnership::instance().track(
+      current_quickjs_context_key(), RegistryKind::ObjectTemplate, id);
   return id;
 }
 
@@ -39,6 +43,8 @@ uint32_t TemplateRegistry::register_function_template(v8::FunctionCallback callb
   rec.instance_template_id = instance_template_id;
   rec.prototype_template_id = prototype_template_id;
   function_templates_[id] = rec;
+  RegistryOwnership::instance().track(
+      current_quickjs_context_key(), RegistryKind::FunctionTemplate, id);
   return id;
 }
 
@@ -66,6 +72,22 @@ uint64_t TemplateRegistry::function_template_prototype_root(uint32_t template_id
     return 0;
   }
   return it->second.installed_prototype_root_id;
+}
+
+void TemplateRegistry::erase_object_template(uint32_t id) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  object_templates_.erase(id);
+}
+
+void TemplateRegistry::erase_function_template(uint32_t id) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = function_templates_.find(id);
+  if (it == function_templates_.end()) {
+    return;
+  }
+  object_templates_.erase(it->second.instance_template_id);
+  object_templates_.erase(it->second.prototype_template_id);
+  function_templates_.erase(it);
 }
 
 }  // namespace raster_v8

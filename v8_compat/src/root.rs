@@ -102,6 +102,19 @@ impl RootTable {
         }
         IMMORTAL_ROOTS.lock().clear();
     }
+
+    pub fn len(&self) -> usize {
+        self.entries.lock().len()
+    }
+
+    pub fn for_each_root<F>(&self, mut f: F)
+    where
+        F: FnMut(u64, JSValue),
+    {
+        for (&id, &value) in self.entries.lock().iter() {
+            f(id, value);
+        }
+    }
 }
 
 impl Default for RootTable {

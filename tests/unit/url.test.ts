@@ -103,6 +103,31 @@ describe("URL class", () => {
     expect(url.toString()).toEqual("https://www.example.com/");
   });
 
+  it("String(URL) returns href for Next.js URL chaining", () => {
+    const first = new URL("/api/health", "http://n");
+    expect(String(first)).toBe("http://n/api/health");
+    expect(first.toString()).toBe("http://n/api/health");
+    expect(first.toJSON()).toBe("http://n/api/health");
+    const second = new URL(String(first));
+    expect(second.pathname).toBe("/api/health");
+    expect(JSON.stringify({ url: first })).toBe('{"url":"http://n/api/health"}');
+  });
+
+  it("accepts URL object as base for relative resolution", () => {
+    const base = new URL("http://n/base");
+    const url = new URL("/api/health", base);
+    expect(url.href).toBe("http://n/api/health");
+  });
+
+  it("accepts string base for relative URL", () => {
+    const url = new URL("/api/health", "http://n");
+    expect(url.href).toBe("http://n/api/health");
+  });
+
+  it("throws TypeError for relative URL without base", () => {
+    expect(() => new URL("/api/health")).toThrow(/Invalid URL/);
+  });
+
   it("should parse query parameters", () => {
     const url = new URL("https://www.example.com/?foo=bar&baz=qux");
     expect(url.searchParams.get("foo")).toEqual("bar");

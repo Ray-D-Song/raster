@@ -289,6 +289,32 @@ impl Env {
         }
         self.release_js_roots();
         crate::driver::shutdown_driver(self);
+
+        let scope_counts = self.scopes.counts();
+        let refs = self.refs.len();
+        let wraps = self.wraps.len();
+        let finalizers = self.finalizers.len();
+
+        if refs != 0
+            || scope_counts.scopes != 0
+            || scope_counts.values != 0
+            || scope_counts.handles != 0
+            || wraps != 0
+        {
+            return Err(format!(
+                "N-API Env {} retained JS owners after dispose: \
+                 refs={refs} scopes={} values={} handles={} wraps={wraps} finalizers={finalizers}",
+                self.id, scope_counts.scopes, scope_counts.values, scope_counts.handles,
+            ));
+        }
+        if finalizers != 0 {
+            tracing::debug!(
+                env_id = self.id,
+                finalizers,
+                "N-API metadata finalizers remain after JS roots were released"
+            );
+        }
+
         self.dispose_state = DisposeState::Finished;
         Ok(())
     }

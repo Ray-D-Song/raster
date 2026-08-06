@@ -31,7 +31,7 @@ crypto-openssl = ["raster_runtime_core/crypto-openssl"]
 openssl-vendored = ["raster_runtime_core/openssl-vendored"]
 sqlite = ["raster_runtime_core/sqlite", "dep:raster_runtime_sqlite"]
 napi = ["raster_runtime_core/napi", "dep:raster_runtime_napi"]
-v8-compat = ["napi", "raster_runtime_core/v8-compat", "dep:raster_runtime_napi", "dep:v8_compat"]
+v8-compat = ["napi", "raster_runtime_napi/v8-compat", "raster_runtime_core/v8-compat", "dep:raster_runtime_napi", "dep:v8_compat"]
 
 [dependencies]
 constcat = { version = "0.6", default-features = false }

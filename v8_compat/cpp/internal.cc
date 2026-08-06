@@ -1,5 +1,8 @@
 #include "internal.h"
 #include "abi_137_generated.h"
+#include "raster_v8_bridge.h"
+
+#include <cstdio>
 
 namespace raster_v8 {
 
@@ -254,15 +257,97 @@ uint64_t root_from_local(uintptr_t tagged) {
   return layout->contents.root_id;
 }
 
+void persistent_counts_for_context(IsolateImpl* isolate,
+                                   uintptr_t context_key,
+                                   size_t* strong_out,
+                                   size_t* weak_out) {
+  size_t strong_count = 0;
+  size_t weak_count = 0;
+  if (isolate) {
+    for (const auto& [cell, slot] : isolate->persistents) {
+      (void)cell;
+      if (slot.context_key != context_key) {
+        continue;
+      }
+      if (slot.is_weak || slot.root_id == 0) {
+        weak_count++;
+      } else {
+        strong_count++;
+      }
+    }
+  }
+  if (strong_out) {
+    *strong_out = strong_count;
+  }
+  if (weak_out) {
+    *weak_out = weak_count;
+  }
+}
+
+size_t dispose_strong_context_persistents(IsolateImpl* isolate, uintptr_t context_key) {
+  if (!isolate) {
+    return 0;
+  }
+  const RasterV8BridgeV1* b = raster_v8_bridge();
+  size_t weak_remaining = 0;
+  for (auto it = isolate->persistents.begin(); it != isolate->persistents.end();) {
+    if (it->second.context_key != context_key) {
+      ++it;
+      continue;
+    }
+    if (it->second.is_weak || it->second.root_id == 0) {
+      weak_remaining++;
+      ++it;
+      continue;
+    }
+    if (b && b->root_drop) {
+      b->root_drop(it->second.root_id);
+    }
+    delete reinterpret_cast<shim::ObjectLayout*>(*it->first);
+    delete it->first;
+    it = isolate->persistents.erase(it);
+  }
+  return weak_remaining;
+}
+
+size_t dispose_weak_context_persistents(IsolateImpl* isolate, uintptr_t context_key) {
+  if (!isolate) {
+    return 0;
+  }
+  size_t disposed = 0;
+  for (auto it = isolate->persistents.begin(); it != isolate->persistents.end();) {
+    if (it->second.context_key != context_key || !it->second.is_weak) {
+      ++it;
+      continue;
+    }
+    delete reinterpret_cast<shim::ObjectLayout*>(*it->first);
+    delete it->first;
+    it = isolate->persistents.erase(it);
+    disposed++;
+  }
+  return disposed;
+}
+
+void dispose_context_persistents(IsolateImpl* isolate, uintptr_t context_key) {
+  size_t weak_remaining = dispose_strong_context_persistents(isolate, context_key);
+  if (weak_remaining != 0) {
+    fprintf(stderr,
+            "raster_v8: %zu weak persistent(s) remain for context %#lx\n",
+            weak_remaining,
+            static_cast<unsigned long>(context_key));
+    abort();
+  }
+}
+
 void dispose_isolate_persistents(IsolateImpl* isolate) {
   if (!isolate) {
     return;
   }
-  for (auto it = isolate->persistents.begin(); it != isolate->persistents.end();) {
-    auto* cell = it->first;
-    delete reinterpret_cast<shim::ObjectLayout*>(*cell);
-    delete cell;
-    it = isolate->persistents.erase(it);
+  if (!isolate->persistents.empty()) {
+    fprintf(stderr,
+            "raster_v8: %zu persistent(s) remain at isolate destroy\n",
+            isolate->persistents.size());
+    abort();
   }
   isolate->layout_to_root.clear();
   isolate->layout_to_function_id.clear();

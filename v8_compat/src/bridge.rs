@@ -192,6 +192,7 @@ unsafe impl<T> Sync for SendPtr<T> {}
 pub struct BridgeState {
     pub roots: RootTable,
     ctx: SendPtr<JSContext>,
+    runtime_key: usize,
     weak_holds: HashMap<usize, JSValue>,
     function_roots: HashMap<u32, u64>,
     root_function_ids: HashMap<u64, u32>,
@@ -203,9 +204,11 @@ impl BridgeState {
     }
 
     pub(crate) fn new(roots: RootTable, ctx: *mut JSContext) -> Self {
+        let runtime_key = unsafe { qjs::JS_GetRuntime(ctx) as usize };
         Self {
             roots,
             ctx: SendPtr(ctx),
+            runtime_key,
             weak_holds: HashMap::new(),
             function_roots: HashMap::new(),
             root_function_ids: HashMap::new(),
@@ -277,6 +280,173 @@ where
             .get(&key)
             .expect("v8 bridge not initialized for context");
         f(state)
+    })
+}
+
+pub fn has_bridge_for_ctx(ctx: *mut JSContext) -> bool {
+    let key = ctx_key(ctx);
+    BRIDGE_STATES.with(|cell| cell.borrow().contains_key(&key))
+}
+
+pub fn residual_root_count_for_runtime(rt: *mut qjs::JSRuntime) -> usize {
+    let rt_key = rt as usize;
+    BRIDGE_STATES.with(|cell| {
+        cell.borrow()
+            .values()
+            .filter(|state| state.runtime_key == rt_key)
+            .map(|state| state.function_roots.len() + state.weak_holds.len() + state.roots.len())
+            .sum()
+    })
+}
+
+/// Per-context V8 teardown counters for shutdown progress checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TeardownCounts {
+    pub strong_roots: usize,
+    pub weak_holds: usize,
+    pub weak_callbacks: usize,
+    pub pending_weak: usize,
+    pub strong_persistents: usize,
+    pub weak_persistents: usize,
+}
+
+impl TeardownCounts {
+    pub fn is_zero(self) -> bool {
+        self.strong_roots == 0
+            && self.weak_holds == 0
+            && self.weak_callbacks == 0
+            && self.pending_weak == 0
+            && self.strong_persistents == 0
+            && self.weak_persistents == 0
+    }
+}
+
+fn persistent_counts_for_ctx(ctx: *mut JSContext, key: usize) -> (usize, usize) {
+    let rt = unsafe { qjs::JS_GetRuntime(ctx) };
+    let rt_key = rt as usize;
+    let isolate_ptr = crate::module_loader::isolate_ptr_for_runtime(rt_key);
+    let Some(isolate_ptr) = isolate_ptr else {
+        return (0, 0);
+    };
+    extern "C" {
+        fn raster_v8_persistent_counts_for_context(
+            isolate: *mut std::ffi::c_void,
+            context_key: usize,
+            strong_out: *mut usize,
+            weak_out: *mut usize,
+        );
+    }
+    let mut strong = 0usize;
+    let mut weak = 0usize;
+    unsafe {
+        raster_v8_persistent_counts_for_context(
+            isolate_ptr as *mut std::ffi::c_void,
+            key,
+            &mut strong,
+            &mut weak,
+        );
+    }
+    (strong, weak)
+}
+
+pub fn teardown_counts_for_ctx(ctx: *mut JSContext) -> TeardownCounts {
+    let key = ctx_key(ctx);
+    let bridge = BRIDGE_STATES.with(|cell| {
+        cell.borrow().get(&key).map(|state| {
+            (
+                state.roots.len(),
+                state.weak_holds.len(),
+                state.function_roots.len(),
+            )
+        })
+    });
+    let (roots_len, weak_holds_len, function_roots_len) = bridge.unwrap_or((0, 0, 0));
+    let (weak_callbacks, pending_weak) = crate::context_tables::weak_table_counts(ctx);
+    let (strong_persistents, weak_persistents) = persistent_counts_for_ctx(ctx, key);
+    TeardownCounts {
+        strong_roots: roots_len + function_roots_len,
+        weak_holds: weak_holds_len,
+        weak_callbacks,
+        pending_weak,
+        strong_persistents,
+        weak_persistents,
+    }
+}
+
+fn dispose_strong_persistents_for_ctx(ctx: *mut JSContext, key: usize) -> usize {
+    let rt = unsafe { qjs::JS_GetRuntime(ctx) };
+    let rt_key = rt as usize;
+    let Some(isolate_ptr) = crate::module_loader::isolate_ptr_for_runtime(rt_key) else {
+        return 0;
+    };
+    extern "C" {
+        fn raster_v8_dispose_strong_context_persistents(
+            isolate: *mut std::ffi::c_void,
+            context_key: usize,
+        ) -> usize;
+    }
+    unsafe {
+        raster_v8_dispose_strong_context_persistents(isolate_ptr as *mut std::ffi::c_void, key)
+    }
+}
+
+fn dispose_weak_persistents_for_ctx(ctx: *mut JSContext, key: usize) -> usize {
+    let rt = unsafe { qjs::JS_GetRuntime(ctx) };
+    let rt_key = rt as usize;
+    let Some(isolate_ptr) = crate::module_loader::isolate_ptr_for_runtime(rt_key) else {
+        return 0;
+    };
+    extern "C" {
+        fn raster_v8_dispose_weak_context_persistents(
+            isolate: *mut std::ffi::c_void,
+            context_key: usize,
+        ) -> usize;
+    }
+    unsafe { raster_v8_dispose_weak_context_persistents(isolate_ptr as *mut std::ffi::c_void, key) }
+}
+
+const MAX_TEARDOWN_PASSES: usize = 32;
+
+pub(crate) fn with_state_for_ctx_if<F, R>(ctx: *mut JSContext, f: F) -> Option<R>
+where
+    F: FnOnce(&mut BridgeState) -> R,
+{
+    let key = ctx_key(ctx);
+    BRIDGE_STATES.with(|cell| {
+        let mut guard = cell.borrow_mut();
+        guard.get_mut(&key).map(|state| f(state))
+    })
+}
+
+/// Look up bridge state by rooted object id (used when thread-local active context is unset).
+pub(crate) fn with_state_for_object_root<F, R>(object_root: u64, f: F) -> Option<R>
+where
+    F: FnOnce(*mut JSContext, JSValue) -> R,
+{
+    BRIDGE_STATES.with(|cell| {
+        let guard = cell.borrow();
+        for state in guard.values() {
+            if let Some(obj) = state.roots.get(object_root) {
+                return Some(f(state.ctx_ptr(), obj));
+            }
+        }
+        None
+    })
+}
+
+/// Look up bridge state by root table id (for root_drop/root_make_weak without active TLS).
+pub(crate) fn with_state_for_root_id<F, R>(root_id: u64, f: F) -> Option<R>
+where
+    F: FnOnce(&mut BridgeState) -> R,
+{
+    BRIDGE_STATES.with(|cell| {
+        let mut guard = cell.borrow_mut();
+        for state in guard.values_mut() {
+            if state.roots.get(root_id).is_some() {
+                return Some(f(state));
+            }
+        }
+        None
     })
 }
 
@@ -423,6 +593,15 @@ unsafe extern "C" fn root_dup(id: u64, out: *mut u64) -> RasterV8Status {
 
 unsafe extern "C" fn root_drop(id: u64) -> RasterV8Status {
     catch_panic(AssertUnwindSafe(|| {
+        if let Some(status) = with_state_for_root_id(id, |state| {
+            if let Some(function_id) = state.root_function_ids.remove(&id) {
+                state.function_roots.remove(&function_id);
+            }
+            state.roots.drop_root(state.ctx_ptr(), id);
+            RasterV8Status::Ok
+        }) {
+            return status;
+        }
         with_state(|state| {
             if let Some(function_id) = state.root_function_ids.remove(&id) {
                 state.function_roots.remove(&function_id);
@@ -435,6 +614,11 @@ unsafe extern "C" fn root_drop(id: u64) -> RasterV8Status {
 
 unsafe extern "C" fn root_make_weak(id: u64) -> RasterV8Status {
     catch_panic(AssertUnwindSafe(|| {
+        if let Some(status) =
+            with_state_for_root_id(id, |state| crate::js_ops::root_make_weak(state, id))
+        {
+            return status;
+        }
         with_state(|state| crate::js_ops::root_make_weak(state, id))
     }))
 }
@@ -579,6 +763,9 @@ unsafe extern "C" fn unsupported_template_new(
     RasterV8Status::Unsupported
 }
 
+/// Returns:
+/// - `JSValue`: owned temporary reference; caller must free exactly once.
+/// - `u64`: RootTable-owned duplicate.
 unsafe fn make_v8_constructor_from_id(
     ctx: *mut JSContext,
     state: &mut BridgeState,
@@ -698,11 +885,14 @@ unsafe fn install_function_prototype(
 ) {
     let proto_template_id = raster_v8_function_prototype_template_id(template_id);
     if proto_template_id == 0 {
-        let proto = qjs::JS_NewObject(ctx);
-        qjs::JS_SetConstructor(ctx, func, proto);
+        let proto = unsafe { qjs::JS_NewObject(ctx) };
+        unsafe {
+            let _ = qjs::JS_SetConstructor(ctx, func, proto);
+            qjs::JS_FreeValue(ctx, proto);
+        }
         return;
     }
-    let proto = qjs::JS_NewObject(ctx);
+    let proto = unsafe { qjs::JS_NewObject(ctx) };
     let count = raster_v8_object_template_property_count(proto_template_id);
     for i in 0..count {
         let mut key_root = 0u64;
@@ -716,14 +906,19 @@ unsafe fn install_function_prototype(
         {
             continue;
         }
-        let child_function_id = raster_v8_register_function_for_template(child_template_id);
-        let (child_fn, _) = make_v8_method_from_id(ctx, state, child_function_id);
-        if let Some(key) = state.roots.get(key_root) {
-            let atom = qjs::JS_ValueToAtom(ctx, key);
-            if atom != 0 {
-                qjs::JS_SetProperty(ctx, proto, atom, child_fn);
-                qjs::JS_FreeAtom(ctx, atom);
-            }
+        let Some(key) = state.roots.get(key_root) else {
+            continue;
+        };
+        let atom = unsafe { qjs::JS_ValueToAtom(ctx, key) };
+        if atom == 0 {
+            continue;
+        }
+        let child_function_id =
+            unsafe { raster_v8_register_function_for_template(child_template_id) };
+        let (child_fn, _) = unsafe { make_v8_method_from_id(ctx, state, child_function_id) };
+        unsafe {
+            let _ = qjs::JS_SetProperty(ctx, proto, atom, child_fn);
+            qjs::JS_FreeAtom(ctx, atom);
         }
     }
     let native_count = raster_v8_object_template_native_property_count(proto_template_id);
@@ -739,27 +934,32 @@ unsafe fn install_function_prototype(
         {
             continue;
         }
-        let getter = make_accessor_getter(ctx, accessor_id);
-        if let Some(key) = state.roots.get(name_root) {
-            let atom = qjs::JS_ValueToAtom(ctx, key);
-            if atom != 0 {
-                qjs::JS_DefinePropertyGetSet(
-                    ctx,
-                    proto,
-                    atom,
-                    getter,
-                    qjs::JS_UNDEFINED,
-                    (qjs::JS_PROP_ENUMERABLE | qjs::JS_PROP_CONFIGURABLE) as i32,
-                );
-                qjs::JS_FreeAtom(ctx, atom);
-            }
+        let Some(key) = state.roots.get(name_root) else {
+            continue;
+        };
+        let atom = unsafe { qjs::JS_ValueToAtom(ctx, key) };
+        if atom == 0 {
+            continue;
+        }
+        let getter = unsafe { make_accessor_getter(ctx, accessor_id) };
+        unsafe {
+            let _ = qjs::JS_DefinePropertyGetSet(
+                ctx,
+                proto,
+                atom,
+                getter,
+                qjs::JS_UNDEFINED,
+                (qjs::JS_PROP_ENUMERABLE | qjs::JS_PROP_CONFIGURABLE) as i32,
+            );
+            qjs::JS_FreeAtom(ctx, atom);
         }
     }
     let proto_root = state.roots.insert_borrowed(ctx, proto);
     unsafe {
         raster_v8_set_function_template_prototype_root(template_id, proto_root);
+        let _ = qjs::JS_SetConstructor(ctx, func, proto);
+        qjs::JS_FreeValue(ctx, proto);
     }
-    qjs::JS_SetConstructor(ctx, func, proto);
 }
 
 unsafe extern "C" fn function_template_get_function(
@@ -785,6 +985,9 @@ unsafe extern "C" fn function_template_get_function(
                 let (func, root) = make_v8_constructor_from_id(ctx, state, function_id);
                 let template_id = unsafe { raster_v8_function_template_id(function_id) };
                 install_function_prototype(ctx, state, template_id, func);
+                unsafe {
+                    qjs::JS_FreeValue(ctx, func);
+                }
                 root
             };
             *out = root;
@@ -1091,6 +1294,11 @@ extern "C" {
     fn raster_v8_function_prototype_template_id(template_id: u32) -> u32;
     fn raster_v8_set_function_template_prototype_root(template_id: u32, root_id: u64);
     fn raster_v8_function_template_prototype_root(template_id: u32) -> u64;
+    fn raster_v8_function_template_ids_for_context(
+        context_key: usize,
+        out: *mut u32,
+        capacity: usize,
+    ) -> usize;
     fn raster_v8_object_template_property_count(object_template_id: u32) -> usize;
     fn raster_v8_object_template_property_at(
         object_template_id: u32,
@@ -1189,43 +1397,301 @@ pub fn bind_bridge(ctx: *mut JSContext) {
     }
 }
 
+/// Break constructor/prototype links for installed V8 templates so QuickJS GC can
+/// Delete one own property from `obj` by name. Succeeds only when QuickJS reports
+/// the property was removed (`1`). Returns an error on `0` (not deleted) or
+/// exceptions (`< 0`).
+pub(crate) unsafe fn delete_own_property_str(
+    ctx: *mut JSContext,
+    obj: qjs::JSValue,
+    name: &std::ffi::CStr,
+) -> Result<(), String> {
+    if unsafe { qjs::JS_VALUE_GET_TAG(obj) } != qjs::JS_TAG_OBJECT as i32 {
+        return Ok(());
+    }
+    let atom = unsafe { qjs::JS_NewAtom(ctx, name.as_ptr()) };
+    let ret = unsafe { qjs::JS_DeleteProperty(ctx, obj, atom, 0) };
+    unsafe {
+        qjs::JS_FreeAtom(ctx, atom);
+    }
+    match ret {
+        1 => Ok(()),
+        0 => Err(format!(
+            "own property {:?} was not deleted (missing or non-configurable)",
+            name.to_string_lossy()
+        )),
+        _ => {
+            clear_pending_exception(ctx);
+            Err(format!(
+                "exception while deleting own property {:?}",
+                name.to_string_lossy()
+            ))
+        },
+    }
+}
+
+unsafe fn clear_pending_exception(ctx: *mut JSContext) {
+    if unsafe { qjs::JS_HasException(ctx) } {
+        let exc = unsafe { qjs::JS_GetException(ctx) };
+        unsafe {
+            qjs::JS_FreeValue(ctx, exc);
+        }
+    }
+}
+
+/// Returns true when `Object.prototype.constructor` is still the global `Object` function.
+pub(crate) unsafe fn object_intrinsic_constructor_intact(ctx: *mut JSContext) -> bool {
+    let global = unsafe { qjs::JS_GetGlobalObject(ctx) };
+    let object_fn = unsafe { qjs::JS_GetPropertyStr(ctx, global, c"Object".as_ptr()) };
+    let object_proto = unsafe { qjs::JS_GetPropertyStr(ctx, object_fn, c"prototype".as_ptr()) };
+    let proto_ctor = unsafe { qjs::JS_GetPropertyStr(ctx, object_proto, c"constructor".as_ptr()) };
+    let intact = unsafe { qjs::JS_IsStrictEqual(ctx, proto_ctor, object_fn) };
+    unsafe {
+        qjs::JS_FreeValue(ctx, proto_ctor);
+        qjs::JS_FreeValue(ctx, object_proto);
+        qjs::JS_FreeValue(ctx, object_fn);
+        qjs::JS_FreeValue(ctx, global);
+    }
+    intact
+}
+
+/// Returns whether `proto` has an own `constructor` property.
+pub(crate) unsafe fn prototype_has_own_constructor(
+    ctx: *mut JSContext,
+    proto: qjs::JSValue,
+) -> Result<bool, String> {
+    if unsafe { qjs::JS_VALUE_GET_TAG(proto) } != qjs::JS_TAG_OBJECT as i32 {
+        return Ok(false);
+    }
+    let atom = unsafe { qjs::JS_NewAtom(ctx, c"constructor".as_ptr()) };
+    if atom == 0 {
+        return Err("failed to allocate atom for prototype constructor".into());
+    }
+    let mut desc = qjs::JSPropertyDescriptor {
+        flags: 0,
+        value: qjs::JS_UNDEFINED,
+        getter: qjs::JS_UNDEFINED,
+        setter: qjs::JS_UNDEFINED,
+    };
+    let ret = unsafe { qjs::JS_GetOwnProperty(ctx, &mut desc, proto, atom) };
+    unsafe {
+        qjs::JS_FreeAtom(ctx, atom);
+    }
+    if ret < 0 {
+        return Err("JS_GetOwnProperty failed for prototype constructor".into());
+    }
+    if ret > 0 {
+        unsafe {
+            qjs::JS_FreeValue(ctx, desc.value);
+            if !qjs::JS_IsUndefined(desc.getter) {
+                qjs::JS_FreeValue(ctx, desc.getter);
+            }
+            if !qjs::JS_IsUndefined(desc.setter) {
+                qjs::JS_FreeValue(ctx, desc.setter);
+            }
+        }
+    }
+    Ok(ret > 0)
+}
+
+unsafe fn sever_installed_v8_templates(ctx: *mut JSContext, key: usize) -> Result<(), String> {
+    let count =
+        unsafe { raster_v8_function_template_ids_for_context(key, std::ptr::null_mut(), 0) };
+    if count == 0 {
+        return Ok(());
+    }
+    let mut ids = vec![0u32; count];
+    let written =
+        unsafe { raster_v8_function_template_ids_for_context(key, ids.as_mut_ptr(), count) };
+    debug_assert_eq!(written, count);
+
+    with_state_for_ctx(ctx, |state| -> Result<(), String> {
+        let ctx = state.ctx_ptr();
+        for &template_id in &ids {
+            let proto_root = unsafe { raster_v8_function_template_prototype_root(template_id) };
+            if proto_root == 0 {
+                continue;
+            }
+            let Some(proto) = state.roots.get(proto_root) else {
+                continue;
+            };
+            unsafe {
+                if prototype_has_own_constructor(ctx, proto)? {
+                    delete_own_property_str(ctx, proto, c"constructor")?;
+                }
+            }
+        }
+        Ok(())
+    })?;
+
+    if unsafe { qjs::JS_HasException(ctx) } {
+        return Err("pending exception after V8 template sever".into());
+    }
+    Ok(())
+}
+
 /// Release rooted JS values and bridge state for a single QuickJS context.
 ///
 /// # Safety
 ///
 /// `ctx` must be a valid `JSContext` pointer associated with the V8 compat
 /// bridge on the current thread, and must only be torn down once.
-pub(crate) unsafe fn shutdown_bridge_for_context(ctx: *mut JSContext) {
+pub(crate) unsafe fn shutdown_bridge_for_context(ctx: *mut JSContext) -> Result<(), String> {
     let key = ctx_key(ctx);
     let has_bridge = BRIDGE_STATES.with(|cell| cell.borrow().contains_key(&key));
     if !has_bridge {
-        return;
+        return Ok(());
     }
+    set_active_bridge_context(ctx);
     let rt = unsafe { qjs::JS_GetRuntime(ctx) };
-    let _rt_key = rt as usize;
+    let rt_key = rt as usize;
     if let Some(context_state) = crate::module_loader::context_state_ptr_for_ctx(ctx) {
         crate::runtime_state::run_cleanup_hooks(context_state);
     }
 
-    with_state_for_ctx(ctx, |state| {
-        for id in state.function_roots.values().copied() {
-            state.roots.drop_root(state.ctx_ptr(), id);
-        }
-        state.function_roots.clear();
-        state.root_function_ids.clear();
-        state.drain_weak_holds(ctx);
-    });
-    crate::js_ops::prepare_shutdown(ctx);
-    BRIDGE_STATES.with(|cell| {
-        if let Some(state) = cell.borrow_mut().remove(&key) {
+    unsafe {
+        sever_installed_v8_templates(ctx, key)?;
+    }
+
+    unsafe {
+        crate::js_ops::force_invoke_registered_weak_callbacks(ctx);
+    }
+
+    let mut last_counts = teardown_counts_for_ctx(ctx);
+    for pass in 0..MAX_TEARDOWN_PASSES {
+        with_state_for_ctx(ctx, |state| {
+            for id in state.function_roots.values().copied() {
+                state.roots.drop_root(state.ctx_ptr(), id);
+            }
+            state.function_roots.clear();
+            state.root_function_ids.clear();
             state.roots.clear(ctx);
+            state.drain_weak_holds(ctx);
+        });
+
+        let weak_remaining = dispose_strong_persistents_for_ctx(ctx, key);
+
+        unsafe { qjs::JS_RunGC(rt) };
+        crate::js_ops::dispatch_pending_weak_callbacks_for_ctx(ctx);
+        with_state_for_ctx(ctx, |state| {
+            crate::js_ops::process_weak_holds_for_ctx(state);
+        });
+
+        let counts = teardown_counts_for_ctx(ctx);
+        if counts.is_zero() {
+            break;
         }
+        if counts.strong_roots == 0
+            && counts.weak_holds == 0
+            && counts.weak_callbacks == 0
+            && counts.pending_weak == 0
+            && counts.strong_persistents == 0
+            && counts.weak_persistents != 0
+        {
+            let _ = dispose_weak_persistents_for_ctx(ctx, key);
+            unsafe { qjs::JS_RunGC(rt) };
+            let after_weak = teardown_counts_for_ctx(ctx);
+            if after_weak.is_zero() {
+                break;
+            }
+            if pass > 0 && after_weak == last_counts {
+                return Err(format!(
+                    "V8 teardown stalled: {after_weak:?} (weak persistents remain after dispose)"
+                ));
+            }
+            last_counts = after_weak;
+            continue;
+        }
+        if pass > 0 && counts == last_counts {
+            return Err(format!(
+                "V8 teardown stalled: {counts:?} (weak persistents after strong dispose: {weak_remaining})"
+            ));
+        }
+        if pass + 1 == MAX_TEARDOWN_PASSES {
+            return Err(format!(
+                "V8 teardown incomplete after {MAX_TEARDOWN_PASSES} passes: {counts:?}"
+            ));
+        }
+        last_counts = counts;
+    }
+
+    let final_counts = teardown_counts_for_ctx(ctx);
+    if final_counts.weak_persistents != 0 {
+        let _ = dispose_weak_persistents_for_ctx(ctx, key);
+        unsafe { qjs::JS_RunGC(rt) };
+        let after_weak = teardown_counts_for_ctx(ctx);
+        if after_weak.weak_persistents != 0 {
+            return Err(format!(
+                "V8 teardown: {} weak persistent(s) remain after dispose",
+                after_weak.weak_persistents
+            ));
+        }
+    }
+    if final_counts.strong_persistents != 0 {
+        let _ = dispose_strong_persistents_for_ctx(ctx, key);
+        let after_strong = teardown_counts_for_ctx(ctx);
+        if after_strong.strong_persistents != 0 {
+            return Err(format!(
+                "V8 teardown: {} strong persistent(s) remain after dispose",
+                after_strong.strong_persistents
+            ));
+        }
+    }
+
+    unsafe {
+        if let Some(class_id) = crate::js_ops::v8_object_class_for_runtime(rt) {
+            let proto = qjs::JS_GetClassProto(ctx, class_id);
+            if !qjs::JS_IsUndefined(proto) {
+                qjs::JS_SetClassProto(ctx, class_id, qjs::JS_UNDEFINED);
+                qjs::JS_FreeValue(ctx, proto);
+            }
+        }
+        extern "C" {
+            fn JS_ReleaseContextClassProtos(ctx: *mut JSContext);
+        }
+        JS_ReleaseContextClassProtos(ctx);
+    }
+    for _ in 0..16 {
+        unsafe { qjs::JS_RunGC(rt) };
+        crate::js_ops::dispatch_pending_weak_callbacks_for_ctx(ctx);
+        with_state_for_ctx_if(ctx, |state| {
+            crate::js_ops::process_weak_holds_for_ctx(state);
+        });
+    }
+
+    crate::js_ops::remove_context_tables_and_gc(ctx);
+
+    if let Some(isolate_ptr) = crate::module_loader::isolate_ptr_for_runtime(rt_key) {
+        extern "C" {
+            fn raster_v8_clear_registries_for_context(context_key: usize);
+        }
+        unsafe {
+            raster_v8_clear_registries_for_context(key);
+        }
+        let _isolate_ptr = isolate_ptr;
+    }
+
+    let remaining = teardown_counts_for_ctx(ctx);
+    if !remaining.is_zero() {
+        return Err(format!(
+            "V8 teardown residual state before post-bridge GC: {remaining:?}"
+        ));
+    }
+
+    BRIDGE_STATES.with(|cell| {
+        cell.borrow_mut().remove(&key);
     });
     ACTIVE_BRIDGE_CTX.with(|cell| {
         if *cell.borrow() == Some(key) {
             *cell.borrow_mut() = None;
         }
     });
+
+    let remaining = teardown_counts_for_ctx(ctx);
+    if !remaining.is_zero() {
+        return Err(format!("V8 teardown residual state: {remaining:?}"));
+    }
+    Ok(())
 }
 
 /// Backward-compatible alias for per-context bridge teardown.
@@ -1233,8 +1699,8 @@ pub(crate) unsafe fn shutdown_bridge_for_context(ctx: *mut JSContext) {
 /// # Safety
 ///
 /// Same as [`shutdown_bridge_for_context`].
-pub unsafe fn prepare_shutdown(ctx: *mut JSContext) {
-    unsafe { shutdown_bridge_for_context(ctx) };
+pub unsafe fn prepare_shutdown(ctx: *mut JSContext) -> Result<(), String> {
+    unsafe { shutdown_bridge_for_context(ctx) }
 }
 
 pub fn with_bridge_roots<F, R>(f: F) -> R

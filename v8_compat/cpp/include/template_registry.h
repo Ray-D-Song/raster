@@ -47,6 +47,8 @@ class TemplateRegistry {
   FunctionTemplateRecord* function_template_at(uint32_t id);
   void set_function_template_prototype_root(uint32_t template_id, uint64_t root_id);
   uint64_t function_template_prototype_root(uint32_t template_id);
+  void erase_object_template(uint32_t id);
+  void erase_function_template(uint32_t id);
 
  private:
   std::mutex mutex_;

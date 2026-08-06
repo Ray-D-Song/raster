@@ -144,9 +144,6 @@ fn main() {
 
     let mut defines: Vec<(String, Option<&str>)> = vec![("_GNU_SOURCE".into(), None)];
 
-    // Dump residual GC object types/refcounts before FreeRuntime assert (no free).
-    defines.push(("RASTER_QJS_GC_DIAGNOSTICS".into(), None));
-
     #[cfg(feature = "disable-assertions")]
     defines.push(("NDEBUG".into(), None));
 

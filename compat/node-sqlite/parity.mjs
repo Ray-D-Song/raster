@@ -4,6 +4,7 @@
  * Prints a single JSON document to stdout.
  */
 import fs from "node:fs";
+import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -161,10 +162,15 @@ await record("database.file_buffer_url", async () => {
   const fromBuffer = new DatabaseSync(Buffer.from(dbPath));
   const fromUrl = new DatabaseSync(pathToFileURL(dbPath));
   try {
+    const location = fromUrl.location();
+    assert.equal(path.basename(location), path.basename(dbPath));
     return {
       buffer: fromBuffer.prepare("SELECT * FROM data").all(),
       url: fromUrl.prepare("SELECT * FROM data").all(),
-      location: fromUrl.location(),
+      location: {
+        absolute: path.isAbsolute(location),
+        basename: path.basename(location),
+      },
     };
   } finally {
     fromBuffer.close();

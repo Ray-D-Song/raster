@@ -22,7 +22,9 @@ use raster_runtime_core::modules::{
     module_builder::{ModuleBuilder, ModuleBuilderConfig},
     process::{argv, set_argv, EXIT_CODE, NO_WARNINGS, TRACE_WARNINGS},
 };
-use raster_runtime_core::vm::{Vm, VmOptions};
+use raster_runtime_core::vm::{
+    run_final_context_gc, shutdown_context_userdata, shutdown_module_state, Vm, VmOptions,
+};
 use tracing::trace;
 
 use crate::base::compiler::compile_file;
@@ -180,9 +182,52 @@ async fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
         raster_runtime_napi::shutdown_all().map_err(std::io::Error::other)?;
     }
 
+    #[cfg(all(feature = "napi", feature = "v8-compat"))]
+    vm.ctx
+        .with(|ctx| shutdown_module_state(&ctx).map_err(|err| err.to_string()))
+        .await
+        .map_err(std::io::Error::other)?;
+
+    #[cfg(all(feature = "napi", feature = "v8-compat"))]
+    vm.ctx
+        .with(|ctx| shutdown_context_userdata(&ctx).map_err(|err| err.to_string()))
+        .await
+        .map_err(std::io::Error::other)?;
+
+    #[cfg(all(feature = "napi", feature = "v8-compat"))]
+    vm.ctx
+        .with(|ctx| {
+            unsafe {
+                v8_compat::run_pre_bridge_teardown_gc(ctx.as_raw().as_ptr());
+            }
+            Ok::<(), String>(())
+        })
+        .await
+        .map_err(std::io::Error::other)?;
+
+    #[cfg(all(feature = "napi", feature = "v8-compat"))]
+    let v8_runtime_addr = vm
+        .ctx
+        .with(|ctx| raster_runtime_napi::finalize_v8_environment(&ctx))
+        .await
+        .map_err(std::io::Error::other)?;
+
+    #[cfg(all(feature = "napi", feature = "v8-compat"))]
+    vm.ctx
+        .with(|ctx| {
+            run_final_context_gc(&ctx);
+            Ok::<(), String>(())
+        })
+        .await
+        .map_err(std::io::Error::other)?;
+
     // Drop AsyncContext before AsyncRuntime so no JS_CONTEXT roots remain.
     let Vm { ctx, runtime, .. } = vm;
     drop(ctx);
+
+    #[cfg(all(feature = "napi", feature = "v8-compat"))]
+    unsafe { v8_compat::shutdown_runtime_addr(v8_runtime_addr) }.map_err(std::io::Error::other)?;
+
     drop(runtime);
 
     Ok(ExitCode::from(EXIT_CODE.load(Ordering::Relaxed)))

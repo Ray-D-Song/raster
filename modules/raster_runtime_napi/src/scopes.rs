@@ -25,6 +25,13 @@ pub struct ScopeStack {
     scopes: Vec<Scope>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScopeCounts {
+    pub scopes: usize,
+    pub values: usize,
+    pub handles: usize,
+}
+
 impl ScopeStack {
     pub fn new() -> Self {
         Self {
@@ -150,6 +157,14 @@ impl ScopeStack {
             unsafe {
                 let _ = Box::from_raw(ptr);
             }
+        }
+    }
+
+    pub fn counts(&self) -> ScopeCounts {
+        ScopeCounts {
+            scopes: self.scopes.len(),
+            values: self.values.len(),
+            handles: self.handles.len(),
         }
     }
 

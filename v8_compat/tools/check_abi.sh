@@ -17,6 +17,10 @@ assert_node_version_header() {
     echo "ABI check: expected Node 24.3.x in $header" >&2
     exit 1
   fi
+  if ! grep -q '#define NODE_PATCH_VERSION 0' "$header"; then
+    echo "ABI check: expected Node 24.3.0 in $header" >&2
+    exit 1
+  fi
 }
 
 node_include_dirs() {
@@ -56,6 +60,15 @@ if [[ ! -f "$NODE_INC/node_version.h" && -f "$NODE_INC/src/node_version.h" ]]; t
   NODE_INC="$NODE_INC/src"
 fi
 assert_node_version_header "$NODE_INC/node_version.h"
+
+[[ -f "$NODE_INC/node_version.h" ]] || {
+  echo "ABI check: missing $NODE_INC/node_version.h" >&2
+  exit 1
+}
+[[ -f "$V8_INC/v8.h" ]] || {
+  echo "ABI check: missing $V8_INC/v8.h" >&2
+  exit 1
+}
 
 CXX="${CXX:-clang++}"
 
@@ -127,7 +140,7 @@ expect_macro RASTER_V8_FUNCTION_CALLBACK_K_RETURN_VALUE_INDEX "$(json_int functi
 expect_macro RASTER_V8_PROPERTY_CALLBACK_K_RETURN_VALUE_INDEX "$(json_int property_callback_k_return_value_index)"
 expect_macro RASTER_V8_PROPERTY_CALLBACK_K_THIS_INDEX "$(json_int property_callback_k_this_index)"
 
-if [[ -d "$ROOT/refs/node/.git" ]]; then
+if git -C "$ROOT/refs/node" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   actual="$(git -C "$ROOT/refs/node" rev-parse HEAD)"
   if [[ "$actual" != "$NODE_COMMIT" ]]; then
     echo "ABI check: refs/node HEAD is $actual, expected $NODE_COMMIT" >&2

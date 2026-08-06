@@ -56,11 +56,11 @@ jobs:
       - run: yarn install --frozen-lockfile
       - run: make js JS_MINIFY=0
       - name: Build raster_runtime and sqlite extension
-        env:
-          CC: clang
         run: |
           cargo build -p raster_runtime
+          $env:CC = "clang"
           node compat/node-sqlite/build-extension.mjs
+          Remove-Item Env:CC
           if (-not (Test-Path compat/node-sqlite/build/sqlite_extension.dll)) {
             throw "missing compat/node-sqlite/build/sqlite_extension.dll"
           }
@@ -290,6 +290,7 @@ jobs:
           COMPAT_VP_BUILD_LOOPS: ${{ matrix.case == 'vite-plus' && '20' || '0' }}
           COMPAT_SQLITE_LIFECYCLE_LOOPS: ${{ matrix.case == 'node-sqlite' && '100' || '0' }}
           COMPAT_SQLITE_BACKUP_LOOPS: ${{ matrix.case == 'node-sqlite' && '20' || '0' }}
+          COMPAT_BETTER_SQLITE3_LOOPS: ${{ matrix.case == 'better-sqlite3' && '20' || '0' }}
         run: make compat-${{ matrix.case }}
       - if: always()
         run: |

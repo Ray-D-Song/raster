@@ -221,6 +221,7 @@ void raster_v8_destroy_context(RasterV8ContextState* ctx);
 void raster_v8_open_handle_scope(RasterV8ContextState* ctx);
 void raster_v8_close_handle_scope(RasterV8ContextState* ctx);
 void raster_v8_set_context_root_id(RasterV8ContextState* ctx, uint64_t root_id);
+void raster_v8_set_context_quickjs_key(RasterV8ContextState* ctx, uintptr_t key);
 uint64_t raster_v8_context_root_id(RasterV8ContextState* ctx);
 RasterV8Status raster_v8_oddball_root(RasterV8ContextState* ctx,
                                       int root_index,
@@ -322,6 +323,17 @@ void raster_v8_invoke_weak_callback_second_pass(void* callback, void* parameter)
 void raster_v8_dispatch_pending_weak_callbacks(void);
 void raster_v8_run_gc(void);
 void raster_v8_dispose_all_persistents(void);
+void raster_v8_dispose_context_persistents(void* isolate, uintptr_t context_key);
+void raster_v8_persistent_counts_for_context(void* isolate,
+                                            uintptr_t context_key,
+                                            size_t* strong_out,
+                                            size_t* weak_out);
+size_t raster_v8_dispose_strong_context_persistents(void* isolate, uintptr_t context_key);
+size_t raster_v8_dispose_weak_context_persistents(void* isolate, uintptr_t context_key);
+void raster_v8_clear_registries_for_context(uintptr_t context_key);
+size_t raster_v8_function_template_ids_for_context(uintptr_t context_key,
+                                                 uint32_t* out,
+                                                 size_t capacity);
 
 #ifdef __cplusplus
 }

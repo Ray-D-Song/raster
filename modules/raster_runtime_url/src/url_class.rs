@@ -64,7 +64,7 @@ impl<'js> URL<'js> {
             let base_str = if let Some(s) = base.as_string() {
                 Some(s.to_string()?)
             } else if let Some(obj) = base.as_object() {
-                if let Some(url_inst) = Class::<URL>::from_object(&obj) {
+                if let Some(url_inst) = Class::<URL>::from_object(obj) {
                     Some(url_inst.borrow().url.borrow().as_str().to_string())
                 } else if let Ok(href) = obj.get::<_, String>("href") {
                     Some(href)
@@ -280,14 +280,20 @@ impl<'js> URL<'js> {
     // Instance methods
     //
 
-    #[qjs(rename = PredefinedAtom::ToJSON)]
-    pub fn to_json(&self) -> String {
-        // https://developer.mozilla.org/en-US/docs/Web/API/URL/toJSON
-        self.to_string()
+    #[qjs(rename = "toString")]
+    pub fn to_string_value(&self) -> String {
+        self.href()
     }
 
-    pub fn to_string(&self) -> String {
-        self.url.borrow().to_string()
+    #[qjs(rename = PredefinedAtom::ToJSON)]
+    pub fn to_json(&self) -> String {
+        self.href()
+    }
+}
+
+impl<'js> std::fmt::Display for URL<'js> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.href())
     }
 }
 

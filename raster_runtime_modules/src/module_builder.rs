@@ -101,7 +101,9 @@ impl ModuleBuilder {
         }
         #[cfg(feature = "assert")]
         {
-            builder = builder.with_module(crate::modules::assert::AssertModule);
+            builder = builder
+                .with_module(crate::modules::assert::AssertModule)
+                .with_module(crate::modules::assert::AssertStrictModule);
         }
         #[cfg(feature = "async-hooks")]
         {

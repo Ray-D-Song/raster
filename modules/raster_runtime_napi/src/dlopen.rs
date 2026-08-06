@@ -72,6 +72,8 @@ fn clear_native_require_cache<'js>(ctx: &Ctx<'js>) {
                     const entry = req.cache[key];
                     if (entry) {
                         entry.exports = null;
+                        try { entry.children = []; } catch (_err) {}
+                        try { entry.parent = null; } catch (_err) {}
                     }
                     delete req.cache[key];
                 }
@@ -88,17 +90,54 @@ fn clear_native_require_cache<'js>(ctx: &Ctx<'js>) {
     }
 }
 
+/// Final GC, N-API external drain, and V8 bridge/context teardown.
+#[cfg(feature = "v8-compat")]
+pub fn finalize_v8_environment<'js>(ctx: &Ctx<'js>) -> Result<usize, String> {
+    let raw_ctx = ctx.as_raw().as_ptr();
+    let raw_runtime = unsafe { qjs::JS_GetRuntime(raw_ctx) };
+    run_final_gc(ctx, raw_runtime, None)?;
+    crate::external::drain_runtime_externals(raw_runtime);
+    run_final_gc(ctx, raw_runtime, None)?;
+    let shutdown_result = unsafe { v8_compat::shutdown_environment(raw_ctx) };
+    for _ in 0..8 {
+        run_final_gc(ctx, raw_runtime, None)?;
+    }
+    shutdown_result?;
+    run_final_gc(ctx, raw_runtime, None)?;
+    Ok(raw_runtime as usize)
+}
+
+/// After N-API shutdown completes, tear down V8 context state and return the
+/// QuickJS runtime pointer for a subsequent [`v8_compat::shutdown_runtime`].
+#[cfg(feature = "v8-compat")]
+pub fn capture_v8_runtime_and_shutdown_context<'js>(ctx: &Ctx<'js>) -> Result<usize, String> {
+    finalize_v8_environment(ctx)
+}
+
+fn free_script_modules<'js>(ctx: &Ctx<'js>) {
+    unsafe {
+        extern "C" {
+            fn JS_FreeAllModules(ctx: *mut qjs::JSContext);
+        }
+        JS_FreeAllModules(ctx.as_raw().as_ptr());
+    }
+    let rt = unsafe { qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+    for _ in 0..4 {
+        ctx.run_gc();
+        unsafe {
+            qjs::JS_RunGC(rt);
+        }
+    }
+}
+
 /// Clear require-cache native roots and begin env dispose (phase 1).
 ///
 /// Returns the env's driver Arc (if any) so the caller can `wait_finished()`
 /// before [`finish_shutdown`]. Env stays registered and alive.
 pub fn begin_shutdown<'js>(ctx: &Ctx<'js>) -> Result<Option<Arc<DriverState>>, String> {
     clear_native_require_cache(ctx);
+    free_script_modules(ctx);
     crate::api::clear_function_callbacks();
-    #[cfg(feature = "v8-compat")]
-    {
-        unsafe { v8_compat::shutdown_context(ctx.as_raw().as_ptr()) };
-    }
     let Some(env_ptr) = env_for_ctx(ctx.as_raw().as_ptr()) else {
         return Ok(None);
     };
@@ -121,7 +160,7 @@ pub fn finish_shutdown<'js>(ctx: &Ctx<'js>) -> Result<(), String> {
 
     let Some(ptr) = ptr else {
         // No env registered — nothing to free (no N-API was used).
-        run_final_gc(ctx, rt);
+        run_final_gc(ctx, rt, None)?;
         unregister_runtime_hooks_if_unused(rt);
         return Ok(());
     };
@@ -131,36 +170,60 @@ pub fn finish_shutdown<'js>(ctx: &Ctx<'js>) -> Result<(), String> {
             (*ptr).begin_dispose();
         }
         (*ptr).try_finish_dispose()?;
+        run_final_gc(ctx, rt, Some(ptr))?;
         // Only remove after finish succeeds.
         let removed = ENV_REGISTRY.lock().unwrap().remove(&key);
         debug_assert!(removed.is_some());
         let _ = Box::from_raw(ptr);
     }
 
-    run_final_gc(ctx, rt);
+    run_final_gc(ctx, rt, None)?;
     unregister_runtime_hooks_if_unused(rt);
     Ok(())
 }
 
-fn run_final_gc<'js>(ctx: &Ctx<'js>, rt: *mut qjs::JSRuntime) {
-    for _ in 0..16 {
+fn run_final_gc<'js>(
+    ctx: &Ctx<'js>,
+    rt: *mut qjs::JSRuntime,
+    env: Option<*mut Env>,
+) -> Result<(), String> {
+    const MAX_PASSES: usize = 32;
+    for _ in 0..MAX_PASSES {
+        if let Some(env_ptr) = env {
+            unsafe {
+                crate::gc_hook::drain_pending_finalizers(&mut *env_ptr);
+                crate::gc_hook::run_all_remaining(&mut *env_ptr);
+            }
+        } else {
+            crate::gc_hook::compact_stale_pending();
+        }
         ctx.run_gc();
         unsafe {
             qjs::JS_RunGC(rt);
         }
+        if let Some(env_ptr) = env {
+            unsafe {
+                crate::gc_hook::drain_pending_finalizers(&mut *env_ptr);
+            }
+        } else {
+            crate::gc_hook::compact_stale_pending();
+        }
         if !crate::gc_hook::has_pending_finalizers() {
-            break;
+            return Ok(());
         }
     }
+    crate::gc_hook::compact_stale_pending();
+    if crate::gc_hook::has_pending_finalizers() {
+        return Err(format!(
+            "teardown incomplete: pending N-API finalizers after {MAX_PASSES} GC passes"
+        ));
+    }
+    Ok(())
 }
 
 fn unregister_runtime_hooks_if_unused(rt: *mut qjs::JSRuntime) {
     if !env_ptrs_for_runtime(rt).is_empty() {
         return;
-    }
-    #[cfg(feature = "v8-compat")]
-    unsafe {
-        v8_compat::shutdown_runtime(rt);
     }
     raster_runtime_utils::driver_poll::unregister_driver_notify(rt);
     crate::gc_hook::unregister_holder_class(rt);

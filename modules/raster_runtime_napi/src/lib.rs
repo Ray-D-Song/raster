@@ -21,6 +21,10 @@ mod types;
 mod value;
 mod wrap;
 
+#[cfg(feature = "v8-compat")]
+pub use dlopen::capture_v8_runtime_and_shutdown_context;
+#[cfg(feature = "v8-compat")]
+pub use dlopen::finalize_v8_environment;
 pub use dlopen::{begin_shutdown, dlopen_module, finish_shutdown, shutdown_all};
 pub use env::Env;
 pub use types::*;
@@ -870,6 +874,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_unqueued_async_work_returns_generic_failure() {
+        let _lock = gc_test_lock().await;
         let rt = AsyncRuntime::new().unwrap();
         let ctx = AsyncContext::full(&rt).await.unwrap();
         let _async_ctx = ctx.clone();
@@ -909,6 +914,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_queued_async_work_completes_exactly_once() {
+        let _lock = gc_test_lock().await;
         use std::os::raw::c_void;
         use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
         use std::thread;
@@ -998,6 +1004,7 @@ mod tests {
 
     #[tokio::test]
     async fn async_complete_dispatch_runs_at_most_once() {
+        let _lock = gc_test_lock().await;
         use std::os::raw::c_void;
         use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -1414,6 +1421,7 @@ mod tests {
 
     #[tokio::test]
     async fn tsfn_blocking_producer_wakes_after_pop() {
+        let _lock = gc_test_lock().await;
         use std::os::raw::c_void;
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
@@ -1530,6 +1538,7 @@ mod tests {
 
     #[tokio::test]
     async fn tsfn_closing_wakes_blocking_producers_with_napi_closing() {
+        let _lock = gc_test_lock().await;
         use std::os::raw::c_void;
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
@@ -1637,6 +1646,7 @@ mod tests {
 
     #[tokio::test]
     async fn tsfn_abort_from_worker_invokes_call_js_on_js_thread() {
+        let _lock = gc_test_lock().await;
         use std::os::raw::c_void;
         use std::sync::Mutex;
         use std::thread;
@@ -1730,6 +1740,7 @@ mod tests {
 
     #[tokio::test]
     async fn tsfn_admission_rollback_does_not_remove_other_payload() {
+        let _lock = gc_test_lock().await;
         use std::os::raw::c_void;
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::{Arc, Barrier};
@@ -1839,6 +1850,7 @@ mod tests {
 
     #[tokio::test]
     async fn null_execute_cancel_race_completes_at_most_once() {
+        let _lock = gc_test_lock().await;
         use std::os::raw::c_void;
         use std::sync::atomic::{AtomicU32, Ordering};
         use std::thread;
@@ -1913,6 +1925,7 @@ mod tests {
 
     #[tokio::test]
     async fn many_async_works_release_keepalive() {
+        let _lock = gc_test_lock().await;
         use std::os::raw::c_void;
         use std::sync::atomic::{AtomicU32, Ordering};
         use std::thread;
@@ -1989,6 +2002,7 @@ mod tests {
 
     #[tokio::test]
     async fn aborted_fallback_drain_uses_teardown() {
+        let _lock = gc_test_lock().await;
         use std::os::raw::c_void;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -2073,6 +2087,7 @@ mod tests {
 
     #[tokio::test]
     async fn multi_ref_abort_then_normal_release_tears_down() {
+        let _lock = gc_test_lock().await;
         use std::os::raw::c_void;
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::{Arc, Barrier};
@@ -2186,6 +2201,7 @@ mod tests {
     /// napi-rs JsDeferred: `func == null` with non-null `call_js_cb` must deliver.
     #[tokio::test]
     async fn tsfn_null_func_with_call_js_cb_delivers_payload() {
+        let _lock = gc_test_lock().await;
         use std::os::raw::c_void;
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::time::Duration;
@@ -2308,6 +2324,7 @@ mod tests {
 
     #[tokio::test]
     async fn async_work_rejects_foreign_env() {
+        let _lock = gc_test_lock().await;
         let rt = AsyncRuntime::new().unwrap();
         let ctx = AsyncContext::full(&rt).await.unwrap();
         let _async_ctx = ctx.clone();
@@ -2645,6 +2662,7 @@ mod tests {
 
     #[tokio::test]
     async fn finish_dispose_refuses_while_driver_loop_active() {
+        let _lock = gc_test_lock().await;
         use crate::driver::{ensure_driver, DriverJob};
         use std::sync::atomic::Ordering;
 
@@ -2695,6 +2713,7 @@ mod tests {
 
     #[tokio::test]
     async fn closing_env_rejects_create_async_work() {
+        let _lock = gc_test_lock().await;
         let rt = AsyncRuntime::new().unwrap();
         let ctx = AsyncContext::full(&rt).await.unwrap();
         ctx.with(|ctx| {
@@ -2733,6 +2752,7 @@ mod tests {
 
     #[tokio::test]
     async fn closing_env_rejects_queue_async_work() {
+        let _lock = gc_test_lock().await;
         let rt = AsyncRuntime::new().unwrap();
         let ctx = AsyncContext::full(&rt).await.unwrap();
         ctx.with(|ctx| {
@@ -2781,6 +2801,7 @@ mod tests {
 
     #[tokio::test]
     async fn closing_env_rejects_create_threadsafe_function() {
+        let _lock = gc_test_lock().await;
         use std::os::raw::c_void;
 
         unsafe extern "C" fn tsfn_call_js(
@@ -2831,6 +2852,7 @@ mod tests {
 
     #[tokio::test]
     async fn active_env_async_work_and_tsfn_still_ok() {
+        let _lock = gc_test_lock().await;
         use std::os::raw::c_void;
 
         unsafe extern "C" fn tsfn_call_js(
@@ -2908,6 +2930,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn finish_dispose_leaves_no_env_js_roots() {
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        ctx.with(|ctx| {
+            let raw = ctx.as_raw();
+            let mut env = Env::new(raw);
+            env.scopes.open();
+            let obj = unsafe { qjs::JS_NewObject(raw.as_ptr()) };
+            let reference = env
+                .refs
+                .create(raw.as_ptr(), obj, 1, env.as_napi_env(), false);
+            assert!(!reference.is_null());
+            unsafe {
+                qjs::JS_FreeValue(raw.as_ptr(), obj);
+            }
+            env.begin_dispose();
+            assert!(env.try_finish_dispose().is_ok());
+            assert_eq!(env.refs.len(), 0);
+            let counts = env.scopes.counts();
+            assert_eq!(counts.scopes, 0);
+            assert_eq!(counts.values, 0);
+            assert_eq!(counts.handles, 0);
+            assert_eq!(env.wraps.len(), 0);
+        })
+        .await;
+    }
+
+    #[tokio::test]
     async fn begin_dispose_is_idempotent() {
         let rt = AsyncRuntime::new().unwrap();
         let ctx = AsyncContext::full(&rt).await.unwrap();
@@ -2927,6 +2977,7 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_all_errors_on_residual_registry() {
+        let _lock = gc_test_lock().await;
         use std::ptr::NonNull;
 
         assert!(crate::dlopen::shutdown_all().is_ok());

@@ -22,6 +22,26 @@ const POSTGRES_DOCKER_HOST = "127.0.0.1";
 const POSTGRES_HEALTH_TIMEOUT_MS = 120_000;
 const POSTGRES_DOCKER_RUN_TIMEOUT_MS = 180_000;
 
+const TEARDOWN_GUARD =
+  /RASTER_QJS_GC_DIAGNOSTICS: residual|Assertion failed|SIGABRT|SIGSEGV|shutdown incomplete|driver has not finished|retained JS owners/i;
+
+const BETTER_SQLITE3_SCENARIOS = [
+  "addon-only",
+  "create-db",
+  "create-db-loop",
+  "exec",
+  "explicit-close",
+  "prepare",
+];
+
+function positiveLoopCount(name, fallback) {
+  const value = Number.parseInt(process.env[name] ?? String(fallback), 10);
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return value;
+}
+
 const [name, rasterPath] = process.argv.slice(2);
 const root = process.cwd();
 const cases = {
@@ -42,8 +62,20 @@ const cases = {
   },
   "better-sqlite3": {
     directory: "compat/better-sqlite3",
-    script: "test.cjs",
-    successMarker: "better-sqlite3 compat OK",
+    scripts: [
+      {
+        script: "test.cjs",
+        successMarker: "better-sqlite3 compat OK",
+      },
+      ...BETTER_SQLITE3_SCENARIOS.map((scenario) => ({
+        script: "isolation.mjs",
+        env: {
+          COMPAT_SCENARIO: scenario,
+        },
+        successMarker: `better-sqlite3 isolation OK: ${scenario}`,
+        skipNodeBaseline: true,
+      })),
+    ],
   },
   mysql2: {
     directory: "compat/mysql2",
@@ -165,7 +197,7 @@ async function runVitePlusBuild(testCase, directory, raster, logPath, root) {
   }
   const versionOut = `${versionResult.stdout}\n${versionResult.stderr}`;
   const INVALID_TEARDOWN =
-    /abort|Assertion|JS_CONTEXT|gc_obj_list|shutdown incomplete|driver has not finished|leaking env/i;
+    /SIGABRT|Assertion failed|JS_CONTEXT|gc_obj_list|shutdown incomplete|driver has not finished|leaking env/i;
   if (INVALID_TEARDOWN.test(versionOut)) {
     await fs.writeFile(logPath, logParts.join("\n"));
     throw new Error(
@@ -350,7 +382,7 @@ async function runVitePlusBuild(testCase, directory, raster, logPath, root) {
 async function runNodeSqliteCompat(testCase, directory, raster, logPath, root) {
   const logParts = [];
   const INVALID_TEARDOWN =
-    /abort|Assertion|JS_CONTEXT|gc_obj_list|shutdown incomplete|driver has not finished|leaking env|double free|pending backup/i;
+    /RASTER_QJS_GC_DIAGNOSTICS: residual|RASTER_QJS_CONTEXT_REFS|Assertion failed|SIGABRT|SIGSEGV|shutdown incomplete|driver has not finished|leaking env|double free|pending backup|retained JS owners/i;
 
   try {
     await assertRasterExecutable(raster, logParts);
@@ -618,16 +650,35 @@ async function runScriptCompat(testCase, directory, raster, logPath, root) {
       },
     ];
 
-    for (const spec of scripts) {
-      await runCompatScript(
-        spec,
-        directory,
-        raster,
-        logParts,
-        root,
-        logPath,
-        childEnv
-      );
+    const loopCount =
+      name === "better-sqlite3"
+        ? positiveLoopCount("COMPAT_BETTER_SQLITE3_LOOPS", 1)
+        : 1;
+
+    for (let loop = 0; loop < loopCount; loop++) {
+      if (loopCount > 1) {
+        logParts.push(`\n# better-sqlite3 stability loop ${loop + 1}/${loopCount}`);
+        console.log(`[compat-${name}] stability loop ${loop + 1}/${loopCount}`);
+      }
+      for (const spec of scripts) {
+        const specWithGuard =
+          name === "better-sqlite3"
+            ? {
+                ...spec,
+                mustNotContainStdout:
+                  spec.mustNotContainStdout ?? TEARDOWN_GUARD,
+              }
+            : spec;
+        await runCompatScript(
+          specWithGuard,
+          directory,
+          raster,
+          logParts,
+          root,
+          logPath,
+          childEnv
+        );
+      }
     }
 
     const compatMode =
@@ -654,15 +705,25 @@ async function runCompatScript(
 ) {
   const {
     script,
+    args = [],
+    env: specEnv = {},
     successMarker,
     maxDurationMs = SCRIPT_TIMEOUT_MS,
     expectCode = 0,
     mustNotContainStdout,
     expectStillRunning,
     allowRasterFailure = false,
+    skipNodeBaseline: specSkipNodeBaseline = false,
   } = spec;
   const label = `${name}/${script}`;
-  const skipNodeBaseline = process.env.COMPAT_SKIP_NODE_BASELINE === "1";
+  const skipNodeBaseline =
+    process.env.COMPAT_SKIP_NODE_BASELINE === "1" || specSkipNodeBaseline;
+  const childEnv = {
+    ...env,
+    ...specEnv,
+  };
+  const stdioModes =
+    name === "better-sqlite3" ? ["pipe", "redirect"] : ["pipe"];
 
   if (expectStillRunning) {
     const { checkMs = 400, killAfterMs = 1_500 } = expectStillRunning;
@@ -703,8 +764,8 @@ async function runCompatScript(
 
     const nodeResult = await spawnCompatChild(
       process.execPath,
-      [script],
-      { cwd: directory, env },
+      [script, ...args],
+      { cwd: directory, env: childEnv },
       Math.min(NODE_BASELINE_TIMEOUT_MS, maxDurationMs),
       logParts
     );
@@ -725,43 +786,62 @@ async function runCompatScript(
     }
   }
 
-  const rasterCmd = `${raster} ${script}`;
-  logParts.push(`\n# Raster run: ${script}\n$ ${rasterCmd}`);
-  console.log(`[compat-${label}] Raster run: ${rasterCmd}`);
+  for (const stdioMode of stdioModes) {
+    const rasterCmd = `${raster} ${script}${args.length ? ` ${args.join(" ")}` : ""}`;
+    logParts.push(`\n# Raster run (${stdioMode}): ${script}\n$ ${rasterCmd}`);
+    console.log(`[compat-${label}] Raster run (${stdioMode}): ${rasterCmd}`);
 
-  const rasterResult = await spawnCompatChild(
-    raster,
-    [script],
-    { cwd: directory, env },
-    maxDurationMs,
-    logParts
-  );
+    const rasterResult =
+      stdioMode === "redirect"
+        ? await spawnRedirected(
+            raster,
+            [script, ...args],
+            { cwd: directory, env: childEnv },
+            maxDurationMs
+          )
+        : await spawnCompatChild(
+            raster,
+            [script, ...args],
+            { cwd: directory, env: childEnv },
+            maxDurationMs,
+            logParts
+          );
 
-  let rasterPassed = true;
+    let rasterPassed = true;
 
-  try {
-    validateCompatRun(label, "Raster run", rasterResult, {
-      maxDurationMs,
-      expectCode,
-      successMarker,
-      mustNotContainStdout,
-      logPath,
-      root,
-      logParts,
-      rasterNotStarted: false,
-    });
-  } catch (error) {
-    if (!allowRasterFailure) {
-      throw error;
+    try {
+      validateCompatRun(
+        `${label}/${stdioMode}`,
+        "Raster run",
+        rasterResult,
+        {
+          maxDurationMs,
+          expectCode,
+          successMarker,
+          mustNotContainStdout,
+          logPath,
+          root,
+          logParts,
+          rasterNotStarted: false,
+        }
+      );
+    } catch (error) {
+      if (!allowRasterFailure) {
+        throw error;
+      }
+
+      rasterPassed = false;
+      const message = formatSpawnError(error);
+      logParts.push(`\n# Non-blocking Raster probe failure\n${message}`);
+      emitGitHubWarning(`${label}/${stdioMode}: ${message}`);
     }
 
-    rasterPassed = false;
-    const message = formatSpawnError(error);
-    logParts.push(`\n# Non-blocking Raster probe failure\n${message}`);
-    emitGitHubWarning(`${label}: ${message}`);
+    if (!rasterPassed) {
+      return { rasterPassed };
+    }
   }
 
-  return { rasterPassed };
+  return { rasterPassed: true };
 }
 
 function validateCompatRun(
@@ -814,7 +894,7 @@ function validateCompatRun(
   }
 
   if (mustNotContainStdout) {
-    const haystack = result.stderr;
+    const haystack = `${result.stdout}\n${result.stderr}`;
     const blocked =
       typeof mustNotContainStdout === "string"
         ? haystack.includes(mustNotContainStdout)
@@ -1774,6 +1854,8 @@ async function runNextStandalone(directory, raster, logPath, root) {
   let serverExit = null;
   let stdout = "";
   let stderr = "";
+  let healthResults = [];
+  let teardownFailure = null;
 
   try {
     server = spawn(raster, [serverEntry], {
@@ -2000,9 +2082,75 @@ async function runNextStandalone(directory, raster, logPath, root) {
       );
     }
 
+    const healthLoops = positiveLoopCount("COMPAT_NEXT_HEALTH_LOOPS", 20);
+    for (let i = 0; i < healthLoops; i++) {
+      if (serverExit) {
+        failures.push(`health loop ${i + 1}: skipped (Raster already exited)`);
+        healthResults.push({
+          loop: i + 1,
+          skipped: true,
+          reason: `Raster exited ${formatExit(serverExit)}`,
+        });
+        break;
+      }
+      try {
+        const signal = AbortSignal.timeout(HTTP_CHECK_TIMEOUT_MS);
+        const res = await fetch(`${baseUrl}/api/health`, { signal });
+        const body = await res.text();
+        healthResults.push({ loop: i + 1, status: res.status, body });
+        if (res.status !== 200) {
+          failures.push(
+            `health loop ${i + 1}: expected status 200, got ${res.status}`
+          );
+          break;
+        }
+        let json;
+        try {
+          json = JSON.parse(body);
+        } catch {
+          failures.push(`health loop ${i + 1}: invalid JSON`);
+          break;
+        }
+        if (json?.status !== "ok") {
+          failures.push(
+            `health loop ${i + 1}: expected { "status": "ok" }, got ${JSON.stringify(json)}`
+          );
+          break;
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        healthResults.push({ loop: i + 1, error: msg });
+        failures.push(`health loop ${i + 1}: request failed: ${msg}`);
+        break;
+      }
+    }
+
+    logParts.push(
+      `\n# Health probe results (${healthResults.length}/${healthLoops})\n` +
+        healthResults
+          .map((entry) => {
+            if (entry.skipped) {
+              return `loop ${entry.loop}: skipped (${entry.reason})`;
+            }
+            if (entry.error) {
+              return `loop ${entry.loop}: error ${entry.error}`;
+            }
+            return `loop ${entry.loop}: status ${entry.status} body ${entry.body}`;
+          })
+          .join("\n")
+    );
+    await writeLog(logPath, logParts);
+
+    if (failures.length > 0) {
+      throw new Error(
+        `Next standalone runtime checks failed:\n  - ${failures.join("\n  - ")}\n` +
+          `See ${path.relative(root, logPath)} for full diagnostics.`
+      );
+    }
+
     console.log(
       "next compatibility standalone runtime passed " +
-        "(Node build + Raster run; HTTP / /api/health /posts/42 + concurrent ALS OK)"
+        `(Node build + Raster run; HTTP / /api/health /posts/42 + concurrent ALS + ${healthLoops}x health OK)`
     );
   } finally {
     if (server) {
@@ -2010,12 +2158,23 @@ async function runNextStandalone(directory, raster, logPath, root) {
       logParts.push(
         `\n# Server cleanup\nsent SIGTERM then SIGKILL if needed; final exit: ${formatExit(serverExit)}`
       );
+      const output = `${stdout}\n${stderr}`;
+      if (TEARDOWN_GUARD.test(output)) {
+        teardownFailure = new Error(
+          `Next standalone teardown output contains abort/assert residual. ` +
+            `See ${path.relative(root, logPath)}.`
+        );
+      }
       try {
         await writeLog(logPath, logParts);
       } catch {
         // ignore secondary log write failures during cleanup
       }
     }
+  }
+
+  if (teardownFailure) {
+    throw teardownFailure;
   }
 }
 
@@ -2066,15 +2225,57 @@ function spawnStillRunning(command, args, options, checkMs, killAfterMs) {
 }
 
 /**
+ * Spawn with stdout/stderr redirected to temp files (not shell pipes).
+ */
+async function spawnRedirected(command, args, options, timeoutMs) {
+  const stdoutPath = path.join(
+    os.tmpdir(),
+    `raster-stdout-${process.pid}-${Date.now()}.log`
+  );
+  const stderrPath = path.join(
+    os.tmpdir(),
+    `raster-stderr-${process.pid}-${Date.now()}.log`
+  );
+
+  const stdout = fsSync.openSync(stdoutPath, "w");
+  const stderr = fsSync.openSync(stderrPath, "w");
+
+  try {
+    const result = await spawnCollect(
+      command,
+      args,
+      {
+        ...options,
+        stdio: ["ignore", stdout, stderr],
+      },
+      timeoutMs
+    );
+
+    return {
+      ...result,
+      stdout: await fs.readFile(stdoutPath, "utf8"),
+      stderr: await fs.readFile(stderrPath, "utf8"),
+    };
+  } finally {
+    fsSync.closeSync(stdout);
+    fsSync.closeSync(stderr);
+    await fs.rm(stdoutPath, { force: true });
+    await fs.rm(stderrPath, { force: true });
+  }
+}
+
+/**
  * Spawn a process, collect stdout/stderr, optionally enforce a wall-clock timeout.
  * On timeout: SIGTERM, then SIGKILL after a short grace period.
  * Returns { code, signal, stdout, stderr, timedOut }.
  */
 function spawnCollect(command, args, options, timeoutMs = 0) {
   return new Promise((resolve, reject) => {
+    const stdio = options.stdio ?? ["ignore", "pipe", "pipe"];
+
     const child = spawn(command, args, {
       ...options,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio,
     });
     let stdout = "";
     let stderr = "";
@@ -2090,8 +2291,12 @@ function spawnCollect(command, args, options, timeoutMs = 0) {
       resolve({ code, signal, stdout, stderr, timedOut });
     };
 
-    child.stdout.on("data", (chunk) => (stdout += chunk));
-    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.stdout?.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderr += chunk;
+    });
     child.on("error", (err) => {
       if (settled) return;
       settled = true;

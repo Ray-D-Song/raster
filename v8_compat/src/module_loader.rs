@@ -139,6 +139,7 @@ extern "C" {
     fn raster_v8_open_handle_scope(ctx: *mut ContextState);
     fn raster_v8_close_handle_scope(ctx: *mut ContextState);
     fn raster_v8_set_context_root_id(ctx: *mut ContextState, root_id: u64);
+    fn raster_v8_set_context_quickjs_key(ctx: *mut ContextState, key: usize);
     fn raster_v8_run_module_init(
         ctx: *mut ContextState,
         module: *mut NodeModule,
@@ -176,6 +177,7 @@ pub fn ensure_context_for_ctx(ctx: *mut JSContext) -> *mut ContextState {
     let key = ctx as usize;
     let mut guard = contexts().lock();
     if let Some(record) = guard.get(&key) {
+        unsafe { raster_v8_set_context_quickjs_key(record.state_ptr as *mut ContextState, key) };
         return record.state_ptr as *mut ContextState;
     }
     let state = unsafe { raster_v8_create_context() };
@@ -188,6 +190,7 @@ pub fn ensure_context_for_ctx(ctx: *mut JSContext) -> *mut ContextState {
         root
     });
     let _ = context_root;
+    unsafe { raster_v8_set_context_quickjs_key(state, key) };
     guard.insert(
         key,
         ContextRecord {
@@ -217,20 +220,68 @@ pub fn context_state_ptr_for_ctx(ctx: *mut JSContext) -> Option<usize> {
         .map(|record| record.state_ptr)
 }
 
+pub fn contexts_for_runtime(rt: *mut qjs::JSRuntime) -> usize {
+    let rt_key = rt as usize;
+    contexts()
+        .lock()
+        .values()
+        .filter(|record| record.runtime_key == rt_key)
+        .count()
+}
+
 /// Tear down V8 bridge state, side tables, and ContextState for one QuickJS context.
 ///
 /// # Safety
 ///
 /// `ctx` must be a valid `JSContext` pointer for the current thread that was
 /// wired through the V8 compat bridge, and must only be destroyed once.
-pub unsafe fn shutdown_context(ctx: *mut JSContext) {
-    unsafe { crate::bridge::shutdown_bridge_for_context(ctx) };
+pub unsafe fn shutdown_context(ctx: *mut JSContext) -> Result<(), String> {
+    unsafe { crate::bridge::shutdown_bridge_for_context(ctx)? };
     let ctx_key = ctx as usize;
     if let Some(record) = contexts().lock().remove(&ctx_key) {
         unsafe {
             raster_v8_destroy_context(record.state_ptr as *mut ContextState);
         }
         crate::runtime_state::forget_context(record.state_ptr);
+    }
+    if crate::bridge::has_bridge_for_ctx(ctx) {
+        return Err(format!(
+            "v8 shutdown_context: bridge state remains for ctx {ctx_key:#x}"
+        ));
+    }
+    Ok(())
+}
+
+/// Tear down V8/N-API environment for one QuickJS context before `AsyncContext` drop.
+///
+/// # Safety
+///
+/// `ctx` must be a valid wired context on the current thread.
+pub unsafe fn shutdown_environment(ctx: *mut JSContext) -> Result<(), String> {
+    shutdown_context(ctx)
+}
+
+/// GC passes with weak-callback dispatch while the V8 bridge is still wired.
+///
+/// Run after module teardown (e.g. `JS_FreeAllModules`) so ObjectWrap weak
+/// callbacks can delete native wrappers once JS references are gone.
+///
+/// # Safety
+///
+/// `ctx` must be a valid wired context on the current thread.
+pub unsafe fn run_pre_bridge_teardown_gc(ctx: *mut JSContext) {
+    crate::js_ops::force_invoke_registered_weak_callbacks(ctx);
+
+    let rt = unsafe { qjs::JS_GetRuntime(ctx) };
+
+    for _ in 0..16 {
+        unsafe {
+            qjs::JS_RunGC(rt);
+        }
+        crate::bridge::with_state_for_ctx_if(ctx, |state| {
+            state.drain_weak_holds(ctx);
+        });
+        crate::js_ops::dispatch_pending_weak_callbacks_for_ctx(ctx);
     }
 }
 
@@ -240,7 +291,7 @@ pub unsafe fn shutdown_context(ctx: *mut JSContext) {
 ///
 /// `rt` must be a valid `JSRuntime` pointer for the current thread and must not
 /// have begun `JS_FreeRuntime`.
-pub unsafe fn shutdown_runtime(rt: *mut qjs::JSRuntime) {
+pub unsafe fn shutdown_runtime(rt: *mut qjs::JSRuntime) -> Result<(), String> {
     let rt_key = rt as usize;
 
     let stale_contexts: Vec<usize> = contexts()
@@ -256,7 +307,7 @@ pub unsafe fn shutdown_runtime(rt: *mut qjs::JSRuntime) {
         .collect();
 
     for ctx_key in stale_contexts {
-        unsafe { shutdown_context(ctx_key as *mut JSContext) };
+        unsafe { shutdown_context(ctx_key as *mut JSContext)? };
     }
 
     for _ in 0..5 {
@@ -270,6 +321,28 @@ pub unsafe fn shutdown_runtime(rt: *mut qjs::JSRuntime) {
     }
 
     crate::js_ops::clear_runtime_v8_object_class(rt);
+
+    let remaining_contexts = contexts_for_runtime(rt);
+    if remaining_contexts != 0 {
+        return Err(format!(
+            "v8 shutdown_runtime: {remaining_contexts} context(s) remain for runtime {rt_key:#x}"
+        ));
+    }
+    let remaining_roots = crate::bridge::residual_root_count_for_runtime(rt);
+    if remaining_roots != 0 {
+        return Err(format!(
+            "v8 shutdown_runtime: {remaining_roots} bridge root(s) remain for runtime {rt_key:#x}"
+        ));
+    }
+    Ok(())
+}
+
+/// # Safety
+///
+/// `rt_addr` must be the address of a live QuickJS runtime returned from
+/// [`capture_v8_runtime_and_shutdown_context`] after its context has been shut down.
+pub unsafe fn shutdown_runtime_addr(rt_addr: usize) -> Result<(), String> {
+    shutdown_runtime(rt_addr as *mut qjs::JSRuntime)
 }
 
 pub fn drain_pending_v8_modules() -> Vec<*mut NodeModule> {

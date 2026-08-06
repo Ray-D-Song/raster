@@ -1,5 +1,7 @@
 #include "accessor_registry.h"
 
+#include "registry_ownership.h"
+
 namespace raster_v8 {
 
 AccessorRegistry& AccessorRegistry::instance() {
@@ -12,6 +14,8 @@ uint32_t AccessorRegistry::register_accessor(v8::AccessorNameGetterCallback gett
   std::lock_guard<std::mutex> lock(mutex_);
   uint32_t id = next_accessor_id_++;
   accessors_[id] = AccessorRecord{getter, data_root_id};
+  RegistryOwnership::instance().track(
+      current_quickjs_context_key(), RegistryKind::Accessor, id);
   return id;
 }
 
@@ -22,6 +26,11 @@ AccessorRecord* AccessorRegistry::accessor_at(uint32_t id) {
     return nullptr;
   }
   return &it->second;
+}
+
+void AccessorRegistry::erase_accessor(uint32_t id) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  accessors_.erase(id);
 }
 
 }  // namespace raster_v8

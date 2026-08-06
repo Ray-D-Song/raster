@@ -1,6 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::ffi::CString;
+use std::ffi::{c_char, CString};
 use std::ptr;
 use std::rc::Rc;
 
@@ -114,7 +114,7 @@ impl<'js> StatementInner<'js> {
         for value in args.iter().skip(anon_start) {
             while {
                 let name = unsafe { ffi::sqlite3_bind_parameter_name(stmt, anon_idx) };
-                !(name.is_null() || unsafe { *name } == b'?' as i8)
+                !(name.is_null() || unsafe { *name } == b'?' as c_char)
             } {
                 anon_idx += 1;
             }
@@ -571,7 +571,7 @@ fn iterator_result_with_value<'js>(
     Ok(obj)
 }
 
-fn optional_sqlite_str<'js>(ctx: &Ctx<'js>, ptr: *const i8) -> Result<Value<'js>> {
+fn optional_sqlite_str<'js>(ctx: &Ctx<'js>, ptr: *const c_char) -> Result<Value<'js>> {
     if ptr.is_null() {
         return Ok(Value::new_null(ctx.clone()));
     }

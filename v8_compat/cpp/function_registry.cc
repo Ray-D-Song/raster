@@ -1,4 +1,5 @@
 #include "function_registry.h"
+#include "registry_ownership.h"
 #include "template_registry.h"
 
 namespace raster_v8 {
@@ -21,6 +22,8 @@ uint32_t FunctionRegistry::register_function(uint32_t template_id) {
   std::lock_guard<std::mutex> lock(mutex_);
   uint32_t id = next_function_id_++;
   functions_[id] = FunctionRecord{template_id};
+  RegistryOwnership::instance().track(
+      current_quickjs_context_key(), RegistryKind::Function, id);
   return id;
 }
 
@@ -31,6 +34,11 @@ FunctionRecord* FunctionRegistry::function_at(uint32_t id) {
     return nullptr;
   }
   return &it->second;
+}
+
+void FunctionRegistry::erase_function(uint32_t id) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  functions_.erase(id);
 }
 
 }  // namespace raster_v8

@@ -59,7 +59,11 @@ uintptr_t* GlobalizeReference(internal::Isolate* i_isolate, uintptr_t address) {
     isolate->layout_to_function_id[reinterpret_cast<uintptr_t>(persistent)] = persistent->function_id;
   }
   auto* cell = new uintptr_t(reinterpret_cast<uintptr_t>(persistent));
-  isolate->persistents[cell] = raster_v8::PersistentSlot{root_id, false};
+  uintptr_t ctx_key = reinterpret_cast<uintptr_t>(raster_v8::bridge_ctx());
+  if (auto* ctx = raster_v8::bridge_ctx()) {
+    ctx_key = raster_v8::ctx_impl(ctx)->quickjs_context_key;
+  }
+  isolate->persistents[cell] = raster_v8::PersistentSlot{root_id, false, 0, ctx_key};
   raster_v8::g_last_materialized_layout = nullptr;
   return cell;
 }
@@ -155,6 +159,34 @@ void* ClearWeak(internal::Address* location) {
 
 }  // namespace api_internal
 }  // namespace v8
+
+extern "C" void raster_v8_persistent_counts_for_context(void* isolate,
+                                                        uintptr_t context_key,
+                                                        size_t* strong_out,
+                                                        size_t* weak_out) {
+  raster_v8::persistent_counts_for_context(raster_v8::iso_impl(
+                                               reinterpret_cast<RasterV8IsolateState*>(isolate)),
+                                           context_key,
+                                           strong_out,
+                                           weak_out);
+}
+
+extern "C" size_t raster_v8_dispose_strong_context_persistents(void* isolate,
+                                                               uintptr_t context_key) {
+  return raster_v8::dispose_strong_context_persistents(
+      raster_v8::iso_impl(reinterpret_cast<RasterV8IsolateState*>(isolate)), context_key);
+}
+
+extern "C" size_t raster_v8_dispose_weak_context_persistents(void* isolate,
+                                                             uintptr_t context_key) {
+  return raster_v8::dispose_weak_context_persistents(
+      raster_v8::iso_impl(reinterpret_cast<RasterV8IsolateState*>(isolate)), context_key);
+}
+
+extern "C" void raster_v8_dispose_context_persistents(void* isolate, uintptr_t context_key) {
+  raster_v8::dispose_context_persistents(raster_v8::iso_impl(reinterpret_cast<RasterV8IsolateState*>(isolate)),
+                                         context_key);
+}
 
 extern "C" void raster_v8_dispose_all_persistents(void) {
   auto* isolate = current_iso_impl();

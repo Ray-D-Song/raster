@@ -56,6 +56,14 @@ pub fn remove_context_tables(ctx: *mut JSContext) {
     TABLES.lock().remove(&ctx_key(ctx));
 }
 
+pub fn weak_table_counts(ctx: *mut JSContext) -> (usize, usize) {
+    TABLES
+        .lock()
+        .get(&ctx_key(ctx))
+        .map(|tables| (tables.weak_callbacks.len(), tables.pending_weak.len()))
+        .unwrap_or((0, 0))
+}
+
 pub fn clear_context_tables(ctx: *mut JSContext) {
     if let Some(entry) = TABLES.lock().get_mut(&ctx_key(ctx)) {
         *entry = ContextJsTables::default();

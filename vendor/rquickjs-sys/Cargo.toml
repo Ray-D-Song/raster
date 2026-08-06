@@ -12,7 +12,7 @@
 [package]
 edition = "2021"
 name = "rquickjs-sys"
-version = "0.12.1"
+version = "0.12.2"
 authors = ["Mees Delzenne <mees.delzenne@gmail.com>"]
 build = "build.rs"
 autolib = false

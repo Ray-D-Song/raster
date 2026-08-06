@@ -12,7 +12,7 @@ use rquickjs::{
     module::{Declarations, Exports, ModuleDef},
     object::Accessor,
     prelude::Func,
-    Ctx, Error, Exception, Function, JsLifetime, Module, Object, Result, Value,
+    qjs, Ctx, Error, Exception, Function, JsLifetime, Module, Object, Result, Value,
 };
 
 mod current_module;
@@ -259,6 +259,150 @@ impl From<ModuleModule> for ModuleInfo<ModuleModule> {
             module: val,
         }
     }
+}
+
+/// Tear down module-related context userdata before V8/context shutdown.
+///
+/// Clears JS `require.cache` and removes Rust userdata holding `Value`/`Object`/`Module`
+/// references so QuickJS GC does not retain `JS_CONTEXT` roots after drop.
+pub fn shutdown_context_state<'js>(ctx: &Ctx<'js>) -> Result<()> {
+    // Drop ESM module environments (and their locals like `db`) before tearing down
+    // the CJS require graph that native addons may still reference.
+    unsafe {
+        extern "C" {
+            fn JS_FreeAllModules(ctx: *mut qjs::JSContext);
+        }
+        JS_FreeAllModules(ctx.as_raw().as_ptr());
+    }
+    {
+        let rt = unsafe { qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+        for _ in 0..4 {
+            ctx.run_gc();
+            unsafe {
+                qjs::JS_RunGC(rt);
+            }
+        }
+    }
+
+    let _: usize = ctx.eval(
+        r#"
+        (() => {
+            try {
+                const req = globalThis.require;
+                if (req?.cache) {
+                    for (const key of Object.keys(req.cache)) {
+                        const entry = req.cache[key];
+                        if (entry?.exports) {
+                            for (const exportKey of Object.keys(entry.exports)) {
+                                try {
+                                    entry.exports[exportKey] = undefined;
+                                } catch (_err) {
+                                    // ignore non-configurable export properties
+                                }
+                            }
+                            entry.exports = null;
+                        }
+                        if (entry) {
+                            try {
+                                entry.children = [];
+                            } catch (_err) {
+                                // ignore read-only children
+                            }
+                            try {
+                                entry.parent = null;
+                            } catch (_err) {
+                                // ignore read-only parent
+                            }
+                        }
+                        delete req.cache[key];
+                    }
+                }
+                if (req?.extensions) {
+                    for (const key of Object.keys(req.extensions)) {
+                        delete req.extensions[key];
+                    }
+                }
+                globalThis.require = undefined;
+                globalThis.module = undefined;
+                globalThis.exports = undefined;
+            } catch (_err) {
+                // Best-effort: require may already be torn down during N-API shutdown.
+            }
+            return 0;
+        })()
+        "#,
+    )?;
+
+    if let Some(binding) = ctx.userdata::<RefCell<RequireState>>() {
+        let mut state = binding.borrow_mut();
+        state.cache.clear();
+        state.exports.clear();
+        state.progress.clear();
+        state.current_module = None;
+    }
+
+    if let Some(binding) = ctx.userdata::<RefCell<ModuleCache>>() {
+        binding.borrow_mut().esm.clear();
+    }
+
+    if let Some(binding) = ctx.userdata::<RefCell<ModuleHookState>>() {
+        binding.borrow_mut().hooks.clear();
+    }
+
+    unsafe {
+        extern "C" {
+            fn JS_ReleaseContextClassProtos(ctx: *mut qjs::JSContext);
+            fn JS_FreeAllModules(ctx: *mut qjs::JSContext);
+        }
+        JS_FreeAllModules(ctx.as_raw().as_ptr());
+        JS_ReleaseContextClassProtos(ctx.as_raw().as_ptr());
+    }
+    {
+        let rt = unsafe { qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+        for _ in 0..8 {
+            ctx.run_gc();
+            unsafe {
+                qjs::JS_RunGC(rt);
+            }
+        }
+    }
+
+    if ctx.userdata::<RefCell<RequireState>>().is_some() {
+        ctx.remove_userdata::<RefCell<RequireState>>()
+            .map_err(|_| Error::Unknown)?;
+        if ctx.userdata::<RefCell<RequireState>>().is_some() {
+            return Err(Error::Unknown);
+        }
+    }
+    if ctx.userdata::<RefCell<ModuleCache>>().is_some() {
+        ctx.remove_userdata::<RefCell<ModuleCache>>()
+            .map_err(|_| Error::Unknown)?;
+        if ctx.userdata::<RefCell<ModuleCache>>().is_some() {
+            return Err(Error::Unknown);
+        }
+    }
+    if ctx.userdata::<RefCell<ModuleHookState>>().is_some() {
+        ctx.remove_userdata::<RefCell<ModuleHookState>>()
+            .map_err(|_| Error::Unknown)?;
+        if ctx.userdata::<RefCell<ModuleHookState>>().is_some() {
+            return Err(Error::Unknown);
+        }
+    }
+    if ctx
+        .userdata::<RefCell<facade::ModuleFacadeState>>()
+        .is_some()
+    {
+        ctx.remove_userdata::<RefCell<facade::ModuleFacadeState>>()
+            .map_err(|_| Error::Unknown)?;
+        if ctx
+            .userdata::<RefCell<facade::ModuleFacadeState>>()
+            .is_some()
+        {
+            return Err(Error::Unknown);
+        }
+    }
+
+    Ok(())
 }
 
 pub fn init(ctx: &Ctx) -> Result<()> {

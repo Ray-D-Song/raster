@@ -19,6 +19,7 @@ class AccessorRegistry {
 
   uint32_t register_accessor(v8::AccessorNameGetterCallback getter, uint64_t data_root_id);
   AccessorRecord* accessor_at(uint32_t id);
+  void erase_accessor(uint32_t id);
 
  private:
   std::mutex mutex_;

@@ -23,6 +23,7 @@ class FunctionRegistry {
 
   uint32_t register_function(uint32_t template_id);
   FunctionRecord* function_at(uint32_t id);
+  void erase_function(uint32_t id);
 
  private:
   std::mutex mutex_;

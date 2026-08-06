@@ -91,6 +91,14 @@ impl RefTable {
         }
     }
 
+    pub fn len(&self) -> usize {
+        self.live.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.live.is_empty()
+    }
+
     pub unsafe fn delete(&mut self, ctx: *mut JSContext, reference: napi_ref) -> napi_status {
         if reference.is_null() {
             return napi_status::napi_invalid_arg;

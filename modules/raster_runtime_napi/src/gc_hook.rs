@@ -172,6 +172,13 @@ pub fn has_pending_finalizers() -> bool {
     !GC_STATE.lock().pending.is_empty()
 }
 
+/// Drop queued finalizer ids that no longer have registry entries.
+pub fn compact_stale_pending() {
+    let mut state = GC_STATE.lock();
+    let live: std::collections::HashSet<usize> = state.entries.keys().copied().collect();
+    state.pending.retain(|id| live.contains(id));
+}
+
 pub fn register_gc_entry(
     kind: GcEntryKind,
     data: *mut c_void,

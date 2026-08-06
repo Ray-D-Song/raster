@@ -57,6 +57,7 @@ struct PersistentSlot {
   uint64_t root_id = 0;
   bool is_weak = false;
   uintptr_t weak_object_ptr = 0;
+  uintptr_t context_key = 0;
 };
 
 // Layout-compatible fake v8::Isolate for Node 24 / ABI 137.
@@ -99,6 +100,7 @@ struct ContextImpl {
   uint64_t context_root_id = 0;
   uint64_t oddball_roots[abi137::kRootSlotCount] {};
   std::unordered_map<uintptr_t, uint64_t> repr_to_root;
+  uintptr_t quickjs_context_key = 0;
 };
 
 std::vector<node::node_module*>& pending_v8_modules();
@@ -124,6 +126,17 @@ void init_isolate_roots(IsolateImpl* isolate);
 int oddball_root_index(IsolateImpl* isolate, const shim::ObjectLayout* layout);
 HandleScopeData* handle_scope_data(IsolateImpl* isolate);
 void dispose_isolate_persistents(IsolateImpl* isolate);
+void dispose_context_persistents(IsolateImpl* isolate, uintptr_t context_key);
+void persistent_counts_for_context(IsolateImpl* isolate,
+                                   uintptr_t context_key,
+                                   size_t* strong_out,
+                                   size_t* weak_out);
+/// Drops only strong (non-weak, root_id != 0) persistents for `context_key`.
+/// Returns the number of weak persistents still registered for that context.
+size_t dispose_strong_context_persistents(IsolateImpl* isolate, uintptr_t context_key);
+
+/// Removes weak persistent cells for `context_key` after shutdown-time weak dispatch.
+size_t dispose_weak_context_persistents(IsolateImpl* isolate, uintptr_t context_key);
 
 RasterV8Status dispatch_v8_callback(uint32_t function_id,
                                     uint64_t receiver_root,

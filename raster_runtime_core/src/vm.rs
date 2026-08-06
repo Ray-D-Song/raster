@@ -319,3 +319,78 @@ fn init(ctx: &Ctx<'_>) -> Result<()> {
 
     Ok(())
 }
+
+/// Tear down module-related JS/Rust state before V8 bridge teardown.
+pub fn shutdown_module_state<'js>(ctx: &Ctx<'js>) -> Result<()> {
+    crate::modules::module::shutdown_context_state(ctx)
+}
+
+/// Tear down non-module context userdata before V8 bridge teardown.
+pub fn shutdown_context_userdata<'js>(ctx: &Ctx<'js>) -> Result<()> {
+    if ctx.userdata::<BasePrimordials>().is_some() {
+        ctx.remove_userdata::<BasePrimordials>()
+            .map_err(|_| Error::Unknown)?;
+        if ctx.userdata::<BasePrimordials>().is_some() {
+            return Err(Error::Unknown);
+        }
+    }
+    if ctx.userdata::<RejectionTrackerCache>().is_some() {
+        ctx.remove_userdata::<RejectionTrackerCache>()
+            .map_err(|_| Error::Unknown)?;
+        if ctx.userdata::<RejectionTrackerCache>().is_some() {
+            return Err(Error::Unknown);
+        }
+    }
+    if ctx
+        .userdata::<crate::modules::module::ModuleNames>()
+        .is_some()
+    {
+        ctx.remove_userdata::<crate::modules::module::ModuleNames>()
+            .map_err(|_| Error::Unknown)?;
+        if ctx
+            .userdata::<crate::modules::module::ModuleNames>()
+            .is_some()
+        {
+            return Err(Error::Unknown);
+        }
+    }
+    if ctx
+        .userdata::<raster_runtime_hooking::AsyncTrackingState>()
+        .is_some()
+    {
+        ctx.remove_userdata::<raster_runtime_hooking::AsyncTrackingState>()
+            .map_err(|_| Error::Unknown)?;
+        if ctx
+            .userdata::<raster_runtime_hooking::AsyncTrackingState>()
+            .is_some()
+        {
+            return Err(Error::Unknown);
+        }
+    }
+
+    Ok(())
+}
+
+/// Tear down context userdata that retains `Ctx` roots before `AsyncContext` drop.
+pub fn shutdown_context<'js>(ctx: &Ctx<'js>) -> Result<()> {
+    use std::cell::RefCell;
+
+    use crate::modules::module::RequireState;
+
+    if ctx.userdata::<RefCell<RequireState>>().is_some() {
+        shutdown_module_state(ctx)?;
+    }
+
+    shutdown_context_userdata(ctx)
+}
+
+/// Final GC sweep before V8 bridge teardown (prefer [`raster_runtime_napi::shutdown_environment`]).
+pub fn run_final_context_gc<'js>(ctx: &Ctx<'js>) {
+    let rt = unsafe { rquickjs::qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+    for _ in 0..16 {
+        ctx.run_gc();
+        unsafe {
+            rquickjs::qjs::JS_RunGC(rt);
+        }
+    }
+}

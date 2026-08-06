@@ -82,6 +82,10 @@ extern "C" void raster_v8_set_context_root_id(RasterV8ContextState* ctx, uint64_
   raster_v8::ctx_impl(ctx)->context_root_id = root_id;
 }
 
+extern "C" void raster_v8_set_context_quickjs_key(RasterV8ContextState* ctx, uintptr_t key) {
+  raster_v8::ctx_impl(ctx)->quickjs_context_key = key;
+}
+
 extern "C" uint64_t raster_v8_context_root_id(RasterV8ContextState* ctx) {
   return raster_v8::ctx_impl(ctx)->context_root_id;
 }

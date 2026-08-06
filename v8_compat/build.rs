@@ -108,6 +108,9 @@ fn main() {
         "function_registry.cc",
         "accessor_registry.cc",
         "template_registry.cc",
+        "registry_ownership.cc",
+        "objectwrap_fixture.cc",
+        "template_fixture.cc",
         "v8_handle_scope.cc",
         "v8_escapable_handle_scope.cc",
         "v8_api.cc",
@@ -134,7 +137,6 @@ fn main() {
 
     let out_dir = env::var("OUT_DIR").unwrap();
     println!("cargo:OUT_DIR={out_dir}");
-    println!("cargo:rustc-link-lib=c++");
     println!("cargo:rerun-if-changed=cpp/");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=RASTER_NODE24_INCLUDE");

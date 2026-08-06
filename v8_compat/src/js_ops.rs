@@ -1081,7 +1081,7 @@ pub unsafe extern "C" fn get_creation_context(
 }
 
 pub unsafe extern "C" fn register_weak_callback(
-    _ctx: *mut crate::bridge::RasterV8ContextState,
+    ctx_state: *mut crate::bridge::RasterV8ContextState,
     object_root: u64,
     parameter: *mut c_void,
     callback: *mut c_void,
@@ -1089,11 +1089,7 @@ pub unsafe extern "C" fn register_weak_callback(
     if callback.is_null() {
         return RasterV8Status::Error;
     }
-    with_state(|state| {
-        let ctx = state.ctx_ptr();
-        let Some(obj) = state.roots.get(object_root) else {
-            return RasterV8Status::Error;
-        };
+    let register_on = |ctx: *mut qjs::JSContext, obj: JSValue| -> RasterV8Status {
         let Some(key) = object_ptr_key(obj) else {
             return RasterV8Status::Error;
         };
@@ -1108,23 +1104,62 @@ pub unsafe extern "C" fn register_weak_callback(
             );
         });
         RasterV8Status::Ok
-    })
+    };
+
+    if let Some(qjs_ctx) =
+        crate::module_loader::js_context_for_state(ctx_state as *mut crate::isolate::ContextState)
+    {
+        return crate::bridge::with_state_for_ctx(qjs_ctx, |state| {
+            let Some(obj) = state.roots.get(object_root) else {
+                return RasterV8Status::Error;
+            };
+            register_on(state.ctx_ptr(), obj)
+        });
+    }
+
+    crate::bridge::with_state_for_object_root(object_root, |ctx, obj| register_on(ctx, obj))
+        .unwrap_or(RasterV8Status::Error)
+}
+
+/// Invoke every registered ObjectWrap weak callback without waiting for JSObject
+/// collection. Used during process shutdown when module refs are already gone.
+pub(crate) unsafe fn force_invoke_registered_weak_callbacks(ctx: *mut JSContext) {
+    let slots: Vec<(usize, usize, usize)> = context_tables::with_context_tables(ctx, |tables| {
+        tables
+            .weak_callbacks
+            .iter()
+            .filter(|(_, slot)| slot.phase == WeakPhase::Registered && slot.callback != 0)
+            .map(|(&key, slot)| (key, slot.callback, slot.parameter))
+            .collect()
+    });
+    for (key, callback, parameter) in slots {
+        let mut second_pass: *mut c_void = std::ptr::null_mut();
+        let needs_second = unsafe {
+            raster_v8_invoke_weak_callback_first_pass(
+                callback as *mut c_void,
+                parameter as *mut c_void,
+                &mut second_pass,
+            )
+        } != 0;
+        if needs_second && !second_pass.is_null() {
+            unsafe {
+                raster_v8_invoke_weak_callback_second_pass(second_pass, parameter as *mut c_void);
+            }
+        }
+        context_tables::unregister_weak_callback(ctx, key);
+    }
+    dispatch_pending_weak_callbacks_for_ctx(ctx);
 }
 
 pub fn clear_runtime_v8_object_class(rt: *mut qjs::JSRuntime) {
     V8_OBJECT_CLASS.lock().remove(&(rt as usize));
 }
 
-#[cfg(test)]
 pub fn v8_object_class_for_runtime(rt: *mut qjs::JSRuntime) -> Option<qjs::JSClassID> {
     V8_OBJECT_CLASS.lock().get(&(rt as usize)).copied()
 }
 
-pub fn shutdown_context_tables(ctx: *mut JSContext) {
-    with_state_for_ctx(ctx, |state| {
-        state.drain_weak_holds(ctx);
-    });
-    dispatch_pending_weak_callbacks_for_ctx(ctx);
+pub fn remove_context_tables_and_gc(ctx: *mut JSContext) {
     context_tables::remove_context_tables(ctx);
     let rt = unsafe { qjs::JS_GetRuntime(ctx) };
     for _ in 0..3 {
@@ -1132,9 +1167,17 @@ pub fn shutdown_context_tables(ctx: *mut JSContext) {
     }
 }
 
+pub fn shutdown_context_tables(ctx: *mut JSContext) {
+    with_state_for_ctx(ctx, |state| {
+        state.drain_weak_holds(ctx);
+    });
+    dispatch_pending_weak_callbacks_for_ctx(ctx);
+    remove_context_tables_and_gc(ctx);
+}
+
 /// Backward-compatible alias for per-context side-table teardown.
-pub fn prepare_shutdown(ctx: *mut JSContext) {
-    shutdown_context_tables(ctx);
+pub fn prepare_shutdown(ctx: *mut JSContext) -> Result<(), String> {
+    unsafe { crate::bridge::shutdown_bridge_for_context(ctx) }
 }
 
 #[no_mangle]
