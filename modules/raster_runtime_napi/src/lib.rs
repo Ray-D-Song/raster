@@ -213,6 +213,8 @@ mod tests {
             let mut refs = RefTable::new();
             let s = unsafe { qjs::JS_NewStringLen(raw.as_ptr(), c"x".as_ptr(), 1) };
             let reference = refs.create(raw.as_ptr(), s, 1, std::ptr::null_mut(), false);
+            // create() dups for the strong ref; caller still owns the original `s`.
+            unsafe { qjs::JS_FreeValue(raw.as_ptr(), s) };
             assert!(!reference.is_null());
             let status = unsafe { refs.delete(raw.as_ptr(), reference) };
             assert_eq!(status, napi_status::napi_ok);
@@ -1167,9 +1169,13 @@ mod tests {
                 qjs::JS_NewClass(rt_ptr, class_id, &def);
             }
             let obj = unsafe { qjs::JS_NewObjectClass(raw.as_ptr(), class_id) };
-            let foreign = Box::new(ForeignOpaque { tag: 0xABCD });
+            // Stack opaque: test only class/opaque classification, not heap ownership.
+            let mut foreign = ForeignOpaque { tag: 0xABCD };
             unsafe {
-                qjs::JS_SetOpaque(obj, Box::into_raw(foreign) as *mut std::ffi::c_void);
+                qjs::JS_SetOpaque(
+                    obj,
+                    (&mut foreign as *mut ForeignOpaque).cast::<std::ffi::c_void>(),
+                );
             }
             assert!(!crate::external::is_external_object(raw.as_ptr(), obj));
             let mut env = Env::new(raw);
@@ -1181,6 +1187,7 @@ mod tests {
                 napi_status::napi_ok
             );
             assert_ne!(ty, crate::types::napi_valuetype::napi_external);
+            // Drop the handle that holds `obj` before `foreign` leaves scope.
             env.scopes.close(raw.as_ptr());
             env.dispose();
         })
@@ -1240,9 +1247,13 @@ mod tests {
                 qjs::JS_NewClass(rt_ptr, class_id, &def);
             }
             let obj = unsafe { qjs::JS_NewObjectClass(raw.as_ptr(), class_id) };
-            let foreign = Box::new(ForeignOpaque { tag: 0xBEEF });
+            // Stack opaque: free the JS object before `foreign` leaves scope.
+            let mut foreign = ForeignOpaque { tag: 0xBEEF };
             unsafe {
-                qjs::JS_SetOpaque(obj, Box::into_raw(foreign) as *mut std::ffi::c_void);
+                qjs::JS_SetOpaque(
+                    obj,
+                    (&mut foreign as *mut ForeignOpaque).cast::<std::ffi::c_void>(),
+                );
             }
             assert!(!crate::external::is_external_object(raw.as_ptr(), obj));
             unsafe { qjs::JS_FreeValue(raw.as_ptr(), obj) };
