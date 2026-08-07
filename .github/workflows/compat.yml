@@ -3,9 +3,16 @@ name: Compatibility
 on:
   pull_request:
   workflow_dispatch:
+    inputs:
+      case_filter:
+        description: Run cases whose names contain this keyword (empty runs all)
+        required: false
+        type: string
+        default: ""
 
 jobs:
   rust-unit:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('rust-unit-tests', inputs.case_filter) }}
     name: rust-unit-tests
     runs-on: ubuntu-latest
     steps:
@@ -45,6 +52,7 @@ jobs:
           done
 
   windows-sqlite:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('windows-sqlite', inputs.case_filter) }}
     name: windows-sqlite
     runs-on: windows-latest
     steps:
@@ -74,6 +82,7 @@ jobs:
         run: node compat/run.mjs node-sqlite target/debug/raster_runtime.exe
 
   windows-tty-napi:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('windows-tty-napi', inputs.case_filter) }}
     name: windows-tty-napi
     runs-on: windows-latest
     steps:
@@ -88,6 +97,7 @@ jobs:
           cargo build -p raster_runtime --features napi
 
   sanitizer:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('sanitizer-address sanitizer-undefined', inputs.case_filter) }}
     name: sanitizer-${{ matrix.sanitizer }}
     runs-on: ubuntu-latest
     strategy:
@@ -117,6 +127,7 @@ jobs:
         run: bash v8_compat/tools/run_sanitizer_ci.sh ${{ matrix.sanitizer }}
 
   v8-abi:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('v8-abi-drift', inputs.case_filter) }}
     name: v8-abi-drift
     runs-on: ubuntu-latest
     steps:
@@ -135,6 +146,7 @@ jobs:
       - run: bash v8_compat/tools/check_abi.sh
 
   v8-clippy:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('v8-clippy', inputs.case_filter) }}
     name: v8-clippy
     runs-on: ubuntu-latest
     steps:
@@ -151,6 +163,7 @@ jobs:
       - run: cargo clippy -p v8_compat --all-targets -- -D warnings
 
   napi-clippy:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('napi-clippy', inputs.case_filter) }}
     name: napi-clippy
     runs-on: ubuntu-latest
     steps:
@@ -168,6 +181,7 @@ jobs:
           --all-targets --no-deps -- -D warnings
 
   sqlite-asan:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('sqlite-asan', inputs.case_filter) }}
     name: sqlite-asan
     runs-on: ubuntu-latest
     steps:
@@ -180,6 +194,7 @@ jobs:
       - run: bash compat/node-sqlite/run-asan.sh
 
   mysql-compat:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('mysql-compat', inputs.case_filter) }}
     name: mysql-compat
     runs-on: ubuntu-latest
     steps:
@@ -202,6 +217,7 @@ jobs:
           if-no-files-found: ignore
 
   postgres-compat:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('node-postgres-compat', inputs.case_filter) }}
     name: node-postgres-compat
     runs-on: ubuntu-latest
     steps:
@@ -224,6 +240,7 @@ jobs:
           if-no-files-found: ignore
 
   compatibility:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('napi-hello next vite-plus better-sqlite3 v8-hello node-sqlite', inputs.case_filter) }}
     name: ${{ matrix.case }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
