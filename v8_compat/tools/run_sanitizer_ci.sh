@@ -166,8 +166,11 @@ if [[ "${SANITIZER}" == "address" ]]; then
   echo "[sanitizer:address] rustc unit tests (v8_compat)"
   "${CARGO[@]}" test -p v8_compat --lib --target "${TARGET}"
 
-  echo "[sanitizer:address] rustc unit tests (raster_runtime_napi)"
-  "${CARGO[@]}" test -p raster_runtime_napi --lib --target "${TARGET}"
+  # N-API tests reset process-global GC/external registries; ASan reordering
+  # exposes races when multiple tests free runtimes concurrently. Serialize
+  # the suite under ASan (not a production serialisation of the runtime).
+  echo "[sanitizer:address] rustc unit tests (raster_runtime_napi, serial)"
+  "${CARGO[@]}" test -p raster_runtime_napi --lib --target "${TARGET}" -- --test-threads=1
 else
   echo "[sanitizer:undefined] rustc unit tests (v8_compat shim only)"
   "${CARGO[@]}" test -p v8_compat --lib --target "${TARGET}"

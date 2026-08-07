@@ -359,9 +359,15 @@ void WeakClearTest(const FunctionCallbackInfo<Value>& info) {
                               .ToLocalChecked());
 }
 
-void Init(Local<Object> exports, Local<Value> module, Local<Context> context) {
+// NODE_MODULE_CONTEXT_AWARE expects addon_context_register_func (4 args).
+// A 3-arg Init is only accepted via cast and trips UBSan on the indirect call.
+void Init(Local<Object> exports,
+          Local<Value> module,
+          Local<Context> context,
+          void* priv) {
   (void)module;
   (void)context;
+  (void)priv;
   NODE_SET_METHOD(exports, "hello", Hello);
   NODE_SET_METHOD(exports, "bufferCopy", BufferCopyTest);
   NODE_SET_METHOD(exports, "bufferExternal", BufferExternalTest);
