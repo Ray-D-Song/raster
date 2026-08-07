@@ -7,8 +7,10 @@ const hello = require(addonPath);
 
 hello.queueAsyncWork((result) => {
   if (result !== 42) {
-    process.exit(1);
+    console.error(`unexpected async result: ${result}`);
+    process.exitCode = 1;
+    return;
   }
+
   console.log("async-work-notimer-ok");
-  process.exit(0);
 });

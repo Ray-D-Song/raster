@@ -6,6 +6,26 @@
 #include <v8-local-handle.h>
 #include <v8-object.h>
 
+namespace {
+
+// NODE_MODULE_INIT() defines a 3-arg function; NODE_MODULE_CONTEXT_AWARE_X in
+// Node headers intentionally casts it to 4-arg addon_context_register_func.
+// The fourth priv argument is ignored by those bodies — Node's own ABI.
+// Suppress only Clang's function-pointer type check at this erased call site.
+#if defined(__clang__)
+__attribute__((no_sanitize("function")))
+#endif
+void invoke_erased_context_register_func(
+    node::addon_context_register_func callback,
+    v8::Local<v8::Object> exports,
+    v8::Local<v8::Value> module,
+    v8::Local<v8::Context> context,
+    void* priv) {
+  callback(exports, module, context, priv);
+}
+
+}  // namespace
+
 extern "C" RasterV8Status raster_v8_run_module_init(
     RasterV8ContextState* ctx,
     void* module_opaque,
@@ -43,7 +63,12 @@ extern "C" RasterV8Status raster_v8_run_module_init(
       v8::MakeLocalFromObject<v8::Context>(isolate, &context_slot->object);
 
   if (node_mod->nm_context_register_func) {
-    node_mod->nm_context_register_func(exports, module_obj, context, node_mod->nm_priv);
+    invoke_erased_context_register_func(
+        node_mod->nm_context_register_func,
+        exports,
+        module_obj,
+        context,
+        node_mod->nm_priv);
   } else if (node_mod->nm_register_func) {
     node_mod->nm_register_func(exports, module_obj, nullptr);
   } else {
