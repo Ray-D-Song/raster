@@ -121,6 +121,8 @@ build_v8_hello_addon() {
 }
 
 build_napi_hello_addons() {
+  # Fixture is outside the root yarn workspaces; install before sanitizer build.
+  (cd compat/napi-hello && yarn install --frozen-lockfile --silent)
   set_addon_sanitizer_flags
   (cd compat/napi-hello && yarn build --silent)
   clear_addon_sanitizer_flags
@@ -157,14 +159,15 @@ run_better_sqlite3_compat() {
   assert_addon_sanitized "${BETTER_SQLITE3_ADDON}"
 }
 
+# Cargo must not see addon CFLAGS/CXXFLAGS/LDFLAGS: global -fsanitize=* poisons
+# host rquickjs-sys and breaks rquickjs_macro load (E0463). Addon flags stay
+# scoped to build_*_addon helpers below. Rust ASan uses RUSTFLAGS only.
 if [[ "${SANITIZER}" == "address" ]]; then
-  set_addon_sanitizer_flags
   echo "[sanitizer:address] rustc unit tests (v8_compat)"
   "${CARGO[@]}" test -p v8_compat --lib --target "${TARGET}"
 
   echo "[sanitizer:address] rustc unit tests (raster_runtime_napi)"
   "${CARGO[@]}" test -p raster_runtime_napi --lib --target "${TARGET}"
-  clear_addon_sanitizer_flags
 else
   echo "[sanitizer:undefined] rustc unit tests (v8_compat shim only)"
   "${CARGO[@]}" test -p v8_compat --lib --target "${TARGET}"
@@ -175,13 +178,7 @@ fi
 
 echo "[sanitizer:${SANITIZER}] build raster_runtime (v8-compat)"
 make js JS_MINIFY=0
-if [[ "${SANITIZER}" == "address" ]]; then
-  set_addon_sanitizer_flags
-  "${CARGO[@]}" build -p raster_runtime --features v8-compat --target "${TARGET}"
-  clear_addon_sanitizer_flags
-else
-  "${CARGO[@]}" build -p raster_runtime --features v8-compat --target "${TARGET}"
-fi
+"${CARGO[@]}" build -p raster_runtime --features v8-compat --target "${TARGET}"
 
 RASTER_RUNTIME="${CARGO_TARGET_DIR}/${TARGET}/debug/raster_runtime"
 export RASTER_RUNTIME
