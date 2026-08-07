@@ -323,24 +323,31 @@ impl Env {
         self.try_finish_dispose().is_ok()
     }
 
-    /// Unit-test helper for stack-owned envs.
+    /// Unit-test helper for stack-owned envs that never started a driver loop.
     ///
-    /// Production: begin → idle → wait_finished → finish.
-    /// Never marks finished while `inflight_async > 0`.
+    /// If `is_loop_running()`, panics: use a registry-owned Env and
+    /// `begin_dispose` → drive runtime / `wait_finished` → `finish_shutdown`.
+    #[cfg(test)]
     pub fn dispose(&mut self) {
         self.begin_dispose();
         if let Some(driver) = self.driver.clone() {
             driver.drain_ready_jobs(self);
             driver.mark_finished_if_idle();
-            if !driver.is_finished()
-                && driver.pending_count() == 0
-                && driver
-                    .inflight_async
-                    .load(std::sync::atomic::Ordering::Acquire)
-                    == 0
-            {
-                // Safe when no work remains: loop can only exit, not dispatch.
-                driver.mark_finished();
+            if !driver.is_finished() {
+                assert!(
+                    !driver.is_loop_running(),
+                    "napi dispose: driver loop still running; use registry Env and \
+                     begin_dispose → wait_finished → finish_shutdown"
+                );
+                if driver.pending_count() == 0
+                    && driver
+                        .inflight_async
+                        .load(std::sync::atomic::Ordering::Acquire)
+                        == 0
+                {
+                    // Loop never started (or already exited); no work remains.
+                    driver.mark_finished();
+                }
             }
         }
         assert!(

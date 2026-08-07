@@ -8,6 +8,10 @@
 #include <v8-persistent-handle.h>
 #include <v8-weak-callback-info.h>
 
+extern "C" RasterV8Status raster_v8_value_to_float64(RasterV8ContextState* ctx,
+                                                     uint64_t root,
+                                                     double* out);
+
 namespace {
 
 struct NativeWrap {
@@ -220,4 +224,145 @@ extern "C" int raster_v8_test_objectwrap_strong_reset_scrubs_layout_maps(
   }
 
   return maps_clean ? 1 : 0;
+}
+
+/// Bypasses repr_to_root fast path: rejects Smi, materializes isolate oddball
+/// direct layouts, and safely handles unmaterialized (root_id==0) arena slots.
+extern "C" int raster_v8_test_resolve_root_repr_smi_and_tagged(
+    RasterV8ContextState* ctx_state) {
+  if (!ctx_state) {
+    return 0;
+  }
+  auto* impl = raster_v8::ctx_impl(ctx_state);
+
+  const RasterV8BridgeV1* bridge = raster_v8_bridge();
+  if (!bridge || !bridge->root_drop) {
+    return 0;
+  }
+
+  // General resolver must reject pure Smi (no provenance → not a layout).
+  const uintptr_t smi_four =
+      (static_cast<uintptr_t>(4) << 32) |
+      static_cast<uintptr_t>(raster_v8::shim::TaggedPointer::Tag::Smi);
+  if (raster_v8::resolve_root_from_repr(ctx_state, smi_four) != 0) {
+    return 0;
+  }
+  // Return-value entry materializes Smi 4 → number root for 4.
+  const uint64_t smi_root =
+      raster_v8::resolve_return_value_repr(ctx_state, smi_four);
+  if (smi_root == 0) {
+    return 0;
+  }
+  double smi_number = 0.0;
+  if (raster_v8_value_to_float64(ctx_state, smi_root, &smi_number) != RASTER_V8_OK ||
+      smi_number != 4.0) {
+    bridge->root_drop(smi_root);
+    return 0;
+  }
+  bridge->root_drop(smi_root);
+
+  // Set(0) return-value slot uses raw 0 — must become number root 0.
+  const uint64_t zero_root = raster_v8::resolve_return_value_repr(ctx_state, 0);
+  if (zero_root == 0) {
+    return 0;
+  }
+  double zero_number = 1.0;
+  if (raster_v8_value_to_float64(ctx_state, zero_root, &zero_number) != RASTER_V8_OK ||
+      zero_number != 0.0) {
+    bridge->root_drop(zero_root);
+    return 0;
+  }
+  bridge->root_drop(zero_root);
+
+  // Unknown aligned direct / strong-tagged addresses must not become numbers.
+  raster_v8::shim::ObjectLayout stack_layout;
+  const uintptr_t unknown_direct = reinterpret_cast<uintptr_t>(&stack_layout);
+  if (raster_v8::resolve_root_from_repr(ctx_state, unknown_direct) != 0) {
+    return 0;
+  }
+  const uintptr_t unknown_tagged =
+      static_cast<uintptr_t>(raster_v8::shim::TaggedPointer(&stack_layout).value);
+  if (raster_v8::resolve_root_from_repr(ctx_state, unknown_tagged) != 0) {
+    return 0;
+  }
+  if (raster_v8::resolve_return_value_repr(ctx_state, unknown_direct) != 0) {
+    return 0;
+  }
+  if (raster_v8::resolve_return_value_repr(ctx_state, unknown_tagged) != 0) {
+    return 0;
+  }
+
+  // Isolate oddball direct address (root_id starts at 0; not in repr_to_root).
+  auto* isolate_state = raster_v8_current_isolate();
+  if (!isolate_state) {
+    return 0;
+  }
+  auto* iso = raster_v8::iso_impl(isolate_state);
+  const uintptr_t undef_addr =
+      reinterpret_cast<uintptr_t>(&iso->undefined_value.layout);
+  impl->repr_to_root.erase(undef_addr);
+  iso->undefined_value.layout.contents.root_id = 0;
+  const uint64_t oddball_root =
+      raster_v8::resolve_root_from_repr(ctx_state, undef_addr);
+  if (oddball_root == 0) {
+    return 0;
+  }
+
+  // Unmaterialized arena object: clear root + erase maps so resolve cannot use
+  // the registered fast path; direct address must not crash (root may stay 0).
+  uint64_t root_id = 0;
+  if (bridge->object_new(ctx_state, &root_id) != RASTER_V8_OK || root_id == 0) {
+    return 0;
+  }
+  auto* isolate = reinterpret_cast<v8::Isolate*>(isolate_state);
+  v8::Local<v8::Object> object = raster_v8::local_from_root<v8::Object>(
+      isolate, root_id, &raster_v8::shim::Map::object_map());
+  (void)object;
+
+  raster_v8::shim::ObjectLayout* arena_layout = nullptr;
+  uintptr_t tagged_repr = 0;
+  uintptr_t direct_addr = 0;
+  for (auto& block : impl->arena.blocks) {
+    for (auto& slot : block) {
+      if (slot.object.contents.root_id == root_id) {
+        arena_layout = &slot.object;
+        tagged_repr = static_cast<uintptr_t>(slot.object.tagged_map.value);
+        direct_addr = reinterpret_cast<uintptr_t>(&slot.object);
+        break;
+      }
+    }
+    if (arena_layout) {
+      break;
+    }
+  }
+  if (!arena_layout || tagged_repr == 0 || direct_addr == 0) {
+    return 0;
+  }
+
+  // Scrub provenance so resolve_root_from_repr must re-identify by address.
+  impl->repr_to_root.erase(direct_addr);
+  impl->repr_to_root.erase(tagged_repr);
+  arena_layout->contents.root_id = 0;
+
+  // Unmaterialized direct/tagged: must not UBSan/crash (root stays 0 for plain objects).
+  if (raster_v8::resolve_root_from_repr(ctx_state, direct_addr) != 0) {
+    return 0;
+  }
+  if (raster_v8::resolve_root_from_repr(ctx_state, tagged_repr) != 0) {
+    return 0;
+  }
+
+  // Restore root and require known-layout path to recover it without map entry.
+  arena_layout->contents.root_id = root_id;
+  impl->repr_to_root.erase(direct_addr);
+  impl->repr_to_root.erase(tagged_repr);
+  if (raster_v8::resolve_root_from_repr(ctx_state, direct_addr) != root_id) {
+    return 0;
+  }
+  impl->repr_to_root.erase(direct_addr);
+  if (raster_v8::resolve_root_from_repr(ctx_state, tagged_repr) != root_id) {
+    return 0;
+  }
+
+  return 1;
 }

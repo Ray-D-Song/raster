@@ -10,6 +10,8 @@ function assertEq(actual, expected, label) {
 }
 
 assertEq(hello.hello(), 'hello from v8', 'hello()');
+// Aligned Smi (e.g. 4) must round-trip; must not be deref'd as ObjectLayout*.
+assertEq(hello.returnAlignedSmi(), 4, 'returnAlignedSmi()');
 assertEq(hello.bufferCopy(), 'buffer-copy-ok', 'bufferCopy()');
 assertEq(hello.bufferExternal(), 'buffer-external-ok', 'bufferExternal()');
 const sharedBuf = hello.bufferExternalShared();

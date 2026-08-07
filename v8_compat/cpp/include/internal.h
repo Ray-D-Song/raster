@@ -121,6 +121,8 @@ uint64_t root_from_local(uintptr_t tagged);
 void register_handle_repr(RasterV8ContextState* ctx, uintptr_t repr, uint64_t root_id);
 void unregister_handle_repr(RasterV8ContextState* ctx, uintptr_t repr);
 uint64_t resolve_root_from_repr(RasterV8ContextState* ctx, uintptr_t repr);
+/// Callback/accessor return-value slot: handles Smi including Set(0) (raw 0).
+uint64_t resolve_return_value_repr(RasterV8ContextState* ctx, uintptr_t repr);
 
 void init_isolate_roots(IsolateImpl* isolate);
 int oddball_root_index(IsolateImpl* isolate, const shim::ObjectLayout* layout);

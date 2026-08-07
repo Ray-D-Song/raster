@@ -45,9 +45,12 @@ pub const NAPI_VERSION: u32 = 9;
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use rquickjs::qjs::{self};
     use rquickjs::{AsyncContext, AsyncRuntime};
 
+    use crate::driver::DriverState;
     use crate::env::Env;
     use crate::external::{create_external_object, get_external_pointer};
     use crate::js_helpers::{define_hidden_usize_configurable, new_int32};
@@ -56,6 +59,76 @@ mod tests {
     use crate::types::napi_status;
     use crate::value::{napi_to_value, napi_value_for_slot, value_to_napi_owned};
     use crate::NAPI_VERSION;
+
+    /// Drive `rt` until `driver` finishes, or panic after 5s with driver counters.
+    async fn wait_driver_finished_bounded(rt: &AsyncRuntime, driver: &Arc<DriverState>) {
+        driver.wake_if_quiescent();
+        let drive = async {
+            while !driver.is_finished() {
+                let _ = rt.idle().await;
+                tokio::task::yield_now().await;
+            }
+            driver.wait_finished().await;
+        };
+        if tokio::time::timeout(std::time::Duration::from_secs(5), drive)
+            .await
+            .is_err()
+        {
+            panic!(
+                "driver wait timed out after 5s: loop_running={} pending={} inflight={} idle_refs={}",
+                driver.is_loop_running(),
+                driver.pending_count(),
+                driver
+                    .inflight_async
+                    .load(std::sync::atomic::Ordering::Acquire),
+                driver.idle_refs.load(std::sync::atomic::Ordering::Acquire),
+            );
+        }
+    }
+
+    /// After `begin_dispose` on a registry-owned env: drive the rquickjs runtime
+    /// until the driver loop exits, then `finish_shutdown`.
+    async fn finish_registry_env(
+        rt: &AsyncRuntime,
+        actx: &AsyncContext,
+        driver: Option<Arc<DriverState>>,
+    ) {
+        if let Some(driver) = driver {
+            wait_driver_finished_bounded(rt, &driver).await;
+        }
+        actx.with(|ctx| {
+            crate::dlopen::finish_shutdown(&ctx).expect("finish_shutdown");
+            crate::dlopen::shutdown_all().expect("shutdown_all");
+        })
+        .await;
+    }
+
+    /// Register a heap-owned Env for tests that start the driver loop.
+    /// Returns a raw pointer only — build `&mut Env` inside `ctx.with` and drop
+    /// the borrow before `finish_shutdown` frees the Box.
+    fn register_test_env(
+        raw: std::ptr::NonNull<rquickjs::qjs::JSContext>,
+    ) -> std::ptr::NonNull<Env> {
+        let env_ptr = crate::dlopen::register_env(raw, Box::new(Env::new(raw)));
+        std::ptr::NonNull::new(env_ptr).expect("register_env returns non-null")
+    }
+
+    /// Drain, close scopes, begin_dispose; returns driver for `finish_registry_env`.
+    ///
+    /// # Safety
+    /// `env_ptr` must be the live registry Env for `raw` (from `register_test_env`).
+    unsafe fn begin_registry_dispose(
+        env_ptr: std::ptr::NonNull<Env>,
+        raw: std::ptr::NonNull<rquickjs::qjs::JSContext>,
+    ) -> Option<Arc<DriverState>> {
+        let env = unsafe { &mut *env_ptr.as_ptr() };
+        if let Some(driver) = env.driver.clone() {
+            driver.drain_ready_jobs(env);
+        }
+        env.scopes.close(raw.as_ptr());
+        env.begin_dispose();
+        env.driver.clone()
+    }
 
     #[test]
     fn napi_version_is_nine() {
@@ -937,69 +1010,72 @@ mod tests {
         }
 
         let rt = AsyncRuntime::new().unwrap();
-        let ctx = AsyncContext::full(&rt).await.unwrap();
-        let _async_ctx = ctx.clone();
-        ctx.with(|ctx| {
-            COMPLETE_COUNT.store(0, Ordering::SeqCst);
-            EXECUTE_STARTED.store(false, Ordering::SeqCst);
-            let raw = ctx.as_raw();
-            let mut env = Env::new(raw);
-            env.scopes.open();
-            let napi_env = env.as_napi_env();
-            let driver = crate::driver::ensure_driver(&mut env);
-            let mut work: crate::types::napi_async_work = std::ptr::null_mut();
-            assert_eq!(
-                unsafe {
-                    crate::async_work::napi_create_async_work(
-                        napi_env,
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        Some(execute_slow),
-                        Some(complete_once),
-                        std::ptr::null_mut(),
-                        &mut work,
-                    )
-                },
-                napi_status::napi_ok
-            );
-            assert_eq!(
-                unsafe { crate::async_work::napi_queue_async_work(napi_env, work) },
-                napi_status::napi_ok
-            );
+        let actx = AsyncContext::full(&rt).await.unwrap();
+        let driver = actx
+            .with(|ctx| {
+                COMPLETE_COUNT.store(0, Ordering::SeqCst);
+                EXECUTE_STARTED.store(false, Ordering::SeqCst);
+                let raw = ctx.as_raw();
+                let mut env_ptr = register_test_env(raw);
+                let env = unsafe { env_ptr.as_mut() };
+                env.scopes.open();
+                let napi_env = env.as_napi_env();
+                let driver = crate::driver::ensure_driver(env);
+                let mut work: crate::types::napi_async_work = std::ptr::null_mut();
+                assert_eq!(
+                    unsafe {
+                        crate::async_work::napi_create_async_work(
+                            napi_env,
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                            Some(execute_slow),
+                            Some(complete_once),
+                            std::ptr::null_mut(),
+                            &mut work,
+                        )
+                    },
+                    napi_status::napi_ok
+                );
+                assert_eq!(
+                    unsafe { crate::async_work::napi_queue_async_work(napi_env, work) },
+                    napi_status::napi_ok
+                );
 
-            let mut cancelled = false;
-            for _ in 0..1000 {
-                if EXECUTE_STARTED.load(Ordering::SeqCst) {
-                    break;
+                let mut cancelled = false;
+                for _ in 0..1000 {
+                    if EXECUTE_STARTED.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let status =
+                        unsafe { crate::async_work::napi_cancel_async_work(napi_env, work) };
+                    if status == napi_status::napi_ok {
+                        cancelled = true;
+                        break;
+                    }
+                    thread::yield_now();
                 }
-                let status = unsafe { crate::async_work::napi_cancel_async_work(napi_env, work) };
-                if status == napi_status::napi_ok {
-                    cancelled = true;
-                    break;
+
+                let deadline = std::time::Instant::now() + Duration::from_secs(2);
+                while COMPLETE_COUNT.load(Ordering::SeqCst) == 0
+                    && deadline > std::time::Instant::now()
+                {
+                    driver.drain_ready_jobs(env);
+                    thread::sleep(Duration::from_millis(1));
                 }
-                thread::yield_now();
-            }
 
-            let deadline = std::time::Instant::now() + Duration::from_secs(2);
-            while COMPLETE_COUNT.load(Ordering::SeqCst) == 0 && deadline > std::time::Instant::now()
-            {
-                driver.drain_ready_jobs(&mut env);
-                thread::sleep(Duration::from_millis(1));
-            }
+                if cancelled {
+                    assert_eq!(COMPLETE_COUNT.load(Ordering::SeqCst), 1);
+                    assert_eq!(driver.inflight_async.load(Ordering::SeqCst), 0);
+                }
 
-            if cancelled {
-                assert_eq!(COMPLETE_COUNT.load(Ordering::SeqCst), 1);
-                assert_eq!(driver.inflight_async.load(Ordering::SeqCst), 0);
-            }
-
-            assert_eq!(
-                unsafe { crate::async_work::napi_delete_async_work(napi_env, work) },
-                napi_status::napi_ok
-            );
-            env.scopes.close(raw.as_ptr());
-            env.dispose();
-        })
-        .await;
+                assert_eq!(
+                    unsafe { crate::async_work::napi_delete_async_work(napi_env, work) },
+                    napi_status::napi_ok
+                );
+                unsafe { begin_registry_dispose(env_ptr, raw) }
+            })
+            .await;
+        finish_registry_env(&rt, &actx, driver).await;
     }
 
     #[tokio::test]
@@ -1019,45 +1095,46 @@ mod tests {
         }
 
         let rt = AsyncRuntime::new().unwrap();
-        let ctx = AsyncContext::full(&rt).await.unwrap();
-        let _async_ctx = ctx.clone();
-        ctx.with(|ctx| {
-            COMPLETE_COUNT.store(0, Ordering::SeqCst);
-            let raw = ctx.as_raw();
-            let mut env = Env::new(raw);
-            env.scopes.open();
-            let napi_env = env.as_napi_env();
-            let driver = crate::driver::ensure_driver(&mut env);
-            let mut work: crate::types::napi_async_work = std::ptr::null_mut();
-            assert_eq!(
-                unsafe {
-                    crate::async_work::napi_create_async_work(
-                        napi_env,
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        None,
-                        Some(complete_once),
-                        std::ptr::null_mut(),
-                        &mut work,
-                    )
-                },
-                napi_status::napi_ok
-            );
-            assert_eq!(
-                unsafe { crate::async_work::napi_queue_async_work(napi_env, work) },
-                napi_status::napi_ok
-            );
-            driver.drain_ready_jobs(&mut env);
-            driver.drain_ready_jobs(&mut env);
-            assert_eq!(COMPLETE_COUNT.load(Ordering::SeqCst), 1);
-            assert_eq!(
-                unsafe { crate::async_work::napi_delete_async_work(napi_env, work) },
-                napi_status::napi_ok
-            );
-            env.scopes.close(raw.as_ptr());
-            env.dispose();
-        })
-        .await;
+        let actx = AsyncContext::full(&rt).await.unwrap();
+        let driver = actx
+            .with(|ctx| {
+                COMPLETE_COUNT.store(0, Ordering::SeqCst);
+                let raw = ctx.as_raw();
+                let mut env_ptr = register_test_env(raw);
+                let env = unsafe { env_ptr.as_mut() };
+                env.scopes.open();
+                let napi_env = env.as_napi_env();
+                let driver = crate::driver::ensure_driver(env);
+                let mut work: crate::types::napi_async_work = std::ptr::null_mut();
+                assert_eq!(
+                    unsafe {
+                        crate::async_work::napi_create_async_work(
+                            napi_env,
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                            None,
+                            Some(complete_once),
+                            std::ptr::null_mut(),
+                            &mut work,
+                        )
+                    },
+                    napi_status::napi_ok
+                );
+                assert_eq!(
+                    unsafe { crate::async_work::napi_queue_async_work(napi_env, work) },
+                    napi_status::napi_ok
+                );
+                driver.drain_ready_jobs(env);
+                driver.drain_ready_jobs(env);
+                assert_eq!(COMPLETE_COUNT.load(Ordering::SeqCst), 1);
+                assert_eq!(
+                    unsafe { crate::async_work::napi_delete_async_work(napi_env, work) },
+                    napi_status::napi_ok
+                );
+                unsafe { begin_registry_dispose(env_ptr, raw) }
+            })
+            .await;
+        finish_registry_env(&rt, &actx, driver).await;
     }
 
     #[tokio::test]
@@ -1440,100 +1517,104 @@ mod tests {
         }
 
         let rt = AsyncRuntime::new().unwrap();
-        let ctx = AsyncContext::full(&rt).await.unwrap();
-        ctx.with(|ctx| {
-            PAYLOAD_COUNT.store(0, Ordering::SeqCst);
-            let raw = ctx.as_raw();
-            let mut env = Env::new(raw);
-            env.scopes.open();
-            let napi_env = env.as_napi_env();
-            let func_val = make_tsfn_js_callback(raw.as_ptr());
-            let func_handle = value_to_napi_owned(&mut env, func_val);
-            let mut tsfn: crate::types::napi_threadsafe_function = std::ptr::null_mut();
-            assert_eq!(
-                unsafe {
-                    crate::async_work::napi_create_threadsafe_function(
-                        napi_env,
-                        func_handle,
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        1,
-                        1,
-                        std::ptr::null_mut(),
-                        None,
-                        std::ptr::null_mut(),
-                        Some(tsfn_call_js),
-                        &mut tsfn,
-                    )
-                },
-                napi_status::napi_ok
-            );
-            let tsfn_arc = crate::async_work::lookup_tsfn_for_test(tsfn).unwrap();
-            assert_eq!(tsfn_arc.test_queue_len(), 0);
-
-            let tsfn_fill = tsfn as usize;
-            assert_eq!(
-                unsafe {
-                    crate::async_work::napi_call_threadsafe_function(
-                        tsfn_fill as crate::types::napi_threadsafe_function,
-                        0xA1usize as *mut c_void,
-                        crate::types::napi_threadsafe_function_call_mode::napi_tsfn_nonblocking,
-                    )
-                },
-                napi_status::napi_ok
-            );
-            assert_eq!(tsfn_arc.test_queue_len(), 1);
-
-            let tsfn_block = tsfn as usize;
-            let barrier = Arc::new(std::sync::Barrier::new(2));
-            let barrier_worker = Arc::clone(&barrier);
-            let worker = thread::spawn(move || {
-                barrier_worker.wait();
-                let status = unsafe {
-                    crate::async_work::napi_call_threadsafe_function(
-                        tsfn_block as crate::types::napi_threadsafe_function,
-                        0xA2usize as *mut c_void,
-                        crate::types::napi_threadsafe_function_call_mode::napi_tsfn_blocking,
-                    )
-                };
-                assert_eq!(status, napi_status::napi_ok);
-            });
-
-            thread::sleep(Duration::from_millis(20));
-            assert_eq!(tsfn_arc.test_queue_len(), 1);
-
-            let driver = crate::driver::ensure_driver(&mut env);
-            driver.drain_ready_jobs(&mut env);
-            assert_eq!(PAYLOAD_COUNT.load(Ordering::SeqCst), 1);
-
-            barrier.wait();
-            worker.join().unwrap();
-
-            let deadline = std::time::Instant::now() + Duration::from_secs(2);
-            while PAYLOAD_COUNT.load(Ordering::SeqCst) < 2 && deadline > std::time::Instant::now() {
-                driver.drain_ready_jobs(&mut env);
-                thread::sleep(Duration::from_millis(1));
-            }
-            assert_eq!(PAYLOAD_COUNT.load(Ordering::SeqCst), 2);
-
-            unsafe {
-                crate::async_work::napi_release_threadsafe_function(
-                    tsfn,
-                    crate::types::napi_threadsafe_function_release_mode::napi_tsfn_release,
+        let actx = AsyncContext::full(&rt).await.unwrap();
+        let driver = actx
+            .with(|ctx| {
+                PAYLOAD_COUNT.store(0, Ordering::SeqCst);
+                let raw = ctx.as_raw();
+                let mut env_ptr = register_test_env(raw);
+                let env = unsafe { env_ptr.as_mut() };
+                env.scopes.open();
+                let napi_env = env.as_napi_env();
+                let func_val = make_tsfn_js_callback(raw.as_ptr());
+                let func_handle = value_to_napi_owned(env, func_val);
+                let mut tsfn: crate::types::napi_threadsafe_function = std::ptr::null_mut();
+                assert_eq!(
+                    unsafe {
+                        crate::async_work::napi_create_threadsafe_function(
+                            napi_env,
+                            func_handle,
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                            1,
+                            1,
+                            std::ptr::null_mut(),
+                            None,
+                            std::ptr::null_mut(),
+                            Some(tsfn_call_js),
+                            &mut tsfn,
+                        )
+                    },
+                    napi_status::napi_ok
                 );
-            }
-            let deadline = std::time::Instant::now() + Duration::from_secs(2);
-            while crate::async_work::lookup_tsfn_for_test(tsfn).is_some()
-                && deadline > std::time::Instant::now()
-            {
-                driver.drain_ready_jobs(&mut env);
-                thread::sleep(Duration::from_millis(1));
-            }
-            driver.drain_ready_jobs(&mut env);
-            env.scopes.close(raw.as_ptr());
-            env.dispose();
-        })
-        .await;
+                let tsfn_arc = crate::async_work::lookup_tsfn_for_test(tsfn).unwrap();
+                assert_eq!(tsfn_arc.test_queue_len(), 0);
+
+                let tsfn_fill = tsfn as usize;
+                assert_eq!(
+                    unsafe {
+                        crate::async_work::napi_call_threadsafe_function(
+                            tsfn_fill as crate::types::napi_threadsafe_function,
+                            0xA1usize as *mut c_void,
+                            crate::types::napi_threadsafe_function_call_mode::napi_tsfn_nonblocking,
+                        )
+                    },
+                    napi_status::napi_ok
+                );
+                assert_eq!(tsfn_arc.test_queue_len(), 1);
+
+                let tsfn_block = tsfn as usize;
+                let barrier = Arc::new(std::sync::Barrier::new(2));
+                let barrier_worker = Arc::clone(&barrier);
+                let worker = thread::spawn(move || {
+                    barrier_worker.wait();
+                    let status = unsafe {
+                        crate::async_work::napi_call_threadsafe_function(
+                            tsfn_block as crate::types::napi_threadsafe_function,
+                            0xA2usize as *mut c_void,
+                            crate::types::napi_threadsafe_function_call_mode::napi_tsfn_blocking,
+                        )
+                    };
+                    assert_eq!(status, napi_status::napi_ok);
+                });
+
+                thread::sleep(Duration::from_millis(20));
+                assert_eq!(tsfn_arc.test_queue_len(), 1);
+
+                let driver = crate::driver::ensure_driver(env);
+                driver.drain_ready_jobs(env);
+                assert_eq!(PAYLOAD_COUNT.load(Ordering::SeqCst), 1);
+
+                barrier.wait();
+                worker.join().unwrap();
+
+                let deadline = std::time::Instant::now() + Duration::from_secs(2);
+                while PAYLOAD_COUNT.load(Ordering::SeqCst) < 2
+                    && deadline > std::time::Instant::now()
+                {
+                    driver.drain_ready_jobs(env);
+                    thread::sleep(Duration::from_millis(1));
+                }
+                assert_eq!(PAYLOAD_COUNT.load(Ordering::SeqCst), 2);
+
+                unsafe {
+                    crate::async_work::napi_release_threadsafe_function(
+                        tsfn,
+                        crate::types::napi_threadsafe_function_release_mode::napi_tsfn_release,
+                    );
+                }
+                let deadline = std::time::Instant::now() + Duration::from_secs(2);
+                while crate::async_work::lookup_tsfn_for_test(tsfn).is_some()
+                    && deadline > std::time::Instant::now()
+                {
+                    driver.drain_ready_jobs(env);
+                    thread::sleep(Duration::from_millis(1));
+                }
+                driver.drain_ready_jobs(env);
+                unsafe { begin_registry_dispose(env_ptr, raw) }
+            })
+            .await;
+        finish_registry_env(&rt, &actx, driver).await;
     }
 
     #[tokio::test]
@@ -1556,90 +1637,104 @@ mod tests {
         }
 
         let rt = AsyncRuntime::new().unwrap();
-        let ctx = AsyncContext::full(&rt).await.unwrap();
-        ctx.with(|ctx| {
-            CLOSING_COUNT.store(0, Ordering::SeqCst);
-            let raw = ctx.as_raw();
-            let mut env = Env::new(raw);
-            env.scopes.open();
-            let napi_env = env.as_napi_env();
-            let func_val = make_tsfn_js_callback(raw.as_ptr());
-            let func_handle = value_to_napi_owned(&mut env, func_val);
-            let mut tsfn: crate::types::napi_threadsafe_function = std::ptr::null_mut();
-            assert_eq!(
-                unsafe {
-                    crate::async_work::napi_create_threadsafe_function(
-                        napi_env,
-                        func_handle,
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        1,
-                        2,
-                        std::ptr::null_mut(),
-                        None,
-                        std::ptr::null_mut(),
-                        Some(tsfn_call_js),
-                        &mut tsfn,
-                    )
-                },
-                napi_status::napi_ok
-            );
-
-            let tsfn_fill = tsfn as usize;
-            assert_eq!(
-                unsafe {
-                    crate::async_work::napi_call_threadsafe_function(
-                        tsfn_fill as crate::types::napi_threadsafe_function,
-                        0xA1usize as *mut c_void,
-                        crate::types::napi_threadsafe_function_call_mode::napi_tsfn_nonblocking,
-                    )
-                },
-                napi_status::napi_ok
-            );
-
-            let tsfn_block = tsfn as usize;
-            let barrier = Arc::new(std::sync::Barrier::new(3));
-            let mut workers = Vec::new();
-            for _ in 0..2 {
-                let barrier_worker = Arc::clone(&barrier);
-                let tsfn_worker = tsfn_block;
-                workers.push(thread::spawn(move || {
-                    barrier_worker.wait();
-                    let status = unsafe {
-                        crate::async_work::napi_call_threadsafe_function(
-                            tsfn_worker as crate::types::napi_threadsafe_function,
-                            0xA2usize as *mut c_void,
-                            crate::types::napi_threadsafe_function_call_mode::napi_tsfn_blocking,
+        let actx = AsyncContext::full(&rt).await.unwrap();
+        // Abort can leave driver work in flight; use two-phase dispose so the
+        // loop exits before Env/JS roots are released.
+        let driver = actx
+            .with(|ctx| {
+                CLOSING_COUNT.store(0, Ordering::SeqCst);
+                let raw = ctx.as_raw();
+                let env_ptr = crate::dlopen::register_env(raw, Box::new(Env::new(raw)));
+                let env = unsafe { &mut *env_ptr };
+                env.scopes.open();
+                let napi_env = env.as_napi_env();
+                let func_val = make_tsfn_js_callback(raw.as_ptr());
+                let func_handle = value_to_napi_owned(env, func_val);
+                let mut tsfn: crate::types::napi_threadsafe_function = std::ptr::null_mut();
+                assert_eq!(
+                    unsafe {
+                        crate::async_work::napi_create_threadsafe_function(
+                            napi_env,
+                            func_handle,
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                            1,
+                            2,
+                            std::ptr::null_mut(),
+                            None,
+                            std::ptr::null_mut(),
+                            Some(tsfn_call_js),
+                            &mut tsfn,
                         )
-                    };
-                    if status == napi_status::napi_closing {
-                        CLOSING_COUNT.fetch_add(1, Ordering::SeqCst);
-                    }
-                }));
-            }
-
-            thread::sleep(Duration::from_millis(20));
-            barrier.wait();
-            unsafe {
-                crate::async_work::napi_release_threadsafe_function(
-                    tsfn,
-                    crate::types::napi_threadsafe_function_release_mode::napi_tsfn_abort,
+                    },
+                    napi_status::napi_ok
                 );
-            }
 
-            let deadline = std::time::Instant::now() + Duration::from_secs(2);
-            while CLOSING_COUNT.load(Ordering::SeqCst) < 2 && deadline > std::time::Instant::now() {
-                thread::sleep(Duration::from_millis(1));
-            }
-            for worker in workers {
-                worker.join().unwrap();
-            }
-            assert_eq!(CLOSING_COUNT.load(Ordering::SeqCst), 2);
+                let tsfn_fill = tsfn as usize;
+                assert_eq!(
+                    unsafe {
+                        crate::async_work::napi_call_threadsafe_function(
+                            tsfn_fill as crate::types::napi_threadsafe_function,
+                            0xA1usize as *mut c_void,
+                            crate::types::napi_threadsafe_function_call_mode::napi_tsfn_nonblocking,
+                        )
+                    },
+                    napi_status::napi_ok
+                );
 
-            let driver = crate::driver::ensure_driver(&mut env);
-            driver.drain_ready_jobs(&mut env);
-            env.scopes.close(raw.as_ptr());
-            env.dispose();
+                let tsfn_block = tsfn as usize;
+                let barrier = Arc::new(std::sync::Barrier::new(3));
+                let mut workers = Vec::new();
+                for _ in 0..2 {
+                    let barrier_worker = Arc::clone(&barrier);
+                    let tsfn_worker = tsfn_block;
+                    workers.push(thread::spawn(move || {
+                        barrier_worker.wait();
+                        let status = unsafe {
+                            crate::async_work::napi_call_threadsafe_function(
+                                tsfn_worker as crate::types::napi_threadsafe_function,
+                                0xA2usize as *mut c_void,
+                                crate::types::napi_threadsafe_function_call_mode::napi_tsfn_blocking,
+                            )
+                        };
+                        if status == napi_status::napi_closing {
+                            CLOSING_COUNT.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }));
+                }
+
+                thread::sleep(Duration::from_millis(20));
+                barrier.wait();
+                unsafe {
+                    crate::async_work::napi_release_threadsafe_function(
+                        tsfn,
+                        crate::types::napi_threadsafe_function_release_mode::napi_tsfn_abort,
+                    );
+                }
+
+                let deadline = std::time::Instant::now() + Duration::from_secs(2);
+                while CLOSING_COUNT.load(Ordering::SeqCst) < 2 && deadline > std::time::Instant::now()
+                {
+                    thread::sleep(Duration::from_millis(1));
+                }
+                for worker in workers {
+                    worker.join().unwrap();
+                }
+                assert_eq!(CLOSING_COUNT.load(Ordering::SeqCst), 2);
+
+                let driver = crate::driver::ensure_driver(env);
+                driver.drain_ready_jobs(env);
+                env.scopes.close(raw.as_ptr());
+                env.begin_dispose();
+                driver.clone()
+            })
+            .await;
+
+        wait_driver_finished_bounded(&rt, &driver).await;
+
+        actx.with(|ctx| {
+            crate::dlopen::finish_shutdown(&ctx).expect("finish after wait");
+            crate::dlopen::shutdown_all().expect("registry empty");
         })
         .await;
     }
@@ -1668,74 +1763,76 @@ mod tests {
         }
 
         let rt = AsyncRuntime::new().unwrap();
-        let ctx = AsyncContext::full(&rt).await.unwrap();
-        let _async_ctx = ctx.clone();
-        ctx.with(|ctx| {
-            *TEARDOWN_THREAD.lock().unwrap() = None;
-            let raw = ctx.as_raw();
-            let mut env = Env::new(raw);
-            env.scopes.open();
-            let napi_env = env.as_napi_env();
-            *EXPECTED_JS_THREAD.lock().unwrap() = Some(env.js_thread_id);
-            let func_val = make_tsfn_js_callback(raw.as_ptr());
-            let func_handle = value_to_napi_owned(&mut env, func_val);
-            let mut tsfn: crate::types::napi_threadsafe_function = std::ptr::null_mut();
-            assert_eq!(
-                unsafe {
-                    crate::async_work::napi_create_threadsafe_function(
-                        napi_env,
-                        func_handle,
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        0,
-                        1,
-                        std::ptr::null_mut(),
-                        None,
-                        std::ptr::null_mut(),
-                        Some(tsfn_call_js),
-                        &mut tsfn,
+        let actx = AsyncContext::full(&rt).await.unwrap();
+        let driver = actx
+            .with(|ctx| {
+                *TEARDOWN_THREAD.lock().unwrap() = None;
+                let raw = ctx.as_raw();
+                let mut env_ptr = register_test_env(raw);
+                let env = unsafe { env_ptr.as_mut() };
+                env.scopes.open();
+                let napi_env = env.as_napi_env();
+                *EXPECTED_JS_THREAD.lock().unwrap() = Some(env.js_thread_id);
+                let func_val = make_tsfn_js_callback(raw.as_ptr());
+                let func_handle = value_to_napi_owned(env, func_val);
+                let mut tsfn: crate::types::napi_threadsafe_function = std::ptr::null_mut();
+                assert_eq!(
+                    unsafe {
+                        crate::async_work::napi_create_threadsafe_function(
+                            napi_env,
+                            func_handle,
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                            0,
+                            1,
+                            std::ptr::null_mut(),
+                            None,
+                            std::ptr::null_mut(),
+                            Some(tsfn_call_js),
+                            &mut tsfn,
+                        )
+                    },
+                    napi_status::napi_ok
+                );
+                assert_eq!(
+                    unsafe {
+                        crate::async_work::napi_call_threadsafe_function(
+                            tsfn,
+                            0x1234usize as *mut c_void,
+                            crate::types::napi_threadsafe_function_call_mode::napi_tsfn_nonblocking,
+                        )
+                    },
+                    napi_status::napi_ok
+                );
+
+                let driver = crate::driver::ensure_driver(env);
+                let tsfn_addr = tsfn as usize;
+                let worker = thread::spawn(move || unsafe {
+                    crate::async_work::napi_release_threadsafe_function(
+                        tsfn_addr as crate::types::napi_threadsafe_function,
+                        crate::types::napi_threadsafe_function_release_mode::napi_tsfn_abort,
                     )
-                },
-                napi_status::napi_ok
-            );
-            assert_eq!(
-                unsafe {
-                    crate::async_work::napi_call_threadsafe_function(
-                        tsfn,
-                        0x1234usize as *mut c_void,
-                        crate::types::napi_threadsafe_function_call_mode::napi_tsfn_nonblocking,
-                    )
-                },
-                napi_status::napi_ok
-            );
+                });
+                // Wait for abort to mark the TSFN and post cleanup jobs before draining,
+                // so any already-queued Tsfn delivery job observes `aborted` and tears down.
+                worker.join().unwrap();
 
-            let driver = crate::driver::ensure_driver(&mut env);
-            let tsfn_addr = tsfn as usize;
-            let worker = thread::spawn(move || unsafe {
-                crate::async_work::napi_release_threadsafe_function(
-                    tsfn_addr as crate::types::napi_threadsafe_function,
-                    crate::types::napi_threadsafe_function_release_mode::napi_tsfn_abort,
-                )
-            });
-            // Wait for abort to mark the TSFN and post cleanup jobs before draining,
-            // so any already-queued Tsfn delivery job observes `aborted` and tears down.
-            worker.join().unwrap();
+                let deadline = std::time::Instant::now() + Duration::from_secs(2);
+                while TEARDOWN_THREAD.lock().unwrap().is_none()
+                    && deadline > std::time::Instant::now()
+                {
+                    driver.drain_ready_jobs(env);
+                    thread::sleep(Duration::from_millis(1));
+                }
 
-            let deadline = std::time::Instant::now() + Duration::from_secs(2);
-            while TEARDOWN_THREAD.lock().unwrap().is_none() && deadline > std::time::Instant::now()
-            {
-                driver.drain_ready_jobs(&mut env);
-                thread::sleep(Duration::from_millis(1));
-            }
-
-            assert_eq!(
-                *TEARDOWN_THREAD.lock().unwrap(),
-                *EXPECTED_JS_THREAD.lock().unwrap()
-            );
-            env.scopes.close(raw.as_ptr());
-            env.dispose();
-        })
-        .await;
+                assert_eq!(
+                    *TEARDOWN_THREAD.lock().unwrap(),
+                    *EXPECTED_JS_THREAD.lock().unwrap()
+                );
+                unsafe { begin_registry_dispose(env_ptr, raw) }
+            })
+            .await;
+        finish_registry_env(&rt, &actx, driver).await;
     }
 
     #[tokio::test]
@@ -1743,8 +1840,6 @@ mod tests {
         let _lock = gc_test_lock().await;
         use std::os::raw::c_void;
         use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::{Arc, Barrier};
-        use std::thread;
 
         static PAYLOAD_COUNT: AtomicUsize = AtomicUsize::new(0);
         static LAST_PAYLOAD: AtomicUsize = AtomicUsize::new(0);
@@ -1760,90 +1855,97 @@ mod tests {
         }
 
         let rt = AsyncRuntime::new().unwrap();
-        let ctx = AsyncContext::full(&rt).await.unwrap();
-        let _async_ctx = ctx.clone();
-        ctx.with(|ctx| {
-            PAYLOAD_COUNT.store(0, Ordering::SeqCst);
-            let raw = ctx.as_raw();
-            let mut env = Env::new(raw);
-            env.scopes.open();
-            let napi_env = env.as_napi_env();
-            let func_val = make_tsfn_js_callback(raw.as_ptr());
-            let func_handle = value_to_napi_owned(&mut env, func_val);
-            let mut tsfn: crate::types::napi_threadsafe_function = std::ptr::null_mut();
-            assert_eq!(
-                unsafe {
-                    crate::async_work::napi_create_threadsafe_function(
-                        napi_env,
-                        func_handle,
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        0,
-                        1,
-                        std::ptr::null_mut(),
-                        None,
-                        std::ptr::null_mut(),
-                        Some(tsfn_call_js),
-                        &mut tsfn,
-                    )
-                },
-                napi_status::napi_ok
-            );
-            let tsfn_arc = crate::async_work::lookup_tsfn_for_test(tsfn).unwrap();
-            let driver = Arc::clone(&tsfn_arc.driver);
-            let barrier = Arc::new(Barrier::new(2));
+        let actx = AsyncContext::full(&rt).await.unwrap();
 
-            let tsfn_fail = tsfn as usize;
-            let driver_fail = Arc::clone(&driver);
-            let barrier_fail = Arc::clone(&barrier);
-            let fail_handle = thread::spawn(move || {
-                barrier_fail.wait();
-                driver_fail.set_fail_posts(true);
-                let status = unsafe {
-                    crate::async_work::napi_call_threadsafe_function(
-                        tsfn_fail as crate::types::napi_threadsafe_function,
-                        0xAAusize as *mut c_void,
-                        crate::types::napi_threadsafe_function_call_mode::napi_tsfn_nonblocking,
-                    )
-                };
-                assert_eq!(status, napi_status::napi_generic_failure);
-                driver_fail.set_fail_posts(false);
-            });
-
-            let tsfn_ok = tsfn as usize;
-            let driver_ok = Arc::clone(&driver);
-            let barrier_ok = Arc::clone(&barrier);
-            let ok_handle = thread::spawn(move || {
-                barrier_ok.wait();
-                driver_ok.set_fail_posts(false);
-                let status = unsafe {
-                    crate::async_work::napi_call_threadsafe_function(
-                        tsfn_ok as crate::types::napi_threadsafe_function,
-                        0xBBusize as *mut c_void,
-                        crate::types::napi_threadsafe_function_call_mode::napi_tsfn_nonblocking,
-                    )
-                };
-                assert_eq!(status, napi_status::napi_ok);
-            });
-
-            fail_handle.join().unwrap();
-            ok_handle.join().unwrap();
-            assert_eq!(tsfn_arc.test_queue_len(), 1);
-
-            let driver = crate::driver::ensure_driver(&mut env);
-            driver.drain_ready_jobs(&mut env);
-            assert_eq!(PAYLOAD_COUNT.load(Ordering::SeqCst), 1);
-            assert_eq!(LAST_PAYLOAD.load(Ordering::SeqCst), 0xBB);
-
-            unsafe {
-                crate::async_work::napi_release_threadsafe_function(
-                    tsfn,
-                    crate::types::napi_threadsafe_function_release_mode::napi_tsfn_release,
+        // Registry-owned env so we can begin_dispose, wait_finished outside with(),
+        // then finish_dispose — never force-finish an active driver loop.
+        let driver = actx
+            .with(|ctx| {
+                PAYLOAD_COUNT.store(0, Ordering::SeqCst);
+                LAST_PAYLOAD.store(0, Ordering::SeqCst);
+                let raw = ctx.as_raw();
+                let env_ptr = crate::dlopen::register_env(raw, Box::new(Env::new(raw)));
+                let env = unsafe { &mut *env_ptr };
+                env.scopes.open();
+                let napi_env = env.as_napi_env();
+                let func_val = make_tsfn_js_callback(raw.as_ptr());
+                let func_handle = value_to_napi_owned(env, func_val);
+                let mut tsfn: crate::types::napi_threadsafe_function = std::ptr::null_mut();
+                assert_eq!(
+                    unsafe {
+                        crate::async_work::napi_create_threadsafe_function(
+                            napi_env,
+                            func_handle,
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                            0,
+                            1,
+                            std::ptr::null_mut(),
+                            None,
+                            std::ptr::null_mut(),
+                            Some(tsfn_call_js),
+                            &mut tsfn,
+                        )
+                    },
+                    napi_status::napi_ok
                 );
-            }
-            driver.drain_ready_jobs(&mut env);
-            env.scopes.close(raw.as_ptr());
-            env.dispose();
+                let tsfn_arc = crate::async_work::lookup_tsfn_for_test(tsfn).unwrap();
+                let driver = std::sync::Arc::clone(&tsfn_arc.driver);
+
+                // Deterministic admission: queue BB first, then fail AA so rollback
+                // cannot clear the surviving payload (no concurrent fail_posts race).
+                assert_eq!(
+                    unsafe {
+                        crate::async_work::napi_call_threadsafe_function(
+                            tsfn,
+                            0xBBusize as *mut c_void,
+                            crate::types::napi_threadsafe_function_call_mode::napi_tsfn_nonblocking,
+                        )
+                    },
+                    napi_status::napi_ok
+                );
+                assert_eq!(tsfn_arc.test_queue_len(), 1);
+
+                driver.set_fail_posts(true);
+                assert_eq!(
+                    unsafe {
+                        crate::async_work::napi_call_threadsafe_function(
+                            tsfn,
+                            0xAAusize as *mut c_void,
+                            crate::types::napi_threadsafe_function_call_mode::napi_tsfn_nonblocking,
+                        )
+                    },
+                    napi_status::napi_generic_failure
+                );
+                driver.set_fail_posts(false);
+                assert_eq!(tsfn_arc.test_queue_len(), 1);
+
+                driver.drain_ready_jobs(env);
+                assert_eq!(PAYLOAD_COUNT.load(Ordering::SeqCst), 1);
+                assert_eq!(LAST_PAYLOAD.load(Ordering::SeqCst), 0xBB);
+
+                unsafe {
+                    crate::async_work::napi_release_threadsafe_function(
+                        tsfn,
+                        crate::types::napi_threadsafe_function_release_mode::napi_tsfn_release,
+                    );
+                }
+                driver.drain_ready_jobs(env);
+                env.scopes.close(raw.as_ptr());
+                env.begin_dispose();
+                // Loop may still be running — finish only after wait_finished.
+                assert!(!env.finish_dispose() || driver.is_finished());
+                driver.clone()
+            })
+            .await;
+
+        wait_driver_finished_bounded(&rt, &driver).await;
+        assert!(driver.is_finished());
+        assert!(driver.is_quiescent());
+
+        actx.with(|ctx| {
+            crate::dlopen::finish_shutdown(&ctx).expect("finish after wait");
+            crate::dlopen::shutdown_all().expect("registry empty");
         })
         .await;
     }
@@ -1866,61 +1968,62 @@ mod tests {
         }
 
         let rt = AsyncRuntime::new().unwrap();
-        let ctx = AsyncContext::full(&rt).await.unwrap();
-        let _async_ctx = ctx.clone();
-        ctx.with(|ctx| {
-            COMPLETE_COUNT.store(0, Ordering::SeqCst);
-            let raw = ctx.as_raw();
-            let mut env = Env::new(raw);
-            env.scopes.open();
-            let napi_env = env.as_napi_env();
-            let driver = crate::driver::ensure_driver(&mut env);
-            let mut work: crate::types::napi_async_work = std::ptr::null_mut();
-            assert_eq!(
-                unsafe {
-                    crate::async_work::napi_create_async_work(
-                        napi_env,
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        None,
-                        Some(complete_cb),
-                        std::ptr::null_mut(),
-                        &mut work,
-                    )
-                },
-                napi_status::napi_ok
-            );
-
-            let work_for_cancel = work as usize;
-            let cancel_env = napi_env as usize;
-            let cancel_handle = thread::spawn(move || {
-                for _ in 0..500 {
+        let actx = AsyncContext::full(&rt).await.unwrap();
+        let driver = actx
+            .with(|ctx| {
+                COMPLETE_COUNT.store(0, Ordering::SeqCst);
+                let raw = ctx.as_raw();
+                let mut env_ptr = register_test_env(raw);
+                let env = unsafe { env_ptr.as_mut() };
+                env.scopes.open();
+                let napi_env = env.as_napi_env();
+                let driver = crate::driver::ensure_driver(env);
+                let mut work: crate::types::napi_async_work = std::ptr::null_mut();
+                assert_eq!(
                     unsafe {
-                        crate::async_work::napi_cancel_async_work(
-                            cancel_env as crate::types::napi_env,
-                            work_for_cancel as crate::types::napi_async_work,
+                        crate::async_work::napi_create_async_work(
+                            napi_env,
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                            None,
+                            Some(complete_cb),
+                            std::ptr::null_mut(),
+                            &mut work,
                         )
-                    };
-                    thread::yield_now();
-                }
-            });
-            assert_eq!(
-                unsafe { crate::async_work::napi_queue_async_work(napi_env, work) },
-                napi_status::napi_ok
-            );
-            cancel_handle.join().unwrap();
-            driver.drain_ready_jobs(&mut env);
-            driver.drain_ready_jobs(&mut env);
-            assert_eq!(COMPLETE_COUNT.load(Ordering::SeqCst), 1);
-            assert_eq!(driver.inflight_async.load(Ordering::SeqCst), 0);
-            assert_eq!(
-                unsafe { crate::async_work::napi_delete_async_work(napi_env, work) },
-                napi_status::napi_ok
-            );
-            env.scopes.close(raw.as_ptr());
-            env.dispose();
-        })
-        .await;
+                    },
+                    napi_status::napi_ok
+                );
+
+                let work_for_cancel = work as usize;
+                let cancel_env = napi_env as usize;
+                let cancel_handle = thread::spawn(move || {
+                    for _ in 0..500 {
+                        unsafe {
+                            crate::async_work::napi_cancel_async_work(
+                                cancel_env as crate::types::napi_env,
+                                work_for_cancel as crate::types::napi_async_work,
+                            )
+                        };
+                        thread::yield_now();
+                    }
+                });
+                assert_eq!(
+                    unsafe { crate::async_work::napi_queue_async_work(napi_env, work) },
+                    napi_status::napi_ok
+                );
+                cancel_handle.join().unwrap();
+                driver.drain_ready_jobs(env);
+                driver.drain_ready_jobs(env);
+                assert_eq!(COMPLETE_COUNT.load(Ordering::SeqCst), 1);
+                assert_eq!(driver.inflight_async.load(Ordering::SeqCst), 0);
+                assert_eq!(
+                    unsafe { crate::async_work::napi_delete_async_work(napi_env, work) },
+                    napi_status::napi_ok
+                );
+                unsafe { begin_registry_dispose(env_ptr, raw) }
+            })
+            .await;
+        finish_registry_env(&rt, &actx, driver).await;
     }
 
     #[tokio::test]
@@ -1945,59 +2048,60 @@ mod tests {
 
         const WORK_COUNT: u32 = 32;
         let rt = AsyncRuntime::new().unwrap();
-        let ctx = AsyncContext::full(&rt).await.unwrap();
-        let _async_ctx = ctx.clone();
-        ctx.with(|ctx| {
-            COMPLETE_COUNT.store(0, Ordering::SeqCst);
-            let raw = ctx.as_raw();
-            let mut env = Env::new(raw);
-            env.scopes.open();
-            let napi_env = env.as_napi_env();
-            let driver = crate::driver::ensure_driver(&mut env);
-            let mut works = Vec::new();
-            for _ in 0..WORK_COUNT {
-                let mut work: crate::types::napi_async_work = std::ptr::null_mut();
-                assert_eq!(
-                    unsafe {
-                        crate::async_work::napi_create_async_work(
-                            napi_env,
-                            std::ptr::null_mut(),
-                            std::ptr::null_mut(),
-                            Some(execute_fast),
-                            Some(complete_count),
-                            std::ptr::null_mut(),
-                            &mut work,
-                        )
-                    },
-                    napi_status::napi_ok
-                );
-                assert_eq!(
-                    unsafe { crate::async_work::napi_queue_async_work(napi_env, work) },
-                    napi_status::napi_ok
-                );
-                works.push(work);
-            }
+        let actx = AsyncContext::full(&rt).await.unwrap();
+        let driver = actx
+            .with(|ctx| {
+                COMPLETE_COUNT.store(0, Ordering::SeqCst);
+                let raw = ctx.as_raw();
+                let mut env_ptr = register_test_env(raw);
+                let env = unsafe { env_ptr.as_mut() };
+                env.scopes.open();
+                let napi_env = env.as_napi_env();
+                let driver = crate::driver::ensure_driver(env);
+                let mut works = Vec::new();
+                for _ in 0..WORK_COUNT {
+                    let mut work: crate::types::napi_async_work = std::ptr::null_mut();
+                    assert_eq!(
+                        unsafe {
+                            crate::async_work::napi_create_async_work(
+                                napi_env,
+                                std::ptr::null_mut(),
+                                std::ptr::null_mut(),
+                                Some(execute_fast),
+                                Some(complete_count),
+                                std::ptr::null_mut(),
+                                &mut work,
+                            )
+                        },
+                        napi_status::napi_ok
+                    );
+                    assert_eq!(
+                        unsafe { crate::async_work::napi_queue_async_work(napi_env, work) },
+                        napi_status::napi_ok
+                    );
+                    works.push(work);
+                }
 
-            let deadline = std::time::Instant::now() + Duration::from_secs(5);
-            while COMPLETE_COUNT.load(Ordering::SeqCst) < WORK_COUNT
-                && deadline > std::time::Instant::now()
-            {
-                driver.drain_ready_jobs(&mut env);
-                thread::sleep(Duration::from_millis(1));
-            }
-            assert_eq!(COMPLETE_COUNT.load(Ordering::SeqCst), WORK_COUNT);
-            assert_eq!(driver.inflight_async.load(Ordering::SeqCst), 0);
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                while COMPLETE_COUNT.load(Ordering::SeqCst) < WORK_COUNT
+                    && deadline > std::time::Instant::now()
+                {
+                    driver.drain_ready_jobs(env);
+                    thread::sleep(Duration::from_millis(1));
+                }
+                assert_eq!(COMPLETE_COUNT.load(Ordering::SeqCst), WORK_COUNT);
+                assert_eq!(driver.inflight_async.load(Ordering::SeqCst), 0);
 
-            for work in works {
-                assert_eq!(
-                    unsafe { crate::async_work::napi_delete_async_work(napi_env, work) },
-                    napi_status::napi_ok
-                );
-            }
-            env.scopes.close(raw.as_ptr());
-            env.dispose();
-        })
-        .await;
+                for work in works {
+                    assert_eq!(
+                        unsafe { crate::async_work::napi_delete_async_work(napi_env, work) },
+                        napi_status::napi_ok
+                    );
+                }
+                unsafe { begin_registry_dispose(env_ptr, raw) }
+            })
+            .await;
+        finish_registry_env(&rt, &actx, driver).await;
     }
 
     #[tokio::test]
@@ -2023,66 +2127,67 @@ mod tests {
         }
 
         let rt = AsyncRuntime::new().unwrap();
-        let ctx = AsyncContext::full(&rt).await.unwrap();
-        let _async_ctx = ctx.clone();
-        ctx.with(|ctx| {
-            TEARDOWN_COUNT.store(0, Ordering::SeqCst);
-            JS_CALL_COUNT.store(0, Ordering::SeqCst);
-            let raw = ctx.as_raw();
-            let mut env = Env::new(raw);
-            env.scopes.open();
-            let napi_env = env.as_napi_env();
-            let func_val = make_tsfn_js_callback(raw.as_ptr());
-            let func_handle = value_to_napi_owned(&mut env, func_val);
-            let mut tsfn: crate::types::napi_threadsafe_function = std::ptr::null_mut();
-            assert_eq!(
-                unsafe {
-                    crate::async_work::napi_create_threadsafe_function(
-                        napi_env,
-                        func_handle,
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        0,
-                        1,
-                        std::ptr::null_mut(),
-                        None,
-                        std::ptr::null_mut(),
-                        Some(tsfn_call_js),
-                        &mut tsfn,
-                    )
-                },
-                napi_status::napi_ok
-            );
-            assert_eq!(
-                unsafe {
-                    crate::async_work::napi_call_threadsafe_function(
-                        tsfn,
-                        0x55usize as *mut c_void,
-                        crate::types::napi_threadsafe_function_call_mode::napi_tsfn_nonblocking,
-                    )
-                },
-                napi_status::napi_ok
-            );
-            let tsfn_arc = crate::async_work::lookup_tsfn_for_test(tsfn).unwrap();
-            tsfn_arc.aborted.store(true, Ordering::SeqCst);
-            tsfn_arc.queue_set_closing_for_test();
-
-            crate::async_work::drain_threadsafe_functions(napi_env);
-            assert_eq!(TEARDOWN_COUNT.load(Ordering::SeqCst), 1);
-            assert_eq!(JS_CALL_COUNT.load(Ordering::SeqCst), 0);
-
-            unsafe {
-                crate::async_work::napi_release_threadsafe_function(
-                    tsfn,
-                    crate::types::napi_threadsafe_function_release_mode::napi_tsfn_abort,
+        let actx = AsyncContext::full(&rt).await.unwrap();
+        let driver = actx
+            .with(|ctx| {
+                TEARDOWN_COUNT.store(0, Ordering::SeqCst);
+                JS_CALL_COUNT.store(0, Ordering::SeqCst);
+                let raw = ctx.as_raw();
+                let mut env_ptr = register_test_env(raw);
+                let env = unsafe { env_ptr.as_mut() };
+                env.scopes.open();
+                let napi_env = env.as_napi_env();
+                let func_val = make_tsfn_js_callback(raw.as_ptr());
+                let func_handle = value_to_napi_owned(env, func_val);
+                let mut tsfn: crate::types::napi_threadsafe_function = std::ptr::null_mut();
+                assert_eq!(
+                    unsafe {
+                        crate::async_work::napi_create_threadsafe_function(
+                            napi_env,
+                            func_handle,
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                            0,
+                            1,
+                            std::ptr::null_mut(),
+                            None,
+                            std::ptr::null_mut(),
+                            Some(tsfn_call_js),
+                            &mut tsfn,
+                        )
+                    },
+                    napi_status::napi_ok
                 );
-            }
-            let driver = crate::driver::ensure_driver(&mut env);
-            driver.drain_ready_jobs(&mut env);
-            env.scopes.close(raw.as_ptr());
-            env.dispose();
-        })
-        .await;
+                assert_eq!(
+                    unsafe {
+                        crate::async_work::napi_call_threadsafe_function(
+                            tsfn,
+                            0x55usize as *mut c_void,
+                            crate::types::napi_threadsafe_function_call_mode::napi_tsfn_nonblocking,
+                        )
+                    },
+                    napi_status::napi_ok
+                );
+                let tsfn_arc = crate::async_work::lookup_tsfn_for_test(tsfn).unwrap();
+                tsfn_arc.aborted.store(true, Ordering::SeqCst);
+                tsfn_arc.queue_set_closing_for_test();
+
+                crate::async_work::drain_threadsafe_functions(napi_env);
+                assert_eq!(TEARDOWN_COUNT.load(Ordering::SeqCst), 1);
+                assert_eq!(JS_CALL_COUNT.load(Ordering::SeqCst), 0);
+
+                unsafe {
+                    crate::async_work::napi_release_threadsafe_function(
+                        tsfn,
+                        crate::types::napi_threadsafe_function_release_mode::napi_tsfn_abort,
+                    );
+                }
+                let driver = crate::driver::ensure_driver(env);
+                driver.drain_ready_jobs(env);
+                unsafe { begin_registry_dispose(env_ptr, raw) }
+            })
+            .await;
+        finish_registry_env(&rt, &actx, driver).await;
     }
 
     #[tokio::test]
@@ -2111,91 +2216,93 @@ mod tests {
         }
 
         let rt = AsyncRuntime::new().unwrap();
-        let ctx = AsyncContext::full(&rt).await.unwrap();
-        let _async_ctx = ctx.clone();
-        ctx.with(|ctx| {
-            TEARDOWN_COUNT.store(0, Ordering::SeqCst);
-            JS_CALL_COUNT.store(0, Ordering::SeqCst);
-            let raw = ctx.as_raw();
-            let mut env = Env::new(raw);
-            env.scopes.open();
-            let napi_env = env.as_napi_env();
-            let func_val = make_tsfn_js_callback(raw.as_ptr());
-            let func_handle = value_to_napi_owned(&mut env, func_val);
-            let mut tsfn: crate::types::napi_threadsafe_function = std::ptr::null_mut();
-            assert_eq!(
-                unsafe {
-                    crate::async_work::napi_create_threadsafe_function(
-                        napi_env,
-                        func_handle,
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        0,
-                        2,
-                        std::ptr::null_mut(),
-                        None,
-                        std::ptr::null_mut(),
-                        Some(tsfn_call_js),
-                        &mut tsfn,
-                    )
-                },
-                napi_status::napi_ok
-            );
-            for i in 0..3 {
+        let actx = AsyncContext::full(&rt).await.unwrap();
+        let driver = actx
+            .with(|ctx| {
+                TEARDOWN_COUNT.store(0, Ordering::SeqCst);
+                JS_CALL_COUNT.store(0, Ordering::SeqCst);
+                let raw = ctx.as_raw();
+                let mut env_ptr = register_test_env(raw);
+                let env = unsafe { env_ptr.as_mut() };
+                env.scopes.open();
+                let napi_env = env.as_napi_env();
+                let func_val = make_tsfn_js_callback(raw.as_ptr());
+                let func_handle = value_to_napi_owned(env, func_val);
+                let mut tsfn: crate::types::napi_threadsafe_function = std::ptr::null_mut();
                 assert_eq!(
                     unsafe {
-                        crate::async_work::napi_call_threadsafe_function(
-                            tsfn,
-                            (0x100 + i) as *mut c_void,
-                            crate::types::napi_threadsafe_function_call_mode::napi_tsfn_nonblocking,
+                        crate::async_work::napi_create_threadsafe_function(
+                            napi_env,
+                            func_handle,
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                            0,
+                            2,
+                            std::ptr::null_mut(),
+                            None,
+                            std::ptr::null_mut(),
+                            Some(tsfn_call_js),
+                            &mut tsfn,
                         )
                     },
                     napi_status::napi_ok
                 );
-            }
+                for i in 0..3 {
+                    assert_eq!(
+                        unsafe {
+                            crate::async_work::napi_call_threadsafe_function(
+                                tsfn,
+                                (0x100 + i) as *mut c_void,
+                                crate::types::napi_threadsafe_function_call_mode::napi_tsfn_nonblocking,
+                            )
+                        },
+                        napi_status::napi_ok
+                    );
+                }
 
-            let barrier = Arc::new(Barrier::new(2));
-            let tsfn_abort = tsfn as usize;
-            let barrier_abort = Arc::clone(&barrier);
-            let abort_handle = thread::spawn(move || {
-                barrier_abort.wait();
-                unsafe {
-                    crate::async_work::napi_release_threadsafe_function(
-                        tsfn_abort as crate::types::napi_threadsafe_function,
-                        crate::types::napi_threadsafe_function_release_mode::napi_tsfn_abort,
-                    )
-                };
-            });
-            let tsfn_normal = tsfn as usize;
-            let barrier_normal = Arc::clone(&barrier);
-            let normal_handle = thread::spawn(move || {
-                barrier_normal.wait();
-                // Slight delay so abort sticky bit is usually set first; sticky aborted
-                // still wins even if this last release posts TsfnRelease first.
-                thread::sleep(Duration::from_millis(1));
-                unsafe {
-                    crate::async_work::napi_release_threadsafe_function(
-                        tsfn_normal as crate::types::napi_threadsafe_function,
-                        crate::types::napi_threadsafe_function_release_mode::napi_tsfn_release,
-                    )
-                };
-            });
-            abort_handle.join().unwrap();
-            normal_handle.join().unwrap();
+                let barrier = Arc::new(Barrier::new(2));
+                let tsfn_abort = tsfn as usize;
+                let barrier_abort = Arc::clone(&barrier);
+                let abort_handle = thread::spawn(move || {
+                    barrier_abort.wait();
+                    unsafe {
+                        crate::async_work::napi_release_threadsafe_function(
+                            tsfn_abort as crate::types::napi_threadsafe_function,
+                            crate::types::napi_threadsafe_function_release_mode::napi_tsfn_abort,
+                        )
+                    };
+                });
+                let tsfn_normal = tsfn as usize;
+                let barrier_normal = Arc::clone(&barrier);
+                let normal_handle = thread::spawn(move || {
+                    barrier_normal.wait();
+                    // Slight delay so abort sticky bit is usually set first; sticky aborted
+                    // still wins even if this last release posts TsfnRelease first.
+                    thread::sleep(Duration::from_millis(1));
+                    unsafe {
+                        crate::async_work::napi_release_threadsafe_function(
+                            tsfn_normal as crate::types::napi_threadsafe_function,
+                            crate::types::napi_threadsafe_function_release_mode::napi_tsfn_release,
+                        )
+                    };
+                });
+                abort_handle.join().unwrap();
+                normal_handle.join().unwrap();
 
-            let driver = crate::driver::ensure_driver(&mut env);
-            let deadline = std::time::Instant::now() + Duration::from_secs(2);
-            while TEARDOWN_COUNT.load(Ordering::SeqCst) < 3 && deadline > std::time::Instant::now()
-            {
-                driver.drain_ready_jobs(&mut env);
-                thread::sleep(Duration::from_millis(1));
-            }
-            assert_eq!(TEARDOWN_COUNT.load(Ordering::SeqCst), 3);
-            assert_eq!(JS_CALL_COUNT.load(Ordering::SeqCst), 0);
-            env.scopes.close(raw.as_ptr());
-            env.dispose();
-        })
-        .await;
+                let driver = crate::driver::ensure_driver(env);
+                let deadline = std::time::Instant::now() + Duration::from_secs(2);
+                while TEARDOWN_COUNT.load(Ordering::SeqCst) < 3
+                    && deadline > std::time::Instant::now()
+                {
+                    driver.drain_ready_jobs(env);
+                    thread::sleep(Duration::from_millis(1));
+                }
+                assert_eq!(TEARDOWN_COUNT.load(Ordering::SeqCst), 3);
+                assert_eq!(JS_CALL_COUNT.load(Ordering::SeqCst), 0);
+                unsafe { begin_registry_dispose(env_ptr, raw) }
+            })
+            .await;
+        finish_registry_env(&rt, &actx, driver).await;
     }
 
     /// napi-rs JsDeferred: `func == null` with non-null `call_js_cb` must deliver.
@@ -2226,73 +2333,75 @@ mod tests {
         }
 
         let rt = AsyncRuntime::new().unwrap();
-        let ctx = AsyncContext::full(&rt).await.unwrap();
-        let _async_ctx = ctx.clone();
-        ctx.with(|ctx| {
-            DELIVERED.store(0, Ordering::SeqCst);
-            LAST_DATA.store(0, Ordering::SeqCst);
-            let raw = ctx.as_raw();
-            let mut env = Env::new(raw);
-            env.scopes.open();
-            let napi_env = env.as_napi_env();
-            let mut tsfn: crate::types::napi_threadsafe_function = std::ptr::null_mut();
-            assert_eq!(
-                unsafe {
-                    crate::async_work::napi_create_threadsafe_function(
-                        napi_env,
-                        std::ptr::null_mut(), // func == null
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        0,
-                        1,
-                        std::ptr::null_mut(),
-                        None,
-                        std::ptr::null_mut(),
-                        Some(tsfn_call_js),
-                        &mut tsfn,
-                    )
-                },
-                napi_status::napi_ok
-            );
-            let payload = 0xC0FFEEusize as *mut c_void;
-            assert_eq!(
-                unsafe {
-                    crate::async_work::napi_call_threadsafe_function(
-                        tsfn,
-                        payload,
-                        crate::types::napi_threadsafe_function_call_mode::napi_tsfn_nonblocking,
-                    )
-                },
-                napi_status::napi_ok
-            );
+        let actx = AsyncContext::full(&rt).await.unwrap();
+        let driver = actx
+            .with(|ctx| {
+                DELIVERED.store(0, Ordering::SeqCst);
+                LAST_DATA.store(0, Ordering::SeqCst);
+                let raw = ctx.as_raw();
+                let mut env_ptr = register_test_env(raw);
+                let env = unsafe { env_ptr.as_mut() };
+                env.scopes.open();
+                let napi_env = env.as_napi_env();
+                let mut tsfn: crate::types::napi_threadsafe_function = std::ptr::null_mut();
+                assert_eq!(
+                    unsafe {
+                        crate::async_work::napi_create_threadsafe_function(
+                            napi_env,
+                            std::ptr::null_mut(), // func == null
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                            0,
+                            1,
+                            std::ptr::null_mut(),
+                            None,
+                            std::ptr::null_mut(),
+                            Some(tsfn_call_js),
+                            &mut tsfn,
+                        )
+                    },
+                    napi_status::napi_ok
+                );
+                let payload = 0xC0FFEEusize as *mut c_void;
+                assert_eq!(
+                    unsafe {
+                        crate::async_work::napi_call_threadsafe_function(
+                            tsfn,
+                            payload,
+                            crate::types::napi_threadsafe_function_call_mode::napi_tsfn_nonblocking,
+                        )
+                    },
+                    napi_status::napi_ok
+                );
 
-            let driver = crate::driver::ensure_driver(&mut env);
-            let deadline = std::time::Instant::now() + Duration::from_secs(2);
-            while DELIVERED.load(Ordering::SeqCst) == 0 && deadline > std::time::Instant::now() {
-                driver.drain_ready_jobs(&mut env);
-                std::thread::sleep(Duration::from_millis(1));
-            }
-            assert_eq!(DELIVERED.load(Ordering::SeqCst), 1);
-            assert_eq!(LAST_DATA.load(Ordering::SeqCst), 0xC0FFEE);
+                let driver = crate::driver::ensure_driver(env);
+                let deadline = std::time::Instant::now() + Duration::from_secs(2);
+                while DELIVERED.load(Ordering::SeqCst) == 0 && deadline > std::time::Instant::now()
+                {
+                    driver.drain_ready_jobs(env);
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                assert_eq!(DELIVERED.load(Ordering::SeqCst), 1);
+                assert_eq!(LAST_DATA.load(Ordering::SeqCst), 0xC0FFEE);
 
-            assert_eq!(
-                unsafe {
-                    crate::async_work::napi_release_threadsafe_function(
-                        tsfn,
-                        crate::types::napi_threadsafe_function_release_mode::napi_tsfn_release,
-                    )
-                },
-                napi_status::napi_ok
-            );
-            let deadline = std::time::Instant::now() + Duration::from_secs(1);
-            while deadline > std::time::Instant::now() {
-                driver.drain_ready_jobs(&mut env);
-                std::thread::sleep(Duration::from_millis(1));
-            }
-            env.scopes.close(raw.as_ptr());
-            env.dispose();
-        })
-        .await;
+                assert_eq!(
+                    unsafe {
+                        crate::async_work::napi_release_threadsafe_function(
+                            tsfn,
+                            crate::types::napi_threadsafe_function_release_mode::napi_tsfn_release,
+                        )
+                    },
+                    napi_status::napi_ok
+                );
+                let deadline = std::time::Instant::now() + Duration::from_secs(1);
+                while deadline > std::time::Instant::now() {
+                    driver.drain_ready_jobs(env);
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                unsafe { begin_registry_dispose(env_ptr, raw) }
+            })
+            .await;
+        finish_registry_env(&rt, &actx, driver).await;
     }
 
     #[tokio::test]
@@ -2657,7 +2766,10 @@ mod tests {
         driver.release_async_keepalive();
         driver.mark_finished_if_idle();
         assert!(driver.is_finished());
-        driver.wait_finished().await;
+        // Already finished — still bound the wait so a regression cannot hang CI.
+        tokio::time::timeout(std::time::Duration::from_secs(5), driver.wait_finished())
+            .await
+            .expect("wait_finished after idle mark must not hang");
     }
 
     #[tokio::test]
@@ -2693,11 +2805,8 @@ mod tests {
         assert!(!driver.is_finished());
         // Drop keepalive so the loop can exit once polled.
         driver.idle_refs.fetch_sub(1, Ordering::SeqCst);
-        driver.wake_if_quiescent();
-        // Drive the JS runtime so the driver future observes quiescence and exits.
-        let _ = rt.idle().await;
-        // Real wait — never force mark_finished.
-        driver.wait_finished().await;
+        // Real wait — never force mark_finished; bounded so CI cannot hang.
+        wait_driver_finished_bounded(&rt, &driver).await;
         assert!(driver.is_finished());
         assert!(driver.is_quiescent());
         assert_eq!(driver.inflight_async.load(Ordering::SeqCst), 0);
@@ -2864,69 +2973,71 @@ mod tests {
         }
 
         let rt = AsyncRuntime::new().unwrap();
-        let ctx = AsyncContext::full(&rt).await.unwrap();
-        ctx.with(|ctx| {
-            let raw = ctx.as_raw();
-            let mut env = Env::new(raw);
-            env.scopes.open();
-            let napi_env = env.as_napi_env();
-            let mut work: crate::types::napi_async_work = std::ptr::null_mut();
-            assert_eq!(
-                unsafe {
-                    crate::async_work::napi_create_async_work(
-                        napi_env,
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        None,
-                        None,
-                        std::ptr::null_mut(),
-                        &mut work,
-                    )
-                },
-                napi_status::napi_ok
-            );
-            assert_eq!(
-                unsafe { crate::async_work::napi_queue_async_work(napi_env, work) },
-                napi_status::napi_ok
-            );
-            let driver = crate::driver::ensure_driver(&mut env);
-            driver.drain_ready_jobs(&mut env);
-            assert_eq!(
-                unsafe { crate::async_work::napi_delete_async_work(napi_env, work) },
-                napi_status::napi_ok
-            );
-
-            let mut tsfn: crate::types::napi_threadsafe_function = std::ptr::null_mut();
-            assert_eq!(
-                unsafe {
-                    crate::async_work::napi_create_threadsafe_function(
-                        napi_env,
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        0,
-                        1,
-                        std::ptr::null_mut(),
-                        None,
-                        std::ptr::null_mut(),
-                        Some(tsfn_call_js),
-                        &mut tsfn,
-                    )
-                },
-                napi_status::napi_ok
-            );
-            assert!(!tsfn.is_null());
-            unsafe {
-                crate::async_work::napi_release_threadsafe_function(
-                    tsfn,
-                    crate::types::napi_threadsafe_function_release_mode::napi_tsfn_release,
+        let actx = AsyncContext::full(&rt).await.unwrap();
+        let driver = actx
+            .with(|ctx| {
+                let raw = ctx.as_raw();
+                let mut env_ptr = register_test_env(raw);
+                let env = unsafe { env_ptr.as_mut() };
+                env.scopes.open();
+                let napi_env = env.as_napi_env();
+                let mut work: crate::types::napi_async_work = std::ptr::null_mut();
+                assert_eq!(
+                    unsafe {
+                        crate::async_work::napi_create_async_work(
+                            napi_env,
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                            None,
+                            None,
+                            std::ptr::null_mut(),
+                            &mut work,
+                        )
+                    },
+                    napi_status::napi_ok
                 );
-            }
-            driver.drain_ready_jobs(&mut env);
-            env.scopes.close(raw.as_ptr());
-            env.dispose();
-        })
-        .await;
+                assert_eq!(
+                    unsafe { crate::async_work::napi_queue_async_work(napi_env, work) },
+                    napi_status::napi_ok
+                );
+                let driver = crate::driver::ensure_driver(env);
+                driver.drain_ready_jobs(env);
+                assert_eq!(
+                    unsafe { crate::async_work::napi_delete_async_work(napi_env, work) },
+                    napi_status::napi_ok
+                );
+
+                let mut tsfn: crate::types::napi_threadsafe_function = std::ptr::null_mut();
+                assert_eq!(
+                    unsafe {
+                        crate::async_work::napi_create_threadsafe_function(
+                            napi_env,
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                            0,
+                            1,
+                            std::ptr::null_mut(),
+                            None,
+                            std::ptr::null_mut(),
+                            Some(tsfn_call_js),
+                            &mut tsfn,
+                        )
+                    },
+                    napi_status::napi_ok
+                );
+                assert!(!tsfn.is_null());
+                unsafe {
+                    crate::async_work::napi_release_threadsafe_function(
+                        tsfn,
+                        crate::types::napi_threadsafe_function_release_mode::napi_tsfn_release,
+                    );
+                }
+                driver.drain_ready_jobs(env);
+                unsafe { begin_registry_dispose(env_ptr, raw) }
+            })
+            .await;
+        finish_registry_env(&rt, &actx, driver).await;
     }
 
     #[tokio::test]

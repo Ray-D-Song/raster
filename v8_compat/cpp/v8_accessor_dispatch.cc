@@ -22,7 +22,8 @@ static v8::internal::Address encode_smi(int32_t value) {
 
 static uint64_t root_id_from_accessor_return(RasterV8ContextState* ctx,
                                              uintptr_t repr) {
-  uint64_t root = resolve_root_from_repr(ctx, repr);
+  // Same Smi / Set(0) handling as function callback return values.
+  uint64_t root = resolve_return_value_repr(ctx, repr);
   if (root != 0) {
     return root;
   }

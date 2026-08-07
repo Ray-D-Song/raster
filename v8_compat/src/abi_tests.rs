@@ -864,3 +864,24 @@ fn persistent_reset_scrubs_layout_index_maps() {
     }
     fixture.shutdown_bridge_and_drop_runtime();
 }
+
+#[test]
+fn resolve_root_repr_smi_to_number_and_known_layouts() {
+    let _lock = abi_test_lock();
+
+    let fixture = WiredTestContext::new();
+    extern "C" {
+        fn raster_v8_test_resolve_root_repr_smi_and_tagged(
+            ctx_state: *mut crate::bridge::RasterV8ContextState,
+        ) -> i32;
+    }
+    let ok = unsafe { raster_v8_test_resolve_root_repr_smi_and_tagged(fixture.context_state) };
+    assert_eq!(
+        ok, 1,
+        "general resolver rejects Smi/unknown addrs; return-value path materializes Smi"
+    );
+    unsafe {
+        crate::shutdown_context(fixture.ctx_ptr).unwrap();
+    }
+    fixture.shutdown_bridge_and_drop_runtime();
+}

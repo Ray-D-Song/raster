@@ -64,7 +64,7 @@ static shim::ObjectLayout* layout_for_root(RasterV8ContextState* ctx, uint64_t r
 
 static uint64_t root_id_from_return_value(RasterV8ContextState* ctx,
                                           v8::internal::Address repr) {
-  return resolve_root_from_repr(ctx, static_cast<uintptr_t>(repr));
+  return resolve_return_value_repr(ctx, static_cast<uintptr_t>(repr));
 }
 
 RasterV8Status dispatch_v8_callback(uint32_t function_id,

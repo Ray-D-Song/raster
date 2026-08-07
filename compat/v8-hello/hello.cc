@@ -31,6 +31,11 @@ void Hello(const FunctionCallbackInfo<Value>& info) {
   info.GetReturnValue().Set(result);
 }
 
+// Regression: aligned Smi must not be treated as ObjectLayout* in root resolution.
+void ReturnAlignedSmi(const FunctionCallbackInfo<Value>& info) {
+  info.GetReturnValue().Set(4);
+}
+
 void BufferCopyTest(const FunctionCallbackInfo<Value>& info) {
   Isolate* isolate = info.GetIsolate();
   const char payload[] = "buffer-copy";
@@ -369,6 +374,7 @@ void Init(Local<Object> exports,
   (void)context;
   (void)priv;
   NODE_SET_METHOD(exports, "hello", Hello);
+  NODE_SET_METHOD(exports, "returnAlignedSmi", ReturnAlignedSmi);
   NODE_SET_METHOD(exports, "bufferCopy", BufferCopyTest);
   NODE_SET_METHOD(exports, "bufferExternal", BufferExternalTest);
   NODE_SET_METHOD(exports, "bufferExternalShared", BufferExternalShared);

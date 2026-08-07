@@ -28,4 +28,5 @@ tracing = { version = "0.1", default-features = false }
 
 [dev-dependencies]
 raster_runtime_test = { path = "../../libs/raster_runtime_test" }
-tokio = { version = "1", features = ["macros", "rt"], default-features = false }
+# `time` for bounded driver teardown waits in unit tests (tokio::time::timeout).
+tokio = { version = "1", features = ["macros", "rt", "time"], default-features = false }

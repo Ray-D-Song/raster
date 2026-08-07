@@ -43,43 +43,33 @@ static uint64_t root_from_layout(RasterV8ContextState* ctx, shim::ObjectLayout* 
   return root_id;
 }
 
-uint64_t resolve_root_from_repr(RasterV8ContextState* ctx, uintptr_t repr) {
-  if (repr == 0) {
+static uint64_t smi_to_number_root(RasterV8ContextState* ctx, int32_t smi) {
+  const RasterV8BridgeV1* b = raster_v8_bridge();
+  if (!b || !b->number_new) {
     return 0;
   }
-  auto* impl = ctx_impl(ctx);
-  if (auto it = impl->repr_to_root.find(repr); it != impl->repr_to_root.end()) {
-    return it->second;
+  uint64_t root_id = 0;
+  if (b->number_new(ctx, static_cast<double>(smi), &root_id) != RASTER_V8_OK) {
+    return 0;
   }
-  for (const auto& block : impl->arena.blocks) {
-    for (const auto& slot : block) {
-      const uintptr_t object_addr = reinterpret_cast<uintptr_t>(&slot.object);
-      if (object_addr == repr && slot.object.contents.root_id != 0) {
-        register_handle_repr(ctx, repr, slot.object.contents.root_id);
-        return slot.object.contents.root_id;
-      }
-    }
+  return root_id;
+}
+
+static uint64_t try_root_from_known_layout(RasterV8ContextState* ctx,
+                                           shim::ObjectLayout* layout,
+                                           uintptr_t repr) {
+  if (!layout) {
+    return 0;
   }
-  for (const auto& block : impl->arena.blocks) {
-    for (const auto& slot : block) {
-      const uintptr_t tagged_word = slot.object.tagged_map.value;
-      if (tagged_word == repr && slot.object.contents.root_id != 0) {
-        register_handle_repr(ctx, repr, slot.object.contents.root_id);
-        return slot.object.contents.root_id;
-      }
-    }
+  if (layout->contents.root_id != 0) {
+    register_handle_repr(ctx, repr, layout->contents.root_id);
+    return layout->contents.root_id;
   }
-  auto* layout = reinterpret_cast<shim::ObjectLayout*>(repr);
-  if ((repr & 0b11) == static_cast<uintptr_t>(shim::TaggedPointer::Tag::StrongPointer)) {
-    if (auto* from_tag = shim::TaggedPointer::fromRaw(repr).getPtr<shim::ObjectLayout>()) {
-      if (uint64_t root_id = root_from_layout(ctx, from_tag)) {
-        return root_id;
-      }
-    }
-  }
+  // Unmaterialized (root_id == 0): oddball materialization / map checks only.
   if (layout->tagged_map.tag() == shim::TaggedPointer::Tag::StrongPointer) {
     if (layout->tagged_map.getPtr<shim::ObjectLayout>() == layout) {
       if (uint64_t root_id = root_from_layout(ctx, layout)) {
+        register_handle_repr(ctx, repr, root_id);
         return root_id;
       }
     }
@@ -89,8 +79,95 @@ uint64_t resolve_root_from_repr(RasterV8ContextState* ctx, uintptr_t repr) {
       return layout->contents.root_id;
     }
     if (uint64_t root_id = root_from_layout(ctx, layout)) {
+      register_handle_repr(ctx, repr, root_id);
       return root_id;
     }
+  }
+  return 0;
+}
+
+uint64_t resolve_root_from_repr(RasterV8ContextState* ctx, uintptr_t repr) {
+  if (repr == 0) {
+    return 0;
+  }
+  auto* impl = ctx_impl(ctx);
+  if (auto it = impl->repr_to_root.find(repr); it != impl->repr_to_root.end()) {
+    return it->second;
+  }
+
+  // Known direct addresses first. Aligned ObjectLayout* and Smi both have low
+  // bits 00 — only provenance (arena / isolate roots) distinguishes them.
+  for (const auto& block : impl->arena.blocks) {
+    for (const auto& slot : block) {
+      const uintptr_t object_addr = reinterpret_cast<uintptr_t>(&slot.object);
+      if (object_addr == repr) {
+        return try_root_from_known_layout(
+            ctx, const_cast<shim::ObjectLayout*>(&slot.object), repr);
+      }
+    }
+  }
+  for (const auto& block : impl->arena.blocks) {
+    for (const auto& slot : block) {
+      const uintptr_t tagged_word = slot.object.tagged_map.value;
+      if (tagged_word == repr) {
+        return try_root_from_known_layout(
+            ctx, const_cast<shim::ObjectLayout*>(&slot.object), repr);
+      }
+    }
+  }
+  if (auto* isolate = raster_v8_current_isolate()) {
+    auto* iso = iso_impl(isolate);
+    const shim::ObjectLayout* known[] = {
+        &iso->undefined_value.layout, &iso->the_hole_value.layout,
+        &iso->null_value.layout,      &iso->true_value.layout,
+        &iso->false_value.layout,     &iso->empty_string.layout,
+    };
+    for (const shim::ObjectLayout* known_layout : known) {
+      if (reinterpret_cast<uintptr_t>(known_layout) == repr) {
+        return try_root_from_known_layout(
+            ctx, const_cast<shim::ObjectLayout*>(known_layout), repr);
+      }
+    }
+  }
+
+  // Not a known direct address: classify remaining tagged forms.
+  // General resolver never materializes Smis — unknown aligned addresses also
+  // have low bits 00; treating them as Smi would invent bogus number roots.
+  const auto tag = static_cast<shim::TaggedPointer::Tag>(repr & 0b11);
+  if (tag == shim::TaggedPointer::Tag::Smi) {
+    return 0;
+  }
+  if (tag == shim::TaggedPointer::Tag::StrongPointer ||
+      tag == shim::TaggedPointer::Tag::WeakPointer) {
+    auto* candidate = shim::TaggedPointer::fromRaw(repr).getPtr<shim::ObjectLayout>();
+    if (candidate == nullptr) {
+      return 0;
+    }
+    if ((reinterpret_cast<uintptr_t>(candidate) % alignof(shim::ObjectLayout)) != 0) {
+      return 0;
+    }
+    // Cleared-tag pointer: only accept if it is a known arena/isolate layout.
+    return resolve_root_from_repr(ctx, reinterpret_cast<uintptr_t>(candidate));
+  }
+  return 0;
+}
+
+uint64_t resolve_return_value_repr(RasterV8ContextState* ctx, uintptr_t repr) {
+  // Callback/accessor return slots only:
+  // - Unset default is a strong-tagged undefined layout (not raw 0).
+  // - ReturnValue::Set(0) / IntegralToSmi(0) stores raw 0.
+  // - ReturnValue::Set(n) stores IntegralToSmi(n) = (n << 32) on this ABI
+  //   (low 32 bits zero). Unknown aligned ObjectLayout* addresses almost always
+  //   have non-zero low 32 bits, so they must not become number roots.
+  if (repr == 0) {
+    return smi_to_number_root(ctx, 0);
+  }
+  if (uint64_t root = resolve_root_from_repr(ctx, repr)) {
+    return root;
+  }
+  // Provenance miss: only pure IntegralToSmi encodings materialize as numbers.
+  if ((repr & 0xffffffffULL) == 0) {
+    return smi_to_number_root(ctx, static_cast<int32_t>(repr >> 32));
   }
   return 0;
 }
