@@ -543,10 +543,12 @@ fn objectwrap_fixture_teardown_clears_all_counts() {
 
     unsafe {
         raster_v8_test_objectwrap_fixture_destroy(counters);
+        crate::shutdown_runtime(qrt).unwrap();
+        raster_v8_set_current_context(std::ptr::null_mut());
+        raster_v8_set_current_isolate(std::ptr::null_mut());
     }
-    // Leak Context/Runtime: this fixture validates V8 bridge teardown only.
-    std::mem::forget(context);
-    std::mem::forget(runtime);
+    drop(context);
+    drop(runtime);
 }
 
 struct WiredTestContext {
@@ -651,17 +653,22 @@ impl WiredTestContext {
         crate::bridge::teardown_counts_for_ctx(self.ctx_ptr).strong_roots
     }
 
-    /// Runs bridge `shutdown_runtime`, then intentionally leaks the rquickjs
-    /// `Context`/`Runtime` handles.
+    /// Runs bridge `shutdown_runtime`, clears current context/isolate TLS,
+    /// then drops the rquickjs `Context`/`Runtime` (real `JS_FreeRuntime`).
     ///
-    /// These unit tests validate V8 bridge teardown only. Empty `gc_obj_list`
-    /// at `JS_FreeRuntime` is covered by `make compat-v8`.
-    fn shutdown_bridge_and_leak_runtime(self) {
+    /// Must not `mem::forget` handles: ASan CI runs with `detect_leaks=1`.
+    fn shutdown_bridge_and_drop_runtime(self) {
+        extern "C" {
+            fn raster_v8_set_current_context(ctx: *mut crate::bridge::RasterV8ContextState);
+            fn raster_v8_set_current_isolate(isolate: *mut crate::bridge::RasterV8IsolateState);
+        }
         unsafe {
             crate::shutdown_runtime(self.rt_ptr).unwrap();
+            raster_v8_set_current_context(std::ptr::null_mut());
+            raster_v8_set_current_isolate(std::ptr::null_mut());
         }
-        std::mem::forget(self.context);
-        std::mem::forget(self.runtime);
+        drop(self.context);
+        drop(self.runtime);
     }
 }
 
@@ -689,7 +696,7 @@ fn function_template_constructor_has_one_bridge_owner() {
 
     assert!(crate::bridge::teardown_counts_for_ctx(fixture.ctx_ptr).is_zero());
 
-    fixture.shutdown_bridge_and_leak_runtime();
+    fixture.shutdown_bridge_and_drop_runtime();
 }
 
 #[test]
@@ -707,7 +714,7 @@ fn prototype_install_does_not_leak_when_key_is_missing() {
 
     assert!(crate::bridge::teardown_counts_for_ctx(fixture.ctx_ptr).is_zero());
 
-    fixture.shutdown_bridge_and_leak_runtime();
+    fixture.shutdown_bridge_and_drop_runtime();
 }
 
 #[test]
@@ -731,7 +738,7 @@ fn shutdown_context_releases_all_registered_root_kinds() {
 
     assert!(crate::bridge::teardown_counts_for_ctx(fixture.ctx_ptr).is_zero());
 
-    fixture.shutdown_bridge_and_leak_runtime();
+    fixture.shutdown_bridge_and_drop_runtime();
 }
 
 #[test]
@@ -763,14 +770,16 @@ fn module_init_drops_temporary_roots_on_success() {
     let result =
         unsafe { crate::run_v8_module_init(fixture.ctx_ptr, &mut module, exports) }.unwrap();
     unsafe {
+        // `result` is a fresh ref from module.exports; caller still owns `exports`.
         rquickjs::qjs::JS_FreeValue(fixture.ctx_ptr, result);
+        rquickjs::qjs::JS_FreeValue(fixture.ctx_ptr, exports);
     }
 
     unsafe {
         crate::shutdown_context(fixture.ctx_ptr).unwrap();
     }
     assert!(crate::bridge::teardown_counts_for_ctx(fixture.ctx_ptr).is_zero());
-    fixture.shutdown_bridge_and_leak_runtime();
+    fixture.shutdown_bridge_and_drop_runtime();
 }
 
 #[test]
@@ -803,7 +812,7 @@ fn module_init_drops_temporary_roots_on_failure() {
         crate::shutdown_context(fixture.ctx_ptr).unwrap();
     }
     assert!(crate::bridge::teardown_counts_for_ctx(fixture.ctx_ptr).is_zero());
-    fixture.shutdown_bridge_and_leak_runtime();
+    fixture.shutdown_bridge_and_drop_runtime();
 }
 
 #[test]
@@ -817,7 +826,7 @@ fn runtime_teardown_does_not_leave_process_global_owners() {
         crate::shutdown_context(fixture_a.ctx_ptr).unwrap();
     }
     assert!(crate::bridge::teardown_counts_for_ctx(fixture_a.ctx_ptr).is_zero());
-    fixture_a.shutdown_bridge_and_leak_runtime();
+    fixture_a.shutdown_bridge_and_drop_runtime();
 
     let mut fixture_b = WiredTestContext::new();
     let function_id = fixture_b.register_function_template();
@@ -831,7 +840,7 @@ fn runtime_teardown_does_not_leave_process_global_owners() {
         crate::shutdown_context(fixture_b.ctx_ptr).unwrap();
     }
     assert!(crate::bridge::teardown_counts_for_ctx(fixture_b.ctx_ptr).is_zero());
-    fixture_b.shutdown_bridge_and_leak_runtime();
+    fixture_b.shutdown_bridge_and_drop_runtime();
 }
 
 #[test]
@@ -853,5 +862,5 @@ fn persistent_reset_scrubs_layout_index_maps() {
     unsafe {
         crate::shutdown_context(fixture.ctx_ptr).unwrap();
     }
-    fixture.shutdown_bridge_and_leak_runtime();
+    fixture.shutdown_bridge_and_drop_runtime();
 }

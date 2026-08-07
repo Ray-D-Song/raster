@@ -133,9 +133,23 @@ fn main() {
         build.file(manifest_dir.join("cpp").join(file));
     }
 
+    // Single owner of libraster_v8_shim.a: disable cc's default link metadata
+    // (which packs the archive into libv8_compat.rlib) and emit whole-archive
+    // ourselves so downstream crates do not re-link the same objects.
+    build.cargo_metadata(false);
     build.compile("raster_v8_shim");
 
     let out_dir = env::var("OUT_DIR").unwrap();
+    println!("cargo:rustc-link-search=native={out_dir}");
+    println!("cargo:rustc-link-lib=static:+whole-archive=raster_v8_shim");
+
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    match target_os.as_str() {
+        "macos" => println!("cargo:rustc-link-lib=c++"),
+        "linux" => println!("cargo:rustc-link-lib=stdc++"),
+        _ => {},
+    }
+
     println!("cargo:OUT_DIR={out_dir}");
     println!("cargo:rerun-if-changed=cpp/");
     println!("cargo:rerun-if-changed=build.rs");

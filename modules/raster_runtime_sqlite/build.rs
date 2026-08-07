@@ -22,8 +22,25 @@ fn main() {
         build.flag("-fvisibility=hidden");
     }
 
+    // Package-scoped C sanitizer: does not use global CFLAGS, so host
+    // rquickjs-sys / proc-macros are not instrumented.
+    match std::env::var("RASTER_SQLITE_SANITIZE") {
+        Ok(value) if value == "address" => {
+            build
+                .flag("-fsanitize=address")
+                .flag("-fno-omit-frame-pointer")
+                .flag("-g");
+        },
+        Ok(value) if value.is_empty() || value == "0" || value == "none" => {},
+        Ok(value) => {
+            panic!("unsupported RASTER_SQLITE_SANITIZE={value} (expected address|none)");
+        },
+        Err(_) => {},
+    }
+
     build.compile("sqlite3");
     println!("cargo:rerun-if-changed=vendor/sqlite3.c");
     println!("cargo:rerun-if-changed=vendor/sqlite3.h");
     println!("cargo:rerun-if-changed=src/shim.c");
+    println!("cargo:rerun-if-env-changed=RASTER_SQLITE_SANITIZE");
 }
