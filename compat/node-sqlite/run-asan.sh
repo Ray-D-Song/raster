@@ -11,12 +11,17 @@ if [[ "$TARGET" != "x86_64-unknown-linux-gnu" ]]; then
   exit 1
 fi
 
+# Keep ASan Rust flags target-scoped so host proc-macros (e.g. rquickjs_macro)
+# build with normal host flags under an explicit --target.
 unset RUSTFLAGS
+unset CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS
 unset CFLAGS
 unset CXXFLAGS
 
 export CARGO_TARGET_DIR="$ROOT/target-sqlite-asan"
-export RUSTFLAGS="-Zsanitizer=address -Cdebuginfo=1"
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="\
+-Zsanitizer=address \
+-Cdebuginfo=1"
 export CC=clang
 export CXX=clang++
 export CFLAGS="-fsanitize=address -fno-omit-frame-pointer -g"

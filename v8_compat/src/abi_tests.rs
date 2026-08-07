@@ -113,8 +113,14 @@ fn pending_weak_queue_is_per_context() {
     let pending_a = crate::context_tables::take_pending_weak_callbacks(ptr_a);
     assert_eq!(pending_a.len(), 1);
 
-    unsafe { crate::shutdown_context(ptr_a).unwrap() };
-    unsafe { crate::shutdown_context(ptr_b).unwrap() };
+    unsafe {
+        crate::shutdown_context(ptr_a).unwrap();
+        crate::shutdown_context(ptr_b).unwrap();
+    }
+
+    assert!(!crate::context_tables::has_context_tables(ptr_a));
+    assert!(!crate::context_tables::has_context_tables(ptr_b));
+
     let qrt = unsafe { rquickjs::qjs::JS_GetRuntime(ptr_a) };
     unsafe { crate::shutdown_runtime(qrt).unwrap() };
 }

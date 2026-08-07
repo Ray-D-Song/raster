@@ -56,6 +56,12 @@ pub fn remove_context_tables(ctx: *mut JSContext) {
     TABLES.lock().remove(&ctx_key(ctx));
 }
 
+/// Whether per-context side tables still exist for `ctx` (crate tests only).
+#[cfg(test)]
+pub(crate) fn has_context_tables(ctx: *mut JSContext) -> bool {
+    TABLES.lock().contains_key(&ctx_key(ctx))
+}
+
 pub fn weak_table_counts(ctx: *mut JSContext) -> (usize, usize) {
     TABLES
         .lock()

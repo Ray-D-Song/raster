@@ -32,11 +32,14 @@ fn link_v8_shim_for_host() {
             println!("cargo:rustc-link-lib=c++");
         },
         "linux" => {
-            println!("cargo:rustc-link-search=native={out_dir}");
-            println!("cargo:rustc-link-arg=-Wl,--whole-archive");
-            println!("cargo:rustc-link-lib=static=raster_v8_shim");
-            println!("cargo:rustc-link-arg=-Wl,--no-whole-archive");
-            println!("cargo:rustc-link-lib=stdc++");
+            // Single unsplit linker arg: Cargo reorders rustc-link-lib vs
+            // rustc-link-arg, which can place -lraster_v8_shim before
+            // --whole-archive and drop unreferenced V8 ABI objects.
+            // stdc++ must also be a link-arg (not link-lib) so it stays after
+            // the archive; otherwise -lstdc++ is scanned before shim objects
+            // introduce C++ unresolved symbols.
+            println!("cargo:rustc-link-arg=-Wl,--whole-archive,{archive},--no-whole-archive");
+            println!("cargo:rustc-link-arg=-lstdc++");
         },
         _ => {},
     }

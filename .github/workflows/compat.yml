@@ -282,6 +282,17 @@ jobs:
           if [ "${{ matrix.case }}" = "better-sqlite3" ] || [ "${{ matrix.case }}" = "v8-hello" ]; then FEATURES="--features v8-compat"; fi
           if [ "${{ matrix.case }}" = "node-sqlite" ]; then FEATURES=""; fi
           cargo build -p raster_runtime $FEATURES
+          if [ "$RUNNER_OS" = "Linux" ] &&
+             { [ "${{ matrix.case }}" = "v8-hello" ] ||
+               [ "${{ matrix.case }}" = "better-sqlite3" ]; }; then
+            nm -D --defined-only target/debug/raster_runtime |
+              c++filt |
+              grep -F "v8::Isolate::GetCurrent()"
+
+            nm -D --defined-only target/debug/raster_runtime |
+              c++filt |
+              grep -F "v8::Context::GetIsolate()"
+          fi
       - name: Run compatibility fixture
         env:
           COMPAT_VP_VERSION_LOOPS: ${{ matrix.case == 'vite-plus' && '100' || '0' }}

@@ -54,7 +54,12 @@ else
   export CXX=clang++
   export RASTER_SANITIZE=undefined
   export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=clang++
-  export RUSTFLAGS="-Clink-arg=-fsanitize=undefined -Cdebuginfo=1"
+  # Rust passes -nodefaultlibs; clang++ as linker will not pull libstdc++ unless
+  # asked. UBSan C++ runtime needs RTTI / __dynamic_cast from the C++ ABI.
+  export RUSTFLAGS="\
+-Clink-arg=-fsanitize=undefined \
+-Clink-arg=-lstdc++ \
+-Cdebuginfo=1"
   ADDON_SANITIZE=(undefined)
 fi
 

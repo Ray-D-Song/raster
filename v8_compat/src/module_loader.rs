@@ -236,7 +236,15 @@ pub fn contexts_for_runtime(rt: *mut qjs::JSRuntime) -> usize {
 /// `ctx` must be a valid `JSContext` pointer for the current thread that was
 /// wired through the V8 compat bridge, and must only be destroyed once.
 pub unsafe fn shutdown_context(ctx: *mut JSContext) -> Result<(), String> {
+    // Bridge teardown first (needs side tables for weak/internal-field work).
+    // No-bridge contexts return Ok(()) immediately, so tables still get
+    // cleaned below. Only remove tables after success — failing mid-bridge
+    // teardown must not leave bridge/ContextState alive with empty tables.
     unsafe { crate::bridge::shutdown_bridge_for_context(ctx)? };
+
+    // Idempotent if bridge already cleared tables; required when no bridge.
+    crate::context_tables::remove_context_tables(ctx);
+
     let ctx_key = ctx as usize;
     if let Some(record) = contexts().lock().remove(&ctx_key) {
         unsafe {
