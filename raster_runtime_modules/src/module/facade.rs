@@ -53,6 +53,22 @@ fn resolve_builtin_request(ctx: &Ctx<'_>, request: &str) -> Option<String> {
     ctx.userdata::<ModuleNames>()?.resolve_builtin(request)
 }
 
+fn resolve_builtin_request_for_resolve(ctx: &Ctx<'_>, request: &str) -> Option<String> {
+    if request.ends_with('/') {
+        return None;
+    }
+    resolve_builtin_request(ctx, request)
+}
+
+fn resolve_require_builtin_request(ctx: &Ctx<'_>, request: &str) -> Option<String> {
+    let resolved = resolve_builtin_request_for_resolve(ctx, request)?;
+    if request.starts_with("node:") {
+        Some(request.to_string())
+    } else {
+        Some(resolved)
+    }
+}
+
 pub fn canonical_parent_filename(ctx: &Ctx<'_>, parent: Option<Object<'_>>) -> Result<String> {
     if let Some(parent) = parent {
         if let Ok(filename) = parent.get::<_, String>("filename") {
@@ -123,7 +139,7 @@ pub fn default_resolve_filename(
         }
     }
 
-    if let Some(resolved) = resolve_builtin_request(&ctx, &request) {
+    if let Some(resolved) = resolve_builtin_request_for_resolve(&ctx, &request) {
         return Ok(resolved);
     }
 
@@ -302,7 +318,7 @@ fn global_require_resolve_impl<'js>(
     request: String,
     options: Opt<Object<'js>>,
 ) -> Result<String> {
-    if let Some(resolved) = resolve_builtin_request(&ctx, &request) {
+    if let Some(resolved) = resolve_require_builtin_request(&ctx, &request) {
         return Ok(resolved);
     }
     require_resolve_fn(ctx, request, options, Opt(None))
@@ -327,7 +343,7 @@ fn resolve_from_filename<'js>(
     request: String,
     options: Opt<Object<'js>>,
 ) -> Result<String> {
-    if let Some(resolved) = resolve_builtin_request(&ctx, &request) {
+    if let Some(resolved) = resolve_require_builtin_request(&ctx, &request) {
         return Ok(resolved);
     }
     let parent = get_or_create_module_record(&ctx, &parent_filename, None)?;

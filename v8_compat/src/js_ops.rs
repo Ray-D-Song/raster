@@ -1117,7 +1117,7 @@ pub unsafe extern "C" fn register_weak_callback(
         });
     }
 
-    crate::bridge::with_state_for_object_root(object_root, |ctx, obj| register_on(ctx, obj))
+    crate::bridge::with_state_for_object_root(object_root, register_on)
         .unwrap_or(RasterV8Status::Error)
 }
 

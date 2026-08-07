@@ -59,7 +59,12 @@ impl<'js> URL<'js> {
     #[qjs(constructor)]
     pub fn new(ctx: Ctx<'js>, input: Value<'js>, base: Opt<Value<'js>>) -> Result<Self> {
         let input: Result<Coerced<String>> = Coerced::from_js(&ctx, input);
-        if let Some(base) = base.into_inner() {
+        let base = base.into_inner().filter(|value| !value.is_undefined());
+
+        if let Some(base) = base {
+            if base.is_null() {
+                return Err(Exception::throw_type(&ctx, "Invalid URL"));
+            }
             // Node/WHATWG: base may be a string or a URL object (use its href).
             let base_str = if let Some(s) = base.as_string() {
                 Some(s.to_string()?)

@@ -378,7 +378,7 @@ fn dlopen_impl(
             .unwrap_or(0);
         let v8_modules = v8_compat::drain_pending_v8_modules_since(pending_start);
         if v8_modules.len() == 1 {
-            let module = v8_modules[0] as *mut v8_compat::NodeModule;
+            let module = v8_modules[0];
             let actual_exports =
                 unsafe { v8_compat::run_v8_module_init(ctx_ptr.as_ptr(), module, exports_obj)? };
             std::mem::forget(library);

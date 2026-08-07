@@ -13,20 +13,22 @@ fi
 
 unset RUSTFLAGS
 unset CFLAGS
+unset CXXFLAGS
 
 export CARGO_TARGET_DIR="$ROOT/target-sqlite-asan"
-export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-Zsanitizer=address -Cdebuginfo=1"
-export CFLAGS_x86_64_unknown_linux_gnu="-fsanitize=address -fno-omit-frame-pointer -g"
+export RUSTFLAGS="-Zsanitizer=address -Cdebuginfo=1"
+export CC=clang
+export CXX=clang++
+export CFLAGS="-fsanitize=address -fno-omit-frame-pointer -g"
+export CXXFLAGS="$CFLAGS"
 export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=1:abort_on_error=1}"
 
 if ! rustup toolchain list | grep -q nightly; then
   rustup toolchain install nightly
 fi
-rustup component add rust-src --toolchain nightly >/dev/null 2>&1 || true
 
 make js JS_MINIFY=0
 cargo +nightly build \
-  -Zbuild-std \
   -p raster_runtime \
   --target "$TARGET"
 node compat/node-sqlite/build-extension.mjs

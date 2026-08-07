@@ -82,7 +82,11 @@ void DisposeGlobal(uintptr_t* location) {
     if (b && b->root_drop && it->second.root_id != 0) {
       b->root_drop(it->second.root_id);
     }
-    delete reinterpret_cast<raster_v8::shim::ObjectLayout*>(*location);
+    auto* layout = reinterpret_cast<raster_v8::shim::ObjectLayout*>(*location);
+    const auto layout_addr = reinterpret_cast<uintptr_t>(layout);
+    isolate->layout_to_root.erase(layout_addr);
+    isolate->layout_to_function_id.erase(layout_addr);
+    delete layout;
     isolate->persistents.erase(it);
   }
   delete location;

@@ -58,7 +58,7 @@ pub fn require_from_module<'js>(
             is_builtin = false;
         } else if let Some(names) = module_names.as_ref() {
             let resolved_trimmed = resolved.trim_end_matches('/');
-            if let Some(request) = names.disabled_node_builtin_error_request(&resolved_trimmed) {
+            if let Some(request) = names.disabled_node_builtin_error_request(resolved_trimmed) {
                 super::facade::unknown_builtin_module(&ctx, &request)?;
             }
             if let Some(builtin_name) = names.resolve_builtin(&resolved) {

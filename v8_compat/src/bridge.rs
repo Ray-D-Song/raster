@@ -414,7 +414,7 @@ where
     let key = ctx_key(ctx);
     BRIDGE_STATES.with(|cell| {
         let mut guard = cell.borrow_mut();
-        guard.get_mut(&key).map(|state| f(state))
+        guard.get_mut(&key).map(f)
     })
 }
 
@@ -1406,7 +1406,7 @@ pub(crate) unsafe fn delete_own_property_str(
     obj: qjs::JSValue,
     name: &std::ffi::CStr,
 ) -> Result<(), String> {
-    if unsafe { qjs::JS_VALUE_GET_TAG(obj) } != qjs::JS_TAG_OBJECT as i32 {
+    if unsafe { qjs::JS_VALUE_GET_TAG(obj) } != qjs::JS_TAG_OBJECT {
         return Ok(());
     }
     let atom = unsafe { qjs::JS_NewAtom(ctx, name.as_ptr()) };
@@ -1460,7 +1460,7 @@ pub(crate) unsafe fn prototype_has_own_constructor(
     ctx: *mut JSContext,
     proto: qjs::JSValue,
 ) -> Result<bool, String> {
-    if unsafe { qjs::JS_VALUE_GET_TAG(proto) } != qjs::JS_TAG_OBJECT as i32 {
+    if unsafe { qjs::JS_VALUE_GET_TAG(proto) } != qjs::JS_TAG_OBJECT {
         return Ok(false);
     }
     let atom = unsafe { qjs::JS_NewAtom(ctx, c"constructor".as_ptr()) };

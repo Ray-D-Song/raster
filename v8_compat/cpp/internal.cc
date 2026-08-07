@@ -303,7 +303,11 @@ size_t dispose_strong_context_persistents(IsolateImpl* isolate, uintptr_t contex
     if (b && b->root_drop) {
       b->root_drop(it->second.root_id);
     }
-    delete reinterpret_cast<shim::ObjectLayout*>(*it->first);
+    auto* layout = reinterpret_cast<shim::ObjectLayout*>(*it->first);
+    const auto layout_addr = reinterpret_cast<uintptr_t>(layout);
+    isolate->layout_to_root.erase(layout_addr);
+    isolate->layout_to_function_id.erase(layout_addr);
+    delete layout;
     delete it->first;
     it = isolate->persistents.erase(it);
   }
@@ -320,7 +324,11 @@ size_t dispose_weak_context_persistents(IsolateImpl* isolate, uintptr_t context_
       ++it;
       continue;
     }
-    delete reinterpret_cast<shim::ObjectLayout*>(*it->first);
+    auto* layout = reinterpret_cast<shim::ObjectLayout*>(*it->first);
+    const auto layout_addr = reinterpret_cast<uintptr_t>(layout);
+    isolate->layout_to_root.erase(layout_addr);
+    isolate->layout_to_function_id.erase(layout_addr);
+    delete layout;
     delete it->first;
     it = isolate->persistents.erase(it);
     disposed++;

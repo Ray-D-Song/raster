@@ -36,7 +36,7 @@ fn link_v8_shim_for_host() {
             println!("cargo:rustc-link-arg=-Wl,--whole-archive");
             println!("cargo:rustc-link-lib=static=raster_v8_shim");
             println!("cargo:rustc-link-arg=-Wl,--no-whole-archive");
-            println!("cargo:rustc-link-lib=c++");
+            println!("cargo:rustc-link-lib=stdc++");
         },
         _ => {},
     }

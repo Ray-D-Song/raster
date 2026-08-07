@@ -168,3 +168,56 @@ extern "C" void raster_v8_test_objectwrap_fixture_destroy(FixtureCounters* count
   }
   delete counters;
 }
+
+extern "C" int raster_v8_test_objectwrap_strong_reset_scrubs_layout_maps(
+    RasterV8ContextState* ctx_state) {
+  const RasterV8BridgeV1* bridge = raster_v8_bridge();
+  auto* isolate = reinterpret_cast<v8::Isolate*>(raster_v8_current_isolate());
+  auto* isolate_impl = raster_v8::iso_impl(
+      reinterpret_cast<RasterV8IsolateState*>(raster_v8_current_isolate()));
+  if (!bridge || !ctx_state || !isolate || !isolate_impl) {
+    return 0;
+  }
+
+  uint64_t root_id = 0;
+  if (bridge->object_new(ctx_state, &root_id) != RASTER_V8_OK || root_id == 0) {
+    return 0;
+  }
+  v8::Local<v8::Object> object = raster_v8::local_from_root<v8::Object>(
+      isolate, root_id, &raster_v8::shim::Map::object_map());
+
+  v8::Persistent<v8::Object> persistent;
+  persistent.Reset(isolate, object);
+
+  uintptr_t layout_addr = 0;
+  for (const auto& [cell, slot] : isolate_impl->persistents) {
+    if (slot.root_id == root_id) {
+      layout_addr = *cell;
+      break;
+    }
+  }
+  if (layout_addr == 0) {
+    return 0;
+  }
+
+  raster_v8_register_layout_root(reinterpret_cast<void*>(layout_addr), root_id);
+  raster_v8_register_layout_function_id(reinterpret_cast<void*>(layout_addr), 1);
+
+  persistent.Reset();
+
+  const bool maps_clean =
+      isolate_impl->layout_to_root.find(layout_addr) == isolate_impl->layout_to_root.end() &&
+      isolate_impl->layout_to_function_id.find(layout_addr) ==
+          isolate_impl->layout_to_function_id.end();
+
+  uint64_t second_root_id = 0;
+  if (bridge->object_new(ctx_state, &second_root_id) == RASTER_V8_OK && second_root_id != 0) {
+    v8::Local<v8::Object> second_object = raster_v8::local_from_root<v8::Object>(
+        isolate, second_root_id, &raster_v8::shim::Map::object_map());
+    v8::Persistent<v8::Object> second_persistent;
+    second_persistent.Reset(isolate, second_object);
+    second_persistent.Reset();
+  }
+
+  return maps_clean ? 1 : 0;
+}

@@ -118,6 +118,7 @@ fn clear_runtime_external_registry(rt: *mut JSRuntime) {
 }
 
 /// Reclaim opaque boxes still tracked after all JS class finalizers have run.
+#[cfg(feature = "v8-compat")]
 pub(crate) fn drain_runtime_externals(rt: *mut JSRuntime) {
     drain_residual_external_opaques(rt);
     clear_runtime_external_registry(rt);

@@ -38,8 +38,35 @@ it("createRequire accepts URL objects", () => {
 
 it("require.resolve resolves builtins, relative fixtures, and package entries", () => {
   expect(_require.resolve("node:path")).toBe("node:path");
+  expect(_require.resolve("path")).toBe("path");
   expect(_require.resolve(`${CWD}/fixtures/hello.js`)).toContain("fixtures/hello.js");
   expect(_require.resolve("package.json")).toContain("package.json");
+});
+
+it("createRequire.resolve preserves node: prefix for builtins", () => {
+  const localRequire = createRequire(import.meta.url);
+  expect(localRequire.resolve("node:path")).toBe("node:path");
+  expect(localRequire.resolve("path")).toBe("path");
+});
+
+function expectModuleNotFound(fn: () => unknown) {
+  try {
+    fn();
+    throw new Error("expected MODULE_NOT_FOUND");
+  } catch (err: any) {
+    expect(err.code).toBe("MODULE_NOT_FOUND");
+  }
+}
+
+it("require.resolve rejects builtin specifiers with trailing slash", () => {
+  expectModuleNotFound(() => _require.resolve("node:path/"));
+  expectModuleNotFound(() => _require.resolve("path/"));
+});
+
+it("createRequire.resolve rejects builtin specifiers with trailing slash", () => {
+  const localRequire = createRequire(import.meta.url);
+  expectModuleNotFound(() => localRequire.resolve("node:path/"));
+  expectModuleNotFound(() => localRequire.resolve("path/"));
 });
 
 it("Module._resolveFilename resolves builtins and relative fixtures", () => {

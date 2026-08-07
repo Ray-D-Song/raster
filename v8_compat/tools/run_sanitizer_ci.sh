@@ -37,12 +37,23 @@ unset CC
 unset CXX
 
 if [[ "${SANITIZER}" == "address" ]]; then
+  if command -v llvm-symbolizer >/dev/null 2>&1; then
+    export ASAN_SYMBOLIZER_PATH
+    ASAN_SYMBOLIZER_PATH="$(command -v llvm-symbolizer)"
+  elif command -v llvm-symbolizer-18 >/dev/null 2>&1; then
+    export ASAN_SYMBOLIZER_PATH
+    ASAN_SYMBOLIZER_PATH="$(command -v llvm-symbolizer-18)"
+  fi
   export CC=clang
   export CXX=clang++
   export RUSTFLAGS="-Zsanitizer=address -Cdebuginfo=1"
+  export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=1:abort_on_error=1:symbolize=1}"
   ADDON_SANITIZE=(address)
 else
+  export CC=clang
+  export CXX=clang++
   export RASTER_SANITIZE=undefined
+  export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=clang++
   export RUSTFLAGS="-Clink-arg=-fsanitize=undefined -Cdebuginfo=1"
   ADDON_SANITIZE=(undefined)
 fi

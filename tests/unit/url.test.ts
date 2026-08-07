@@ -119,6 +119,17 @@ describe("URL class", () => {
     expect(url.href).toBe("http://n/api/health");
   });
 
+  it("treats explicit undefined base like a missing base", () => {
+    const url = new URL("https://example.com", undefined);
+    expect(url.href).toBe("https://example.com/");
+    expect(() => new URL("/api/health", undefined)).toThrow(/Invalid URL/);
+  });
+
+  it("throws TypeError for null base", () => {
+    expect(() => new URL("/api/health", null as any)).toThrow(TypeError);
+    expect(() => new URL("/api/health", null as any)).toThrow(/Invalid URL/);
+  });
+
   it("accepts string base for relative URL", () => {
     const url = new URL("/api/health", "http://n");
     expect(url.href).toBe("http://n/api/health");

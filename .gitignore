@@ -26,6 +26,8 @@ bootstrap
 
 node_modules
 !/fixtures/node_modules
+!/fixtures/module-format/**/node_modules/
+!/fixtures/module-format/**/node_modules/**
 compat/**/compat.log
 compat/**/.next
 compat/**/dist

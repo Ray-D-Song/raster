@@ -504,7 +504,7 @@ fn objectwrap_fixture_teardown_clears_all_counts() {
         crate::runtime_state::add_cleanup_hook(
             context_state as usize,
             raster_v8_test_objectwrap_fixture_cleanup_hook,
-            counters as *mut std::ffi::c_void,
+            counters,
         );
         raster_v8_test_objectwrap_fixture_release_bridge_roots(
             context_state as *mut crate::bridge::RasterV8ContextState,
@@ -609,7 +609,7 @@ impl WiredTestContext {
         let mut root = 0u64;
         let status = unsafe {
             raster_v8_test_function_template_get_function(
-                self.context_state as *mut crate::bridge::RasterV8ContextState,
+                self.context_state,
                 function_id,
                 &mut root,
             )
@@ -673,10 +673,7 @@ fn function_template_constructor_has_one_bridge_owner() {
     let proto = fixture.template_prototype(function_id);
     let roots_before = fixture.bridge_strong_root_count();
     unsafe {
-        assert_eq!(
-            crate::bridge::prototype_has_own_constructor(fixture.ctx_ptr, proto).unwrap(),
-            true
-        );
+        assert!(crate::bridge::prototype_has_own_constructor(fixture.ctx_ptr, proto).unwrap());
         assert_eq!(fixture.bridge_strong_root_count(), roots_before);
     }
 
@@ -800,5 +797,55 @@ fn module_init_drops_temporary_roots_on_failure() {
         crate::shutdown_context(fixture.ctx_ptr).unwrap();
     }
     assert!(crate::bridge::teardown_counts_for_ctx(fixture.ctx_ptr).is_zero());
+    fixture.shutdown_bridge_and_leak_runtime();
+}
+
+#[test]
+fn runtime_teardown_does_not_leave_process_global_owners() {
+    let _lock = abi_test_lock();
+
+    let mut fixture_a = WiredTestContext::new();
+    let function_id = fixture_a.register_function_template();
+    let _ = fixture_a.get_function(function_id);
+    unsafe {
+        crate::shutdown_context(fixture_a.ctx_ptr).unwrap();
+    }
+    assert!(crate::bridge::teardown_counts_for_ctx(fixture_a.ctx_ptr).is_zero());
+    fixture_a.shutdown_bridge_and_leak_runtime();
+
+    let mut fixture_b = WiredTestContext::new();
+    let function_id = fixture_b.register_function_template();
+    let root = fixture_b.get_function(function_id);
+    assert_ne!(root, 0);
+    let proto = fixture_b.template_prototype(function_id);
+    unsafe {
+        assert!(crate::bridge::prototype_has_own_constructor(fixture_b.ctx_ptr, proto).unwrap());
+    }
+    unsafe {
+        crate::shutdown_context(fixture_b.ctx_ptr).unwrap();
+    }
+    assert!(crate::bridge::teardown_counts_for_ctx(fixture_b.ctx_ptr).is_zero());
+    fixture_b.shutdown_bridge_and_leak_runtime();
+}
+
+#[test]
+fn persistent_reset_scrubs_layout_index_maps() {
+    let _lock = abi_test_lock();
+
+    let fixture = WiredTestContext::new();
+    extern "C" {
+        fn raster_v8_test_objectwrap_strong_reset_scrubs_layout_maps(
+            ctx_state: *mut crate::bridge::RasterV8ContextState,
+        ) -> i32;
+    }
+    let ok =
+        unsafe { raster_v8_test_objectwrap_strong_reset_scrubs_layout_maps(fixture.context_state) };
+    assert_eq!(
+        ok, 1,
+        "Persistent::Reset should scrub layout_to_root/layout_to_function_id"
+    );
+    unsafe {
+        crate::shutdown_context(fixture.ctx_ptr).unwrap();
+    }
     fixture.shutdown_bridge_and_leak_runtime();
 }

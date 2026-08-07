@@ -176,8 +176,6 @@ jobs:
         with:
           node-version: 24.3.0
       - uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: rust-src
       - run: yarn install --frozen-lockfile
       - run: bash compat/node-sqlite/run-asan.sh
 
