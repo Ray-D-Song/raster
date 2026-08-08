@@ -803,6 +803,72 @@ fn teardown_activation_uses_the_owner_context_and_isolate() {
 }
 
 #[test]
+fn objectwrap_wrapped_from_callback_receiver_registers_weak_callback() {
+    let _lock = abi_test_lock();
+    let mut fixture = WiredTestContext::new();
+    extern "C" {
+        fn raster_v8_test_objectwrap_shutdown_counters_new() -> *mut std::ffi::c_void;
+        fn raster_v8_test_objectwrap_shutdown_counters_read(
+            counters: *const std::ffi::c_void,
+            constructed_out: *mut i32,
+            destroyed_out: *mut i32,
+        );
+        fn raster_v8_test_objectwrap_shutdown_counters_destroy(counters: *mut std::ffi::c_void);
+        fn raster_v8_test_register_objectwrap_ctor_template(counters: *mut std::ffi::c_void)
+            -> u32;
+    }
+    let counters = unsafe { raster_v8_test_objectwrap_shutdown_counters_new() };
+    let function_id = unsafe { raster_v8_test_register_objectwrap_ctor_template(counters) };
+    let func_root = fixture.get_function(function_id);
+
+    let mut instance_root = 0u64;
+    let status = unsafe {
+        crate::value_ops::function_new_instance(
+            fixture.context_state,
+            func_root,
+            0,
+            std::ptr::null(),
+            &mut instance_root,
+        )
+    };
+    assert!(matches!(status, crate::bridge::RasterV8Status::Ok));
+    assert_ne!(instance_root, 0);
+
+    assert_eq!(
+        crate::bridge::teardown_counts_for_ctx(fixture.ctx_ptr).weak_callbacks,
+        1,
+        "Wrap(info.This()) must register the ObjectWrap weak callback"
+    );
+
+    unsafe {
+        crate::run_pre_bridge_teardown_gc(fixture.ctx_ptr).unwrap();
+    }
+    let mut constructed = 0;
+    let mut destroyed = 0;
+    unsafe {
+        raster_v8_test_objectwrap_shutdown_counters_read(
+            counters,
+            &mut constructed,
+            &mut destroyed,
+        );
+    }
+    assert_eq!(constructed, 1);
+    assert_eq!(
+        destroyed, 1,
+        "receiver ObjectWrap must be destroyed at teardown"
+    );
+
+    unsafe {
+        crate::shutdown_context(fixture.ctx_ptr).unwrap();
+    }
+    assert!(crate::bridge::teardown_counts_for_ctx(fixture.ctx_ptr).is_zero());
+    fixture.shutdown_bridge_and_drop_runtime();
+    unsafe {
+        raster_v8_test_objectwrap_shutdown_counters_destroy(counters);
+    }
+}
+
+#[test]
 fn teardown_activation_rejects_registered_context_without_isolate() {
     let _lock = abi_test_lock();
     use rquickjs::{Context, Runtime};

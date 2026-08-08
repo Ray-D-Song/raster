@@ -194,17 +194,17 @@ extern "C" int raster_v8_test_objectwrap_strong_reset_scrubs_layout_maps(
   persistent.Reset(isolate, object);
 
   uintptr_t layout_addr = 0;
+  uint64_t persistent_root_id = 0;
   for (const auto& [cell, slot] : isolate_impl->persistents) {
-    if (slot.root_id == root_id) {
-      layout_addr = *cell;
-      break;
-    }
+    layout_addr = *cell;
+    persistent_root_id = slot.root_id;
+    break;
   }
-  if (layout_addr == 0) {
+  if (layout_addr == 0 || persistent_root_id == 0) {
     return 0;
   }
 
-  raster_v8_register_layout_root(reinterpret_cast<void*>(layout_addr), root_id);
+  raster_v8_register_layout_root(reinterpret_cast<void*>(layout_addr), persistent_root_id);
   raster_v8_register_layout_function_id(reinterpret_cast<void*>(layout_addr), 1);
 
   persistent.Reset();

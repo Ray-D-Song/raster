@@ -8,7 +8,76 @@
 
 namespace {
 
+bool is_callback_frame_layout(const raster_v8::shim::ObjectLayout* candidate) {
+  if (candidate == nullptr ||
+      (reinterpret_cast<uintptr_t>(candidate) % alignof(raster_v8::shim::ObjectLayout)) != 0) {
+    return false;
+  }
+  auto in_frame = [&](const raster_v8::CallbackHandleFrame& frame) {
+    for (const auto& layout : frame.layouts) {
+      if (&layout == candidate) {
+        return true;
+      }
+    }
+    return false;
+  };
+  for (auto it = raster_v8::g_callback_handle_stack.rbegin();
+       it != raster_v8::g_callback_handle_stack.rend(); ++it) {
+    if (in_frame(*it)) {
+      return true;
+    }
+  }
+  return in_frame(raster_v8::g_callback_handle_frame);
+}
+
+bool is_live_shim_layout(const raster_v8::shim::ObjectLayout* candidate) {
+  if (candidate == nullptr ||
+      (reinterpret_cast<uintptr_t>(candidate) % alignof(raster_v8::shim::ObjectLayout)) != 0) {
+    return false;
+  }
+  auto in_frame = [&](const raster_v8::CallbackHandleFrame& frame) {
+    for (const auto& layout : frame.layouts) {
+      if (&layout == candidate) {
+        return true;
+      }
+    }
+    return false;
+  };
+  for (auto it = raster_v8::g_callback_handle_stack.rbegin();
+       it != raster_v8::g_callback_handle_stack.rend(); ++it) {
+    if (in_frame(*it)) {
+      return true;
+    }
+  }
+  if (in_frame(raster_v8::g_callback_handle_frame)) {
+    return true;
+  }
+  if (auto* ctx = raster_v8::bridge_ctx()) {
+    for (const auto& block : raster_v8::ctx_impl(ctx)->arena.blocks) {
+      for (const auto& slot : block) {
+        if (&slot.object == candidate) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 raster_v8::shim::ObjectLayout* layout_for_globalize_address(uintptr_t address) {
+  using raster_v8::shim::ObjectLayout;
+  using raster_v8::shim::TaggedPointer;
+
+  // FunctionCallbackInfo receivers and arguments are strong-tagged pointers into
+  // the live dispatch frame and never pass through note_materialized_layout, so a
+  // verifiable address always beats the last-materialized fallback.
+  if (address != 0 &&
+      (address & 0b11) == static_cast<uintptr_t>(TaggedPointer::Tag::StrongPointer)) {
+    auto* candidate = TaggedPointer::fromRaw(address).getPtr<ObjectLayout>();
+    if (is_live_shim_layout(candidate) && candidate->contents.root_id != 0) {
+      return candidate;
+    }
+  }
   if (raster_v8::g_last_materialized_layout != nullptr) {
     return raster_v8::g_last_materialized_layout;
   }
@@ -16,8 +85,8 @@ raster_v8::shim::ObjectLayout* layout_for_globalize_address(uintptr_t address) {
     return nullptr;
   }
   if ((address & 0b11) == 0) {
-    auto* direct = reinterpret_cast<raster_v8::shim::ObjectLayout*>(address);
-    if (direct->tagged_map.tag() == raster_v8::shim::TaggedPointer::Tag::StrongPointer) {
+    auto* direct = reinterpret_cast<ObjectLayout*>(address);
+    if (direct->tagged_map.tag() == TaggedPointer::Tag::StrongPointer) {
       return direct;
     }
   }
@@ -51,6 +120,15 @@ uintptr_t* GlobalizeReference(internal::Isolate* i_isolate, uintptr_t address) {
   uint64_t root_id = layout->contents.root_id;
   if (root_id == 0) {
     return nullptr;
+  }
+  // ObjectWrap::Wrap(info.This()) globalizes a borrowed receiver root that the
+  // trampoline still owns until the native constructor returns; only frame layouts
+  // need a dup. Normal local_from_root handles adopt the caller's root.
+  if (is_callback_frame_layout(layout) && b->root_dup) {
+    uint64_t owned = 0;
+    if (b->root_dup(root_id, &owned) == RASTER_V8_OK && owned != 0) {
+      root_id = owned;
+    }
   }
   auto* persistent = new raster_v8::shim::ObjectLayout(
       const_cast<raster_v8::shim::Map*>(&raster_v8::shim::Map::object_map()), root_id);

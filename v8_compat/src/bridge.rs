@@ -194,6 +194,8 @@ pub struct BridgeState {
     ctx: SendPtr<JSContext>,
     runtime_key: usize,
     weak_holds: HashMap<usize, JSValue>,
+    /// Maps a root id moved into `weak_holds` by `root_make_weak` back to its object key.
+    weak_root_ids: HashMap<u64, usize>,
     function_roots: HashMap<u32, u64>,
     root_function_ids: HashMap<u64, u32>,
 }
@@ -210,9 +212,27 @@ impl BridgeState {
             ctx: SendPtr(ctx),
             runtime_key,
             weak_holds: HashMap::new(),
+            weak_root_ids: HashMap::new(),
             function_roots: HashMap::new(),
             root_function_ids: HashMap::new(),
         }
+    }
+
+    /// Resolve a JSObject for a bridge root, including roots moved into weak holds.
+    pub(crate) fn get_object_for_root(&self, root_id: u64) -> Option<JSValue> {
+        if let Some(value) = self.roots.get(root_id) {
+            return Some(value);
+        }
+        let key = self.weak_root_ids.get(&root_id).copied()?;
+        self.weak_holds.get(&key).copied()
+    }
+
+    pub(crate) fn record_weak_root(&mut self, root_id: u64, object_key: usize) {
+        self.weak_root_ids.insert(root_id, object_key);
+    }
+
+    pub(crate) fn forget_weak_roots_for_key(&mut self, object_key: usize) {
+        self.weak_root_ids.retain(|_, key| *key != object_key);
     }
 
     pub(crate) fn insert_weak_hold(&mut self, key: usize, value: JSValue) {
@@ -220,6 +240,7 @@ impl BridgeState {
     }
 
     pub(crate) fn take_weak_hold(&mut self, key: usize) -> Option<JSValue> {
+        self.forget_weak_roots_for_key(key);
         self.weak_holds.remove(&key)
     }
 
@@ -230,6 +251,7 @@ impl BridgeState {
     pub(crate) fn drain_weak_holds(&mut self, ctx: *mut JSContext) {
         crate::js_ops::process_weak_holds_for_ctx(self);
         crate::js_ops::dispatch_pending_weak_callbacks_for_ctx(ctx);
+        self.weak_root_ids.clear();
         for (_, value) in self.weak_holds.drain() {
             unsafe { qjs::JS_FreeValue(ctx, value) };
         }

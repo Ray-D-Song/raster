@@ -246,7 +246,7 @@ pub unsafe extern "C" fn object_ptr_for_root(
         return RasterV8Status::Error;
     }
     with_state(|state| {
-        let Some(obj) = state.roots.get(root) else {
+        let Some(obj) = state.get_object_for_root(root) else {
             return RasterV8Status::Error;
         };
         let Some(key) = object_ptr_key(obj) else {
@@ -302,6 +302,7 @@ pub fn root_make_weak(state: &mut crate::bridge::BridgeState, id: u64) -> Raster
         unsafe { qjs::JS_FreeValue(ctx, value) };
         return RasterV8Status::Ok;
     };
+    state.record_weak_root(id, key);
     state.insert_weak_hold(key, value);
     RasterV8Status::Ok
 }
@@ -899,25 +900,17 @@ pub unsafe extern "C" fn object_internal_field_count(
     }
     with_state(|state| {
         let ctx = state.ctx_ptr();
-        let Some(obj) = state.roots.get(object_root) else {
-            return RasterV8Status::Error;
-        };
-        let Some(key) = object_ptr_key(obj) else {
-            *out = 0;
-            return RasterV8Status::Ok;
-        };
+        let obj = state.get_object_for_root(object_root);
+        let key = obj.and_then(object_ptr_key);
         let count = context_tables::with_context_tables(ctx, |tables| {
-            tables
-                .object_field_counts
-                .get(&key)
-                .copied()
-                .unwrap_or_else(|| {
-                    tables
-                        .internal_fields
-                        .get(&key)
-                        .map(|v| v.len())
-                        .unwrap_or(0)
-                })
+            key.and_then(|k| {
+                tables
+                    .object_field_counts
+                    .get(&k)
+                    .copied()
+                    .or_else(|| tables.internal_fields.get(&k).map(|v| v.len()))
+            })
+            .unwrap_or(0)
         });
         *out = count as c_int;
         RasterV8Status::Ok
@@ -932,7 +925,7 @@ pub unsafe extern "C" fn internal_field_set(
 ) -> RasterV8Status {
     with_state(|state| {
         let ctx = state.ctx_ptr();
-        let Some(obj) = state.roots.get(object_root) else {
+        let Some(obj) = state.get_object_for_root(object_root) else {
             return RasterV8Status::Error;
         };
         let Some(key) = object_ptr_key(obj) else {
@@ -977,7 +970,7 @@ pub unsafe extern "C" fn internal_field_get(
     }
     with_state(|state| {
         let ctx = state.ctx_ptr();
-        let obj = state.roots.get(object_root);
+        let obj = state.get_object_for_root(object_root);
         let key = obj.and_then(object_ptr_key);
         let mut ptr = context_tables::with_context_tables(ctx, |tables| {
             key.and_then(|k| {
@@ -1110,7 +1103,7 @@ pub unsafe extern "C" fn register_weak_callback(
         crate::module_loader::js_context_for_state(ctx_state as *mut crate::isolate::ContextState)
     {
         return crate::bridge::with_state_for_ctx(qjs_ctx, |state| {
-            let Some(obj) = state.roots.get(object_root) else {
+            let Some(obj) = state.get_object_for_root(object_root) else {
                 return RasterV8Status::Error;
             };
             register_on(state.ctx_ptr(), obj)

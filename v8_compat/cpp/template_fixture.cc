@@ -44,6 +44,17 @@ class ShutdownObjectWrap final : public node::ObjectWrap {
   ObjectWrapShutdownCounters* counters_;
 };
 
+ObjectWrapShutdownCounters* g_ctor_counters = nullptr;
+
+void objectwrap_ctor_callback(const v8::FunctionCallbackInfo<v8::Value>& info) {
+  if (g_ctor_counters == nullptr) {
+    return;
+  }
+  auto* wrap = new ShutdownObjectWrap(g_ctor_counters);
+  wrap->Attach(info.This());
+  info.GetReturnValue().Set(info.This());
+}
+
 }  // namespace
 
 // Counters live outside the wrap so they survive delete.
@@ -114,6 +125,20 @@ extern "C" int raster_v8_test_setup_shutdown_object_wrap(
 extern "C" uint32_t raster_v8_test_register_function_template() {
   uint32_t template_id =
       raster_v8::FunctionRegistry::instance().register_template(noop_callback, 0);
+  return raster_v8::FunctionRegistry::instance().register_function(template_id);
+}
+
+extern "C" uint32_t raster_v8_test_register_objectwrap_ctor_template(
+    ObjectWrapShutdownCounters* counters) {
+  g_ctor_counters = counters;
+  uint32_t template_id =
+      raster_v8::FunctionRegistry::instance().register_template(objectwrap_ctor_callback, 0);
+  if (auto* fn = raster_v8::TemplateRegistry::instance().function_template_at(template_id)) {
+    if (auto* inst = raster_v8::TemplateRegistry::instance().object_template_at(
+            fn->instance_template_id)) {
+      inst->internal_field_count = 1;
+    }
+  }
   return raster_v8::FunctionRegistry::instance().register_function(template_id);
 }
 
