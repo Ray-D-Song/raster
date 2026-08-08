@@ -196,12 +196,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
 
     #[cfg(all(feature = "napi", feature = "v8-compat"))]
     vm.ctx
-        .with(|ctx| {
-            unsafe {
-                v8_compat::run_pre_bridge_teardown_gc(ctx.as_raw().as_ptr());
-            }
-            Ok::<(), String>(())
-        })
+        .with(|ctx| unsafe { v8_compat::run_pre_bridge_teardown_gc(ctx.as_raw().as_ptr()) })
         .await
         .map_err(std::io::Error::other)?;
 

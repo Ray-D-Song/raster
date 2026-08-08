@@ -1542,7 +1542,10 @@ pub(crate) unsafe fn shutdown_bridge_for_context(ctx: *mut JSContext) -> Result<
     if !has_bridge {
         return Ok(());
     }
-    set_active_bridge_context(ctx);
+    // Same TLS provenance as run_pre_bridge_teardown_gc — ObjectWrap weak
+    // callbacks and Persistent::Reset need current context/isolate. Hard-fails
+    // if ContextState exists without a registered isolate.
+    unsafe { crate::module_loader::try_activate_v8_context_for_teardown(ctx)? };
     let rt = unsafe { qjs::JS_GetRuntime(ctx) };
     let rt_key = rt as usize;
     if let Some(context_state) = crate::module_loader::context_state_ptr_for_ctx(ctx) {

@@ -291,6 +291,9 @@ fn buffer_copy_zero_length_allows_null_data() {
     let context = Context::full(&runtime).expect("context");
     let ctx_ptr = context.as_raw().as_ptr();
     crate::bind_bridge(ctx_ptr);
+    let qrt = unsafe { rquickjs::qjs::JS_GetRuntime(ctx_ptr) };
+    // Teardown activation requires the same isolate/context pairing production uses.
+    let _isolate = crate::ensure_isolate_for_runtime(qrt);
     let _state = crate::ensure_context_for_ctx(ctx_ptr);
     crate::bridge::set_active_bridge_context(ctx_ptr);
 
@@ -303,7 +306,6 @@ fn buffer_copy_zero_length_allows_null_data() {
         ))
     };
     unsafe { rquickjs::qjs::JS_FreeValue(ctx_ptr, global) };
-    let qrt = unsafe { rquickjs::qjs::JS_GetRuntime(ctx_ptr) };
     if !has_buffer {
         unsafe { crate::shutdown_context(ctx_ptr).unwrap() };
         unsafe { crate::shutdown_runtime(qrt).unwrap() };
@@ -318,7 +320,6 @@ fn buffer_copy_zero_length_allows_null_data() {
     assert_ne!(root, 0);
 
     unsafe { crate::shutdown_context(ctx_ptr).unwrap() };
-    let qrt = unsafe { rquickjs::qjs::JS_GetRuntime(ctx_ptr) };
     unsafe { crate::shutdown_runtime(qrt).unwrap() };
 }
 
@@ -372,10 +373,13 @@ fn isolate_cleanup_hook_runs_only_at_runtime_shutdown() {
     let ctx_b = Context::full(&runtime).expect("ctx_b");
     let ptr_a = ctx_a.as_raw().as_ptr();
     let ptr_b = ctx_b.as_raw().as_ptr();
+    // Create each ContextState while its own bridge is active so context roots
+    // land in the owner root table (with_bridge_roots uses active_ctx_key).
     crate::bind_bridge(ptr_a);
     let qrt = unsafe { rquickjs::qjs::JS_GetRuntime(ptr_a) };
     let isolate = crate::ensure_isolate_for_runtime(qrt);
     let _ctx_a = crate::ensure_context_for_ctx(ptr_a);
+    crate::bind_bridge(ptr_b);
     let _ctx_b = crate::ensure_context_for_ctx(ptr_b);
 
     crate::runtime_state::add_cleanup_hook(isolate as usize, hook, std::ptr::null_mut());
@@ -546,6 +550,342 @@ fn objectwrap_fixture_teardown_clears_all_counts() {
         crate::shutdown_runtime(qrt).unwrap();
         raster_v8_set_current_context(std::ptr::null_mut());
         raster_v8_set_current_isolate(std::ptr::null_mut());
+    }
+    drop(context);
+    drop(runtime);
+}
+
+/// better-sqlite3 teardown risk: ObjectWrap weak callbacks need C++ TLS at
+/// DisposeGlobal time. Teardown must reinstall provenance, not inherit it.
+#[test]
+fn objectwrap_is_destroyed_when_teardown_starts_without_cpp_tls() {
+    let _lock = abi_test_lock();
+    use rquickjs::{Context, Runtime};
+
+    extern "C" {
+        fn raster_v8_test_objectwrap_shutdown_counters_new() -> *mut std::ffi::c_void;
+        fn raster_v8_test_objectwrap_shutdown_counters_read(
+            counters: *const std::ffi::c_void,
+            constructed_out: *mut i32,
+            destroyed_out: *mut i32,
+        );
+        fn raster_v8_test_objectwrap_shutdown_counters_destroy(counters: *mut std::ffi::c_void);
+        fn raster_v8_test_setup_shutdown_object_wrap(
+            ctx: *mut crate::bridge::RasterV8ContextState,
+            counters: *mut std::ffi::c_void,
+        ) -> i32;
+        fn raster_v8_set_current_context(ctx: *mut crate::bridge::RasterV8ContextState);
+        fn raster_v8_set_current_isolate(isolate: *mut crate::bridge::RasterV8IsolateState);
+    }
+
+    let runtime = Runtime::new().expect("runtime");
+    let context = Context::full(&runtime).expect("context");
+    let ctx_ptr = context.as_raw().as_ptr();
+    crate::bind_bridge(ctx_ptr);
+    let qrt = unsafe { rquickjs::qjs::JS_GetRuntime(ctx_ptr) };
+    let isolate = crate::ensure_isolate_for_runtime(qrt);
+    let context_state = crate::ensure_context_for_ctx(ctx_ptr);
+    crate::bridge::set_active_bridge_context(ctx_ptr);
+    unsafe {
+        raster_v8_set_current_context(context_state as *mut crate::bridge::RasterV8ContextState);
+        raster_v8_set_current_isolate(isolate as *mut crate::bridge::RasterV8IsolateState);
+    }
+
+    let counters = unsafe { raster_v8_test_objectwrap_shutdown_counters_new() };
+    assert!(!counters.is_null());
+    let setup_ok = unsafe {
+        raster_v8_test_setup_shutdown_object_wrap(
+            context_state as *mut crate::bridge::RasterV8ContextState,
+            counters,
+        )
+    };
+    assert_eq!(setup_ok, 1, "ObjectWrap setup must succeed");
+
+    let mut constructed = 0;
+    let mut destroyed = 0;
+    unsafe {
+        raster_v8_test_objectwrap_shutdown_counters_read(
+            counters,
+            &mut constructed,
+            &mut destroyed,
+        );
+    }
+    assert_eq!(constructed, 1);
+    assert_eq!(destroyed, 0);
+
+    // Exact CI risk: teardown must not rely on TLS from a prior callback.
+    unsafe {
+        raster_v8_set_current_context(std::ptr::null_mut());
+        raster_v8_set_current_isolate(std::ptr::null_mut());
+    }
+    crate::bridge::clear_active_bridge_context();
+
+    unsafe {
+        crate::run_pre_bridge_teardown_gc(ctx_ptr).unwrap();
+    }
+
+    unsafe {
+        raster_v8_test_objectwrap_shutdown_counters_read(
+            counters,
+            &mut constructed,
+            &mut destroyed,
+        );
+    }
+    assert_eq!(
+        destroyed, 1,
+        "ObjectWrap dtor must run via forced weak invoke"
+    );
+    assert_eq!(
+        crate::bridge::teardown_counts_for_ctx(ctx_ptr).weak_callbacks,
+        0
+    );
+
+    unsafe {
+        crate::shutdown_context(ctx_ptr).unwrap();
+        crate::shutdown_runtime(qrt).unwrap();
+        raster_v8_test_objectwrap_shutdown_counters_destroy(counters);
+        raster_v8_set_current_context(std::ptr::null_mut());
+        raster_v8_set_current_isolate(std::ptr::null_mut());
+    }
+    drop(context);
+    drop(runtime);
+}
+
+#[test]
+fn teardown_activation_uses_the_owner_context_and_isolate() {
+    let _lock = abi_test_lock();
+    use rquickjs::{Context, Runtime};
+
+    extern "C" {
+        fn raster_v8_test_objectwrap_shutdown_counters_new() -> *mut std::ffi::c_void;
+        fn raster_v8_test_objectwrap_shutdown_counters_read(
+            counters: *const std::ffi::c_void,
+            constructed_out: *mut i32,
+            destroyed_out: *mut i32,
+        );
+        fn raster_v8_test_objectwrap_shutdown_counters_destroy(counters: *mut std::ffi::c_void);
+        fn raster_v8_test_setup_shutdown_object_wrap(
+            ctx: *mut crate::bridge::RasterV8ContextState,
+            counters: *mut std::ffi::c_void,
+        ) -> i32;
+        fn raster_v8_set_current_context(ctx: *mut crate::bridge::RasterV8ContextState);
+        fn raster_v8_set_current_isolate(isolate: *mut crate::bridge::RasterV8IsolateState);
+    }
+
+    let runtime = Runtime::new().expect("runtime");
+    let ctx_a = Context::full(&runtime).expect("ctx_a");
+    let ctx_b = Context::full(&runtime).expect("ctx_b");
+    let ptr_a = ctx_a.as_raw().as_ptr();
+    let ptr_b = ctx_b.as_raw().as_ptr();
+    // Create each ContextState while its own bridge is active so context roots
+    // land in the owner root table (with_bridge_roots uses active_ctx_key).
+    crate::bind_bridge(ptr_a);
+    let qrt = unsafe { rquickjs::qjs::JS_GetRuntime(ptr_a) };
+    let isolate = crate::ensure_isolate_for_runtime(qrt);
+    let state_a = crate::ensure_context_for_ctx(ptr_a);
+
+    crate::bind_bridge(ptr_b);
+    let state_b = crate::ensure_context_for_ctx(ptr_b);
+
+    // Wire A and create ObjectWrap on A.
+    crate::bridge::set_active_bridge_context(ptr_a);
+    unsafe {
+        raster_v8_set_current_context(state_a as *mut crate::bridge::RasterV8ContextState);
+        raster_v8_set_current_isolate(isolate as *mut crate::bridge::RasterV8IsolateState);
+    }
+    let counters_a = unsafe { raster_v8_test_objectwrap_shutdown_counters_new() };
+    assert_eq!(
+        unsafe {
+            raster_v8_test_setup_shutdown_object_wrap(
+                state_a as *mut crate::bridge::RasterV8ContextState,
+                counters_a,
+            )
+        },
+        1
+    );
+
+    // Wire B and create ObjectWrap on B.
+    crate::bridge::set_active_bridge_context(ptr_b);
+    unsafe {
+        raster_v8_set_current_context(state_b as *mut crate::bridge::RasterV8ContextState);
+        raster_v8_set_current_isolate(isolate as *mut crate::bridge::RasterV8IsolateState);
+    }
+    let counters_b = unsafe { raster_v8_test_objectwrap_shutdown_counters_new() };
+    assert_eq!(
+        unsafe {
+            raster_v8_test_setup_shutdown_object_wrap(
+                state_b as *mut crate::bridge::RasterV8ContextState,
+                counters_b,
+            )
+        },
+        1
+    );
+
+    // Leave TLS pointing at B, then teardown A — must destroy only A's wrap.
+    let mut destroyed_a = 0;
+    let mut destroyed_b = 0;
+    let mut constructed = 0;
+    unsafe {
+        crate::run_pre_bridge_teardown_gc(ptr_a).unwrap();
+        raster_v8_test_objectwrap_shutdown_counters_read(
+            counters_a,
+            &mut constructed,
+            &mut destroyed_a,
+        );
+        raster_v8_test_objectwrap_shutdown_counters_read(
+            counters_b,
+            &mut constructed,
+            &mut destroyed_b,
+        );
+    }
+    assert_eq!(
+        destroyed_a, 1,
+        "owner context A ObjectWrap must be destroyed"
+    );
+    assert_eq!(
+        destroyed_b, 0,
+        "sibling context B ObjectWrap must survive A teardown"
+    );
+    assert_eq!(
+        crate::bridge::teardown_counts_for_ctx(ptr_a).weak_callbacks,
+        0,
+        "A weak callbacks must clear after pre-bridge GC"
+    );
+    assert_eq!(
+        crate::bridge::teardown_counts_for_ctx(ptr_b).weak_callbacks,
+        1,
+        "B weak callbacks must remain until B teardown"
+    );
+
+    unsafe {
+        crate::shutdown_context(ptr_a).unwrap();
+        crate::run_pre_bridge_teardown_gc(ptr_b).unwrap();
+        raster_v8_test_objectwrap_shutdown_counters_read(
+            counters_b,
+            &mut constructed,
+            &mut destroyed_b,
+        );
+    }
+    assert_eq!(
+        destroyed_b, 1,
+        "context B ObjectWrap must be destroyed on B teardown"
+    );
+    assert_eq!(
+        crate::bridge::teardown_counts_for_ctx(ptr_b).weak_callbacks,
+        0,
+        "B weak callbacks must clear after pre-bridge GC"
+    );
+
+    unsafe {
+        crate::shutdown_context(ptr_b).unwrap();
+    }
+
+    // Full bridge teardown zero only after shutdown_context (context roots live until then).
+    assert!(
+        crate::bridge::teardown_counts_for_ctx(ptr_a).is_zero(),
+        "A bridge roots/weak/persistents must be zero after full shutdown"
+    );
+    assert!(
+        crate::bridge::teardown_counts_for_ctx(ptr_b).is_zero(),
+        "B bridge roots/weak/persistents must be zero after full shutdown"
+    );
+
+    unsafe {
+        crate::shutdown_runtime(qrt).unwrap();
+        raster_v8_test_objectwrap_shutdown_counters_destroy(counters_a);
+        raster_v8_test_objectwrap_shutdown_counters_destroy(counters_b);
+        raster_v8_set_current_context(std::ptr::null_mut());
+        raster_v8_set_current_isolate(std::ptr::null_mut());
+    }
+    drop(ctx_a);
+    drop(ctx_b);
+    drop(runtime);
+}
+
+#[test]
+fn teardown_activation_rejects_registered_context_without_isolate() {
+    let _lock = abi_test_lock();
+    use rquickjs::{Context, Runtime};
+
+    extern "C" {
+        fn raster_v8_current_context() -> *mut crate::bridge::RasterV8ContextState;
+        fn raster_v8_current_isolate() -> *mut crate::bridge::RasterV8IsolateState;
+        fn raster_v8_set_current_context(ctx: *mut crate::bridge::RasterV8ContextState);
+        fn raster_v8_set_current_isolate(isolate: *mut crate::bridge::RasterV8IsolateState);
+    }
+
+    let runtime = Runtime::new().unwrap();
+    let context = Context::full(&runtime).unwrap();
+    let ctx = context.as_raw().as_ptr();
+    let qrt = unsafe { rquickjs::qjs::JS_GetRuntime(ctx) };
+
+    crate::bind_bridge(ctx);
+    crate::ensure_context_for_ctx(ctx);
+
+    unsafe {
+        raster_v8_set_current_context(std::ptr::null_mut());
+        raster_v8_set_current_isolate(std::ptr::null_mut());
+    }
+
+    let error = unsafe { crate::module_loader::activate_v8_context_for_teardown(ctx) }.unwrap_err();
+
+    assert!(
+        error.contains("isolate is not registered"),
+        "unexpected error: {error}"
+    );
+    // Failed activation must not mutate C++ TLS (all fallible lookups first).
+    assert!(unsafe { raster_v8_current_context().is_null() });
+    assert!(unsafe { raster_v8_current_isolate().is_null() });
+
+    crate::ensure_isolate_for_runtime(qrt);
+    unsafe {
+        crate::shutdown_context(ctx).unwrap();
+        crate::shutdown_runtime(qrt).unwrap();
+    }
+
+    drop(context);
+    drop(runtime);
+}
+
+#[test]
+fn try_activate_rejects_cpp_owned_resources_without_context_state() {
+    let _lock = abi_test_lock();
+    use rquickjs::{Context, Runtime};
+
+    let runtime = Runtime::new().unwrap();
+    let context = Context::full(&runtime).unwrap();
+    let ctx = context.as_raw().as_ptr();
+    let qrt = unsafe { rquickjs::qjs::JS_GetRuntime(ctx) };
+
+    crate::bind_bridge(ctx);
+    // No ensure_context_for_ctx — simulate weak slot registered via the
+    // with_state_for_object_root fallback path.
+    crate::context_tables::with_context_tables(ctx, |tables| {
+        tables.weak_callbacks.insert(
+            0xDEAD_BEEFusize,
+            crate::context_tables::WeakSlot {
+                callback: 1,
+                parameter: 0,
+                phase: crate::context_tables::WeakPhase::Registered,
+            },
+        );
+    });
+
+    let error =
+        unsafe { crate::module_loader::try_activate_v8_context_for_teardown(ctx) }.unwrap_err();
+    assert!(
+        error.contains("C++-owned resources without a registered context"),
+        "unexpected error: {error}"
+    );
+
+    // Clean the synthetic slot before shutdown so bridge-only teardown succeeds.
+    crate::context_tables::with_context_tables(ctx, |tables| {
+        tables.weak_callbacks.clear();
+    });
+
+    unsafe {
+        crate::shutdown_context(ctx).unwrap();
+        crate::shutdown_runtime(qrt).unwrap();
     }
     drop(context);
     drop(runtime);

@@ -132,6 +132,8 @@ pub struct V8ModuleRecord {
 extern "C" {
     fn raster_v8_set_current_context(ctx: *mut ContextState);
     fn raster_v8_set_current_isolate(isolate: *mut IsolateState);
+    fn raster_v8_current_context() -> *mut ContextState;
+    fn raster_v8_current_isolate() -> *mut IsolateState;
     fn raster_v8_create_isolate() -> *mut IsolateState;
     fn raster_v8_destroy_isolate(isolate: *mut IsolateState);
     fn raster_v8_create_context() -> *mut ContextState;
@@ -147,6 +149,83 @@ extern "C" {
         module_root_id: u64,
         out_exports_root_id: *mut u64,
     ) -> i32;
+}
+
+/// Install C++/Rust active context+isolate for ObjectWrap weak-callback teardown.
+///
+/// Teardown must not rely on whatever TLS a previous V8 callback happened to leave.
+/// Callers that never registered a C++ ContextState (bridge-only / pure JS) must
+/// not invoke this; use [`try_activate_v8_context_for_teardown`] instead.
+///
+/// # Safety
+///
+/// `ctx` must be a live QuickJS context on the current thread.
+pub(crate) unsafe fn activate_v8_context_for_teardown(ctx: *mut JSContext) -> Result<(), String> {
+    if ctx.is_null() {
+        return Err("cannot activate a null V8 teardown context".into());
+    }
+
+    let runtime = unsafe { qjs::JS_GetRuntime(ctx) };
+    if runtime.is_null() {
+        return Err("V8 teardown context has no QuickJS runtime".into());
+    }
+
+    let context_state = context_state_ptr_for_ctx(ctx)
+        .ok_or_else(|| "V8 teardown context state is not registered".to_string())?;
+
+    let isolate = isolate_ptr_for_runtime(runtime as usize)
+        .ok_or_else(|| "V8 teardown isolate is not registered".to_string())?;
+
+    unsafe {
+        raster_v8_set_current_context(context_state as *mut ContextState);
+        raster_v8_set_current_isolate(isolate as *mut IsolateState);
+    }
+    crate::bridge::set_active_bridge_context(ctx);
+
+    let active_ctx = unsafe { raster_v8_current_context() };
+    let active_iso = unsafe { raster_v8_current_isolate() };
+    if active_ctx != context_state as *mut ContextState
+        || active_iso != isolate as *mut IsolateState
+    {
+        return Err("failed to activate the V8 teardown context".into());
+    }
+
+    Ok(())
+}
+
+/// Activate teardown TLS when C++ context state exists; otherwise allow a
+/// bridge-only teardown only when no C++-owned resources are registered.
+///
+/// A weak callback can be registered on a context that never went through
+/// `ensure_context_for_ctx` (see `register_weak_callback`'s
+/// `with_state_for_object_root` fallback). Bridge-only teardown is therefore
+/// permitted only when `teardown_counts_for_ctx` reports no weak callbacks,
+/// pending weaks, or persistents for this context.
+///
+/// # Safety
+///
+/// `ctx` must be a live QuickJS context on the current thread.
+pub(crate) unsafe fn try_activate_v8_context_for_teardown(
+    ctx: *mut JSContext,
+) -> Result<(), String> {
+    if ctx.is_null() {
+        return Err("cannot activate a null V8 teardown context".into());
+    }
+    if context_state_ptr_for_ctx(ctx).is_none() {
+        let counts = crate::bridge::teardown_counts_for_ctx(ctx);
+        if counts.weak_callbacks != 0
+            || counts.pending_weak != 0
+            || counts.strong_persistents != 0
+            || counts.weak_persistents != 0
+        {
+            return Err(format!(
+                "V8 teardown has C++-owned resources without a registered context: {counts:?}"
+            ));
+        }
+        crate::bridge::set_active_bridge_context(ctx);
+        return Ok(());
+    }
+    unsafe { activate_v8_context_for_teardown(ctx) }
 }
 
 pub fn ensure_isolate_for_runtime(rt: *mut qjs::JSRuntime) -> *mut IsolateState {
@@ -277,7 +356,10 @@ pub unsafe fn shutdown_environment(ctx: *mut JSContext) -> Result<(), String> {
 /// # Safety
 ///
 /// `ctx` must be a valid wired context on the current thread.
-pub unsafe fn run_pre_bridge_teardown_gc(ctx: *mut JSContext) {
+pub unsafe fn run_pre_bridge_teardown_gc(ctx: *mut JSContext) -> Result<(), String> {
+    // Hard-activate when C++ state exists; bridge-only paths only set Rust TLS.
+    unsafe { try_activate_v8_context_for_teardown(ctx)? };
+
     crate::js_ops::force_invoke_registered_weak_callbacks(ctx);
 
     let rt = unsafe { qjs::JS_GetRuntime(ctx) };
@@ -291,6 +373,8 @@ pub unsafe fn run_pre_bridge_teardown_gc(ctx: *mut JSContext) {
         });
         crate::js_ops::dispatch_pending_weak_callbacks_for_ctx(ctx);
     }
+
+    Ok(())
 }
 
 /// Tear down all V8 state for a QuickJS runtime once every context env is gone.
