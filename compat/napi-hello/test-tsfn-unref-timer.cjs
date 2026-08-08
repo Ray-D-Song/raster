@@ -5,19 +5,19 @@ const path = require("node:path");
 const addonPath = path.join(__dirname, "build", "Release", "hello.node");
 const hello = require(addonPath);
 
-// Start the delayed unref TSFN first, then keep the event loop alive briefly.
-hello.delayedTsfnUnrefExit((value) => {
-  if (value !== 88) {
-    process.exit(1);
-  }
-  console.log("timer-tsfn-ok");
-  process.exit(0);
-});
-
-setTimeout(() => {
-  process.exit(2);
+// Keep the event loop alive briefly; success path exits via normal teardown.
+const timeout = setTimeout(() => {
+  console.error("delayed TSFN callback did not run");
+  process.exitCode = 2;
 }, 200);
 
-setTimeout(() => {
-  process.exit(3);
-}, 2000);
+hello.delayedTsfnUnrefExit((value) => {
+  clearTimeout(timeout);
+
+  if (value !== 88) {
+    process.exitCode = 1;
+    return;
+  }
+
+  console.log("timer-tsfn-ok");
+});
