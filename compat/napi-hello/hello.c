@@ -270,14 +270,16 @@ static napi_value ReleaseStoredTsfn(napi_env env, napi_callback_info info) {
   return undefined;
 }
 
+// One allocation: worker posts this payload; JS callback frees it on success.
+// On napi_closing / other non-ok status, ownership stays with the worker.
 typedef struct {
   napi_threadsafe_function tsfn;
   int value;
-} DelayedTsfnPayload;
+} DelayedThreadArg;
 
 static void delayed_tsfn_call_js(napi_env env, napi_value js_callback, void* context, void* data) {
   (void)context;
-  DelayedTsfnPayload* payload = (DelayedTsfnPayload*)data;
+  DelayedThreadArg* payload = (DelayedThreadArg*)data;
   napi_value undefined;
   napi_get_undefined(env, &undefined);
   napi_value result;
@@ -289,24 +291,19 @@ static void delayed_tsfn_call_js(napi_env env, napi_value js_callback, void* con
   napi_release_threadsafe_function(tsfn, napi_tsfn_release);
 }
 
-typedef struct {
-  napi_threadsafe_function tsfn;
-  int value;
-} DelayedThreadArg;
-
 static void* delayed_tsfn_thread_main(void* arg) {
-  DelayedThreadArg* thread_arg = (DelayedThreadArg*)arg;
+  DelayedThreadArg* payload = (DelayedThreadArg*)arg;
   timespec_sleep_ms(30);
-  DelayedTsfnPayload* payload = calloc(1, sizeof(DelayedTsfnPayload));
-  if (!payload) {
-    free(thread_arg);
-    return NULL;
+  napi_status status = napi_call_threadsafe_function(
+      payload->tsfn, payload, napi_tsfn_blocking);
+
+  if (status != napi_ok) {
+    // Not enqueued: caller still owns the payload and must release the TSFN.
+    napi_threadsafe_function tsfn = payload->tsfn;
+    free(payload);
+    napi_release_threadsafe_function(tsfn, napi_tsfn_release);
   }
-  payload->tsfn = thread_arg->tsfn;
-  payload->value = thread_arg->value;
-  napi_call_threadsafe_function(
-      thread_arg->tsfn, payload, napi_tsfn_blocking);
-  free(thread_arg);
+
   return NULL;
 }
 
