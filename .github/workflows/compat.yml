@@ -103,7 +103,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        sanitizer: [address, undefined]
+        sanitizer: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.case_filter == 'sanitizer-address' && '["address"]' || github.event_name == 'workflow_dispatch' && inputs.case_filter == 'sanitizer-undefined' && '["undefined"]' || '["address","undefined"]') }}
     steps:
       - uses: actions/checkout@v4
       - name: Fetch Node 24.3 source

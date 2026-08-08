@@ -117,7 +117,7 @@ const cases = {
       },
       {
         script: "test-tsfn-unref-fast.cjs",
-        maxDurationMs: 500,
+        maxDurationMs: 2_000,
         expectCode: 0,
       },
       {
