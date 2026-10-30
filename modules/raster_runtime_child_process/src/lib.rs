@@ -26,6 +26,7 @@ use raster_runtime_stream::{
     writable::{DefaultWritableStream, WritableStream},
 };
 use raster_runtime_utils::{
+    event_loop::EventLoopRef,
     module::{export_default, ModuleInfo},
     object::ObjectExt,
     result::ResultExt,
@@ -111,6 +112,7 @@ pub struct ChildProcess<'js> {
     command: String,
     kill_tx: Option<Sender<()>>,
     pid: Option<u32>,
+    loop_ref: Arc<EventLoopRef>,
 }
 
 impl<'js> Trace<'js> for ChildProcess<'js> {
@@ -178,6 +180,18 @@ impl<'js> ChildProcess<'js> {
 
         Ok(false)
     }
+
+    #[qjs(rename = "ref")]
+    fn js_ref(this: This<Class<'js, Self>>) -> Class<'js, Self> {
+        this.borrow().loop_ref.reference();
+        this.0
+    }
+
+    #[qjs(rename = "unref")]
+    fn js_unref(this: This<Class<'js, Self>>) -> Class<'js, Self> {
+        this.borrow().loop_ref.unreference();
+        this.0
+    }
 }
 
 impl<'js> ChildProcess<'js> {
@@ -189,12 +203,18 @@ impl<'js> ChildProcess<'js> {
     ) -> Result<Class<'js, Self>> {
         let (kill_tx, kill_rx) = broadcast_channel::<()>(1);
 
+        let rt_ptr = unsafe { rquickjs::qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+        let rt_key =
+            raster_runtime_utils::event_loop::rt_key_from_ptr(rt_ptr as *mut std::ffi::c_void);
+        let loop_ref = EventLoopRef::new_referenced(rt_key);
+
         let instance = Self {
             emitter: EventEmitter::new(),
             command: command.clone(),
             args,
             pid: None,
             kill_tx: Some(kill_tx),
+            loop_ref,
         };
 
         let stdout_instance = DefaultReadableStream::new(ctx.clone())?;
@@ -226,14 +246,26 @@ impl<'js> ChildProcess<'js> {
 
                 let ctx2 = ctx.clone();
                 let ctx3 = ctx.clone();
+                let wait_loop_ref = instance2.borrow().loop_ref.clone();
 
                 ctx.spawn_exit(async move {
                     let spawn_proc = async move {
                         let mut exit_code = None;
                         let mut exit_signal = None;
 
-                        wait_for_process(child, &ctx3, kill_rx, &mut exit_code, &mut exit_signal)
-                            .await?;
+                        let outcome = wait_for_process(
+                            child,
+                            &ctx3,
+                            kill_rx,
+                            &mut exit_code,
+                            &mut exit_signal,
+                            wait_loop_ref,
+                        )
+                        .await?;
+
+                        if matches!(outcome, WaitOutcome::Detached) {
+                            return Ok::<_, Error>(());
+                        }
 
                         let code = match exit_code {
                             Some(c) => c.into_js(&ctx3)?,
@@ -313,16 +345,27 @@ impl<'js> ChildProcess<'js> {
     }
 }
 
+enum WaitOutcome {
+    Exited,
+    Detached,
+}
+
 async fn wait_for_process(
     mut child: Child,
     ctx: &Ctx<'_>,
     mut kill_rx: Receiver<()>,
     exit_code: &mut Option<i32>,
     _exit_signal: &mut Option<i32>,
-) -> Result<()> {
+    loop_ref: Arc<EventLoopRef>,
+) -> Result<WaitOutcome> {
     #[cfg(not(unix))]
     let mut was_killed = false;
     loop {
+        if !raster_runtime_utils::event_loop::keeps_event_loop_alive(&loop_ref) {
+            std::mem::forget(child);
+            return Ok(WaitOutcome::Detached);
+        }
+
         tokio::select! {
             status = child.wait() => {
                 let exit_status = status.or_throw(ctx)?;
@@ -352,10 +395,15 @@ async fn wait_for_process(
                 }
                 child.kill().await.or_throw(ctx)?;
             }
+
+            _ = raster_runtime_utils::event_loop::wait_until_io_unref(loop_ref.clone()) => {
+                std::mem::forget(child);
+                return Ok(WaitOutcome::Detached);
+            }
         }
     }
 
-    Ok(())
+    Ok(WaitOutcome::Exited)
 }
 
 impl<'js> Emitter<'js> for ChildProcess<'js> {
