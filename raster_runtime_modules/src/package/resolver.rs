@@ -57,10 +57,21 @@ type NodeModulePaths = HashMap<Box<str>, Option<NodePathList>>;
 static NODE_MODULES_PATHS_CACHE: Lazy<Mutex<NodeModulePaths>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
+fn home_dir() -> Option<PathBuf> {
+    #[cfg(not(target_family = "wasm"))]
+    {
+        home::home_dir()
+    }
+    #[cfg(target_family = "wasm")]
+    {
+        std::env::var_os("HOME").map(PathBuf::from)
+    }
+}
+
 static HOME_NODE_MODULES: Lazy<Vec<Box<str>>> = Lazy::new(|| {
     // Add global folders
     let mut paths = Vec::with_capacity(2);
-    if let Some(home) = home::home_dir() {
+    if let Some(home) = home_dir() {
         let home_node_modules = home.join(".node_modules");
         let home_node_libraries = home.join(".node_libraries");
         if home_node_modules.is_dir() {
@@ -80,7 +91,7 @@ static FILESYSTEM_ROOT: Lazy<Box<str>> = Lazy::new(|| {
     }
     #[cfg(windows)]
     {
-        if let Some(path) = home::home_dir() {
+        if let Some(path) = home_dir() {
             if let Some(std::path::Component::Prefix(prefix)) = path.components().next() {
                 return prefix
                     .as_os_str()
@@ -91,6 +102,10 @@ static FILESYSTEM_ROOT: Lazy<Box<str>> = Lazy::new(|| {
         }
 
         "C:".to_string().into_boxed_str()
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        "/".into()
     }
 });
 

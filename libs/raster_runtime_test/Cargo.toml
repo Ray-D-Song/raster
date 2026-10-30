@@ -16,5 +16,4 @@ rquickjs = { version = "=0.12.1", features = [
   "loader",
   "parallel",
 ], default-features = false }
-tokio = { version = "1", features = ["fs"], default-features = false }
 uuid = { version = "1", features = ["v4"], default-features = false }

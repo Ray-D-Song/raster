@@ -124,6 +124,14 @@ pub fn kill_process_raw(pid: u32, signal: i32) -> io::Result<()> {
     result
 }
 
+#[cfg(not(any(unix, windows)))]
+pub fn kill_process_raw(_pid: u32, _signal: i32) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "process signals are not supported on this platform",
+    ))
+}
+
 pub fn kill(ctx: &Ctx<'_>, pid: u32, signal: Opt<Value<'_>>) -> Result<bool> {
     let signal = parse_signal(signal.0)?;
 
@@ -138,6 +146,10 @@ pub fn kill(ctx: &Ctx<'_>, pid: u32, signal: Opt<Value<'_>>) -> Result<bool> {
 
             #[cfg(windows)]
             let is_not_found = true; // On Windows, any OpenProcess failure during check implies "not found" (or not accessible)
+
+            #[cfg(not(any(unix, windows)))]
+            let is_not_found = e.kind() == io::ErrorKind::NotFound
+                || e.kind() == io::ErrorKind::Unsupported;
 
             if signal == 0 && is_not_found {
                 Ok(false)

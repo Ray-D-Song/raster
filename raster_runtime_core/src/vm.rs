@@ -18,8 +18,9 @@ use crate::libs::{
         time,
     },
 };
+#[cfg(feature = "async-hooks")]
+use crate::modules::async_hooks::promise_hook_tracker;
 use crate::modules::{
-    async_hooks::promise_hook_tracker,
     embedded::{loader::EmbeddedLoader, resolver::EmbeddedResolver, BYTECODE_CACHE},
     module_builder::{ModuleBuilder, ModuleBuilderConfig},
     package::{loader::PackageLoader, resolver::PackageResolver},
@@ -132,6 +133,7 @@ impl Vm {
         // Always register the Promise hook when async-hooks is built in.
         // The hook fast-paths when no AsyncLocalStorage consumers exist and
         // user createHook tracking is inactive (RASTER_RUNTIME_ASYNC_HOOKS).
+        #[cfg(feature = "async-hooks")]
         runtime.set_promise_hook(Some(promise_hook_tracker())).await;
 
         // Unhandled promise rejections must not look like a successful idle exit.

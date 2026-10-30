@@ -24,10 +24,10 @@ dgram = ["raster_runtime_modules/dgram"]
 dns = ["raster_runtime_modules/dns"]
 events = ["raster_runtime_modules/events"]
 exceptions = ["raster_runtime_modules/exceptions"]
-fetch = ["raster_runtime_modules/fetch"]
+fetch = ["raster_runtime_modules/fetch", "dep:hyper"]
 fs = ["raster_runtime_modules/fs"]
-http = ["raster_runtime_modules/http"]
-https = ["raster_runtime_modules/https"]
+http = ["raster_runtime_modules/http", "dep:hyper"]
+https = ["raster_runtime_modules/https", "dep:hyper"]
 inspector = ["raster_runtime_modules/inspector"]
 intl = ["raster_runtime_modules/intl"]
 navigator = ["raster_runtime_modules/navigator"]
@@ -73,9 +73,8 @@ openssl-vendored = ["openssl/vendored"]
 
 [dependencies]
 bytes = { version = "1", default-features = false }
-home = { version = "0.5", default-features = false }
 http-body-util = { version = "0.1", default-features = false }
-hyper = { version = "1", default-features = false }
+hyper = { version = "1", default-features = false, optional = true }
 itoa = { version = "1", default-features = false }
 jiff = { version = "0.2" }
 libc = { version = "0.2", default-features = false }
@@ -86,7 +85,7 @@ raster_runtime_json = { path = "../libs/raster_runtime_json" }
 raster_runtime_logging = { path = "../libs/raster_runtime_logging" }
 raster_runtime_modules = { path = "../raster_runtime_modules", default-features = false }
 raster_runtime_numbers = { path = "../libs/raster_runtime_numbers" }
-raster_runtime_utils = { path = "../libs/raster_runtime_utils", features = ["all"] }
+raster_runtime_utils = { path = "../libs/raster_runtime_utils", default-features = false, features = ["bytearray-buffer"] }
 once_cell = { version = "1", features = ["std"], default-features = false }
 phf = { version = "0.13", default-features = false }
 quick-xml = { version = "0.40", default-features = false }
@@ -96,7 +95,6 @@ rand = { version = "0.10.1", features = [
 ], default-features = false }
 rquickjs = { version = "=0.12.1", features = [
   "futures",
-  "parallel",
   "rust-alloc",
 ], default-features = false }
 rustls = { version = "0.23", features = ["tls12"], default-features = false }
@@ -109,6 +107,10 @@ tokio = { version = "1", features = ["sync", "time"], default-features = false }
 tracing = { version = "0.1", features = ["log"], default-features = false }
 zstd = { version = "0.13", default-features = false }
 openssl = { version = "0.10", optional = true }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+rquickjs = { version = "=0.12.1", features = ["parallel"], default-features = false }
+raster_runtime_utils = { path = "../libs/raster_runtime_utils", features = ["fs"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 md-5 = { version = "0.11.0", default-features = false }

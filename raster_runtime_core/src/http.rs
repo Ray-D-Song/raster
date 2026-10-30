@@ -1,10 +1,31 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
-use std::{env, result::Result as StdResult};
+use std::result::Result as StdResult;
 
+#[cfg(any(
+    feature = "http",
+    feature = "https",
+    feature = "tls-ring",
+    feature = "tls-aws-lc",
+    feature = "tls-graviola",
+    feature = "tls-openssl"
+))]
+use std::env;
+
+#[cfg(any(feature = "http", feature = "https"))]
 use tracing::warn;
 
+#[cfg(any(
+    feature = "http",
+    feature = "https",
+    feature = "tls-ring",
+    feature = "tls-aws-lc",
+    feature = "tls-graviola",
+    feature = "tls-openssl"
+))]
 use crate::environment;
+
+#[cfg(any(feature = "http", feature = "https"))]
 use crate::modules::https::{set_http_version, set_pool_idle_timeout_seconds, HttpVersion};
 
 #[cfg(any(feature = "tls-ring", feature = "tls-aws-lc", feature = "tls-graviola"))]
@@ -15,12 +36,14 @@ use rustls::{pki_types::CertificateDer, version, SupportedProtocolVersion};
 
 #[cfg(any(feature = "tls-ring", feature = "tls-aws-lc", feature = "tls-graviola"))]
 use crate::modules::tls::root_ca::set_extra_ca_certs;
+#[cfg(any(feature = "tls-ring", feature = "tls-aws-lc", feature = "tls-graviola"))]
 use crate::modules::tls::set_tls_versions;
 
 #[cfg(feature = "tls-openssl")]
 use crate::modules::tls::set_tls_version;
 
 pub fn init() -> StdResult<(), Box<dyn std::error::Error + Send + Sync>> {
+    #[cfg(any(feature = "http", feature = "https"))]
     if let Some(pool_idle_timeout) = build_pool_idle_timeout() {
         set_pool_idle_timeout_seconds(pool_idle_timeout);
     }
@@ -38,11 +61,13 @@ pub fn init() -> StdResult<(), Box<dyn std::error::Error + Send + Sync>> {
         set_tls_version(build_tls_version_openssl());
     }
 
+    #[cfg(any(feature = "http", feature = "https"))]
     set_http_version(build_http_version());
 
     Ok(())
 }
 
+#[cfg(any(feature = "http", feature = "https"))]
 fn build_pool_idle_timeout() -> Option<u64> {
     let Ok(env_value) = env::var(environment::ENV_RASTER_RUNTIME_NET_POOL_IDLE_TIMEOUT) else {
         return None;
@@ -93,6 +118,7 @@ fn build_tls_version_openssl() -> Option<openssl::ssl::SslVersion> {
     }
 }
 
+#[cfg(any(feature = "http", feature = "https"))]
 fn build_http_version() -> HttpVersion {
     match env::var(environment::ENV_RASTER_RUNTIME_HTTP_VERSION).as_deref() {
         Ok("2") => HttpVersion::Http2,

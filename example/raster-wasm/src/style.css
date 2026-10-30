@@ -1,0 +1,93 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #333;
+  background: #252526;
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+
+h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.hint {
+  color: #8b8b8b;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+#run {
+  appearance: none;
+  border: 0;
+  border-radius: 6px;
+  background: #0e639c;
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  padding: 8px 16px;
+  cursor: pointer;
+}
+
+#run:hover:not(:disabled) {
+  background: #1177bb;
+}
+
+#run:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+main {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(180px, 1.4fr) minmax(140px, 0.9fr);
+}
+
+#editor,
+#terminal {
+  min-height: 0;
+}
+
+#terminal {
+  padding: 8px;
+  background: #000;
+  border-top: 1px solid #333;
+}
+
+#terminal .xterm {
+  height: 100%;
+}
+
+#terminal .xterm-viewport {
+  overflow-y: auto !important;
+}

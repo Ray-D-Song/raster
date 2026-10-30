@@ -309,4 +309,15 @@ check-crates:
 	  cargo check -p "$$crate"; \
 	done
 
-.PHONY: libs check check-all check-crates libs-arm64 libs-x64 toolchain clean-js release-linux release-darwin release-windows stdlib stdlib-x64 stdlib-arm64 test test-ci run js run-release build release clean flame deploy compat compat-next compat-vite-plus compat-better-sqlite3 compat-mysql compat-node-postgres compat-napi compat-v8 compat-v8-hello compat-napi-hello compat-node-sqlite compat-node-sqlite-asan check-v8-abi types-pack-check types-smoke
+WASI_SDK ?= /opt/wasi-sdk
+WASM_TARGET = wasm32-wasip1
+
+wasm: js
+	rustup target add $(WASM_TARGET)
+	CC_wasm32_wasip1=$(WASI_SDK)/bin/clang \
+	AR_wasm32_wasip1=$(WASI_SDK)/bin/llvm-ar \
+	CFLAGS_wasm32_wasip1=--sysroot=$(WASI_SDK)/share/wasi-sysroot \
+	WASI_SDK=$(WASI_SDK) \
+	$(CARGO) build -p raster_runtime --target $(WASM_TARGET) --no-default-features --features wasi
+
+.PHONY: libs check check-all check-crates libs-arm64 libs-x64 toolchain clean-js release-linux release-darwin release-windows stdlib stdlib-x64 stdlib-arm64 test test-ci run js run-release build release clean flame deploy compat compat-next compat-vite-plus compat-better-sqlite3 compat-mysql compat-node-postgres compat-napi compat-v8 compat-v8-hello compat-napi-hello compat-node-sqlite compat-node-sqlite-asan check-v8-abi types-pack-check types-smoke wasm

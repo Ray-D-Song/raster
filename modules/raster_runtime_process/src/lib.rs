@@ -39,6 +39,17 @@ static PROCESS_ARGV: OnceLock<Vec<String>> = OnceLock::new();
 pub static NO_WARNINGS: AtomicBool = AtomicBool::new(false);
 pub static TRACE_WARNINGS: AtomicBool = AtomicBool::new(false);
 
+fn process_id() -> u32 {
+    #[cfg(target_family = "wasm")]
+    {
+        1
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        std::process::id()
+    }
+}
+
 pub fn set_argv(argv: Vec<String>) {
     let _ = PROCESS_ARGV.set(argv);
 }
@@ -66,12 +77,12 @@ fn emit_warning<'js>(_ctx: Ctx<'js>, message: String, type_or_opts: Opt<Value<'j
     if TRACE_WARNINGS.load(Ordering::Relaxed) {
         eprintln!(
             "(node:{pid}) [{warning_type}] {message}",
-            pid = std::process::id()
+            pid = process_id()
         );
     } else {
         eprintln!(
             "(node:{pid}) [{warning_type}] {message}",
-            pid = std::process::id()
+            pid = process_id()
         );
     }
     Ok(())
@@ -415,11 +426,11 @@ pub fn init(ctx: &Ctx<'_>) -> Result<()> {
     process.set("argv0", args.clone().first().cloned().unwrap_or_default())?;
     // Raster-legacy name kept for compatibility (ordinary writable data property).
     // Prefer process.pid for Node compatibility.
-    process.set("id", std::process::id())?;
+    process.set("id", process_id())?;
     // Node-standard pid: enumerable, non-writable, configurable.
     process.prop(
         "pid",
-        Property::from(std::process::id())
+        Property::from(process_id())
             .enumerable()
             .configurable(),
     )?;

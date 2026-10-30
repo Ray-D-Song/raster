@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 use std::{fs::Metadata, io, path::PathBuf};
 
-use tokio::fs::{self};
+#[cfg(feature = "fs")]
+use tokio::fs as tokio_fs;
 
 pub struct DirectoryWalker<T>
 where
@@ -32,20 +33,27 @@ where
     }
 
     pub async fn walk(&mut self) -> io::Result<Option<(PathBuf, Metadata)>> {
-        if self.eat_root {
-            self.eat_root = false;
-            let (dir, _) = self.stack.pop().unwrap();
-            self.append_stack(&dir).await?;
+        #[cfg(not(feature = "fs"))]
+        {
+            return self.walk_sync();
         }
-        if let Some((entry, metadata)) = self.stack.pop() {
-            let metadata = metadata.unwrap();
-            if self.recursive && metadata.is_dir() {
-                self.append_stack(&entry).await?;
+        #[cfg(feature = "fs")]
+        {
+            if self.eat_root {
+                self.eat_root = false;
+                let (dir, _) = self.stack.pop().unwrap();
+                self.append_stack(&dir).await?;
             }
+            if let Some((entry, metadata)) = self.stack.pop() {
+                let metadata = metadata.unwrap();
+                if self.recursive && metadata.is_dir() {
+                    self.append_stack(&entry).await?;
+                }
 
-            Ok(Some((entry, metadata)))
-        } else {
-            Ok(None)
+                Ok(Some((entry, metadata)))
+            } else {
+                Ok(None)
+            }
         }
     }
 
@@ -67,8 +75,9 @@ where
         }
     }
 
+    #[cfg(feature = "fs")]
     async fn append_stack(&mut self, dir: &PathBuf) -> io::Result<()> {
-        let mut stream = fs::read_dir(dir).await?;
+        let mut stream = tokio_fs::read_dir(dir).await?;
 
         while let Some(entry) = stream.next_entry().await? {
             let name = entry.file_name();
@@ -77,7 +86,7 @@ where
                 continue;
             }
             let entry_path = entry.path();
-            let metadata = fs::symlink_metadata(&entry_path).await?;
+            let metadata = tokio_fs::symlink_metadata(&entry_path).await?;
 
             self.stack.push((entry_path, Some(metadata)));
         }

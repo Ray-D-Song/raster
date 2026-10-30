@@ -2517,7 +2517,6 @@ name = "raster_runtime_core"
 version = "0.1.0"
 dependencies = [
  "bytes",
- "home",
  "http-body-util",
  "hyper",
  "itoa",
@@ -3057,7 +3056,6 @@ name = "raster_runtime_test"
 version = "0.1.0"
 dependencies = [
  "rquickjs",
- "tokio",
  "uuid",
 ]
 

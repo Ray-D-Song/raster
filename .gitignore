@@ -10,6 +10,7 @@
 /llrt_core/target
 /llrt_core/src/bytecode_cache.rs
 /example/functions/build
+/example/raster-wasm/dist
 /slask
 /VERSION
 /bundle

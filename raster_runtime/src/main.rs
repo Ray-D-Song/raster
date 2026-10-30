@@ -14,6 +14,7 @@ use std::{
 
 mod base;
 mod minimal_tracer;
+#[cfg(not(target_family = "wasm"))]
 mod repl;
 
 use constcat::concat;
@@ -39,7 +40,7 @@ use crate::base::{
     VERSION,
 };
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_family = "wasm")))]
 #[global_allocator]
 static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
@@ -107,13 +108,14 @@ pub unsafe extern "C" fn __cxa_thread_atexit_impl(
     0
 }
 
-#[tokio::main]
+#[cfg_attr(not(target_family = "wasm"), tokio::main)]
+#[cfg_attr(target_family = "wasm", tokio::main(flavor = "current_thread"))]
 async fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
     #[cfg(feature = "v8-compat")]
     v8_compat::ensure_shim_linked();
     let now = Instant::now();
 
-    MinimalTracer::register()?;
+    MinimalTracer::register().map_err(|err| err.to_string())?;
     trace!("Started runtime");
 
     let cli = parse_node_cli_flags(env::args().collect());
@@ -324,7 +326,7 @@ async fn start_cli(vm: &Vm) {
         let size_bytes_length: usize = size_of::<u64>();
         let marker_length: usize = BYTECODE_SELF_CONTAINED_EXECUTABLE_MARKER.len();
         let offset: usize = marker_length + size_bytes_length;
-        let negative_offset = -i64::from_ne_bytes(offset.to_ne_bytes());
+        let negative_offset = -(offset as i64);
         let _ = f.seek(SeekFrom::End(negative_offset));
         let mut end = vec![0; offset];
         f.read_exact(&mut end).unwrap_or_else(|error| {
@@ -343,10 +345,13 @@ async fn start_cli(vm: &Vm) {
                 eprintln!("Failed to get metadata of executable: {error:?}");
                 exit(1);
             });
-            let unsigned_offset = u64::from_ne_bytes(offset.to_ne_bytes());
+            let unsigned_offset = offset as u64;
             let start = metadata.len() - size_number - unsigned_offset;
             let _ = f.seek(SeekFrom::Start(start));
-            let size = usize::from_ne_bytes(size_number.to_ne_bytes());
+            let size = usize::try_from(size_number).unwrap_or_else(|_| {
+                eprintln!("Embedded module is too large for this platform");
+                exit(1);
+            });
             let mut module = vec![0; size];
             f.read_exact(&mut module).unwrap_or_else(|error| {
                 eprintln!("Failed to read embedded module: {error:?}");
@@ -359,7 +364,14 @@ async fn start_cli(vm: &Vm) {
     let args: Vec<String> = argv();
 
     if args.len() <= 1 {
-        repl::run_repl(&vm.ctx).await;
+        #[cfg(not(target_family = "wasm"))]
+        {
+            repl::run_repl(&vm.ctx).await;
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            usage();
+        }
         return;
     }
 

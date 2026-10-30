@@ -13,7 +13,18 @@ use std::io;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+#[cfg(not(target_family = "wasm"))]
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+
+#[cfg(target_family = "wasm")]
+fn enable_raw_mode() -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(target_family = "wasm")]
+fn disable_raw_mode() -> io::Result<()> {
+    Ok(())
+}
 use raster_runtime_buffer::Buffer;
 use raster_runtime_context::CtxExtension;
 use raster_runtime_events::{Emitter, EventEmitter};
@@ -119,9 +130,16 @@ fn write_all_fd(fd: i32, bytes: &[u8]) -> io::Result<()> {
 }
 
 fn window_size_for_fd(_fd: i32) -> (u16, u16) {
-    match crossterm::terminal::size() {
-        Ok((cols, rows)) => (cols, rows),
-        Err(_) => (80, 24),
+    #[cfg(not(target_family = "wasm"))]
+    {
+        match crossterm::terminal::size() {
+            Ok((cols, rows)) => (cols, rows),
+            Err(_) => (80, 24),
+        }
+    }
+    #[cfg(target_family = "wasm")]
+    {
+        (80, 24)
     }
 }
 
