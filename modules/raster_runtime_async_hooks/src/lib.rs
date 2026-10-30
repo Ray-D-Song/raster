@@ -746,14 +746,23 @@ const ASYNC_LOCAL_STORAGE_FACTORY_JS: &str = r#"(function (
       // INIT (same scope object reference). Return value is unmodified.
       const scope = { store: store, active: true };
       this.storeMap.set(id, scope);
-      try {
-        return Reflect.apply(callback, null, args);
-      } finally {
+      const restore = () => {
         if (had) {
           this.storeMap.set(id, previous);
         } else {
           this.storeMap.delete(id);
         }
+      };
+      try {
+        const ret = Reflect.apply(callback, null, args);
+        if (ret !== null && ret !== undefined && typeof ret.then === "function") {
+          return ret.finally(restore);
+        }
+        restore();
+        return ret;
+      } catch (err) {
+        restore();
+        throw err;
       }
     }
 

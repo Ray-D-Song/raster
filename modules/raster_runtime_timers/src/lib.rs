@@ -319,10 +319,7 @@ fn get_timer_state<'a>(
 }
 
 fn should_keep_timer_loop(state: &RuntimeTimerState, rt_key: RtKey) -> bool {
-    let pending = state
-        .timers
-        .iter()
-        .any(|t| t.callback.is_some());
+    let pending = state.timers.iter().any(|t| t.callback.is_some());
     if !pending {
         return false;
     }
@@ -815,6 +812,13 @@ pub fn poll_timers(
 
                     invoke_async_hook(&ctx2, HookType::After, ProviderType::None, hook_id)?;
 
+                    call_result?;
+
+                    // Run microtasks scheduled synchronously from the callback
+                    // (e.g. Promise reactions) before destroy so async_hooks/ALS
+                    // can inherit from this timer's executionAsyncId.
+                    while ctx2.execute_pending_job() {}
+
                     // Destroy after After when the timer left the list
                     // (one-shot completed) or was cleared inside its own
                     // callback (pending_destroy). Intervals that persist keep
@@ -835,13 +839,9 @@ pub fn poll_timers(
                             let _ = func.call::<_, ()>(("destroy", "Timeout", hook_id));
                         }
                     }
-
-                    call_result?;
                 }
             }
             // _guard dropped: executing_hook_id cleared before pending jobs.
-
-            while ctx2.execute_pending_job() {}
         }
     }
     call_vec.clear();
@@ -858,13 +858,18 @@ pub fn poll_timers(
             .filter(|t| !t.referenced && t.callback.is_some())
             .map(|t| t.hook_id)
             .collect();
-        state.timers.retain(|t| t.referenced && t.callback.is_some());
+        state
+            .timers
+            .retain(|t| t.referenced && t.callback.is_some());
         let still_running = should_keep_timer_loop(state, rt_key);
         state.running = still_running;
         drop(rt_timers);
         if let Some(raw) = destroy_ctx {
             let ctx2 = unsafe { Ctx::from_raw(raw) };
-            if let Ok(Some(func)) = ctx2.globals().get_optional::<_, Function>("invokeAsyncHook") {
+            if let Ok(Some(func)) = ctx2
+                .globals()
+                .get_optional::<_, Function>("invokeAsyncHook")
+            {
                 for hook_id in hook_ids {
                     let _ = func.call::<_, ()>(("destroy", "Timeout", hook_id));
                 }
