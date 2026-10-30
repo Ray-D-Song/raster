@@ -52,6 +52,22 @@ pub fn has_refed_handles(rt: RtKey) -> bool {
     state_for(rt).refs.load(Ordering::Acquire) > 0
 }
 
+/// Whether a handle and the runtime as a whole still require background I/O tasks.
+pub fn keeps_event_loop_alive(loop_ref: &EventLoopRef) -> bool {
+    loop_ref.is_referenced() || has_refed_handles(loop_ref.rt())
+}
+
+/// Completes when [`keeps_event_loop_alive`] becomes false for this handle.
+pub async fn wait_until_io_unref(loop_ref: Arc<EventLoopRef>) {
+    let quiescence = quiescence_watch(loop_ref.rt());
+    loop {
+        if !keeps_event_loop_alive(&loop_ref) {
+            return;
+        }
+        quiescence.notified().await;
+    }
+}
+
 fn increment_ref(rt: RtKey) {
     state_for(rt).refs.fetch_add(1, Ordering::AcqRel);
 }

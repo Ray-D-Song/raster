@@ -11,7 +11,7 @@ use std::{
 use raster_runtime_buffer::Buffer;
 use raster_runtime_context::CtxExtension;
 use raster_runtime_events::{EmitError, Emitter, EventEmitter, EventKey, EventList};
-use raster_runtime_utils::{bytearray_buffer::BytearrayBuffer, result::ResultExt};
+use raster_runtime_utils::{bytearray_buffer::BytearrayBuffer, event_loop::{self, EventLoopRef}, result::ResultExt};
 use rquickjs::{
     class::{Trace, Tracer},
     prelude::{Func, Opt, This},
@@ -267,7 +267,7 @@ where
         ctx: &Ctx<'js>,
         readable: T,
     ) -> Result<Receiver<bool>> {
-        Self::do_process(this, ctx, readable, || {})
+        Self::do_process(this, ctx, readable, || {}, None)
     }
 
     fn process_callback<T: AsyncRead + Send + 'static + 'js + Unpin, C: FnOnce() + Sized + 'js>(
@@ -276,7 +276,17 @@ where
         readable: T,
         on_end: C,
     ) -> Result<Receiver<bool>> {
-        Self::do_process(this, ctx, readable, on_end)
+        Self::do_process(this, ctx, readable, on_end, None)
+    }
+
+    fn process_callback_loop<T: AsyncRead + Send + 'static + 'js + Unpin, C: FnOnce() + Sized + 'js>(
+        this: Class<'js, Self>,
+        ctx: &Ctx<'js>,
+        readable: T,
+        on_end: C,
+        io_loop_ref: Arc<EventLoopRef>,
+    ) -> Result<Receiver<bool>> {
+        Self::do_process(this, ctx, readable, on_end, Some(io_loop_ref))
     }
 
     fn request_handoff<T: Send + 'static>(
@@ -303,7 +313,7 @@ where
             let inner = borrow.inner_mut();
             *inner.handoff_waiter.lock().unwrap() = Some(Box::new(handoff_tx));
         }
-        let completion_rx = Self::do_process(this, ctx, readable, || {})?;
+        let completion_rx = Self::do_process(this, ctx, readable, || {}, None)?;
         Ok((completion_rx, handoff_rx))
     }
 
@@ -312,10 +322,12 @@ where
         ctx: &Ctx<'js>,
         readable: T,
         on_end: C,
+        io_loop_ref: Option<Arc<EventLoopRef>>,
     ) -> Result<Receiver<bool>> {
         let ctx2 = ctx.clone();
         let handoff_completed = Arc::new(AtomicBool::new(false));
         let handoff_completed2 = handoff_completed.clone();
+        let io_loop_ref = io_loop_ref;
 
         ctx.spawn_exit(async move {
             let this2 = this.clone();
@@ -340,6 +352,7 @@ where
                 let mut buffer = Vec::<u8>::with_capacity(DEFAULT_BUFFER_SIZE);
                 let mut last_state = ReadableState::Init;
                 let mut error_value = None;
+                let io_loop_ref = io_loop_ref;
 
                 if !is_ended && !is_destroyed {
                     if complete_readable_handoff(
@@ -354,6 +367,12 @@ where
                     }
 
                     loop {
+                        if let Some(ref lr) = io_loop_ref {
+                            if !event_loop::keeps_event_loop_alive(lr) {
+                                break;
+                            }
+                        }
+
                         if complete_readable_handoff(
                             &mut reader,
                             &ba_buffer,
@@ -366,6 +385,13 @@ where
                         }
 
                         tokio::select! {
+                            _ = async {
+                                if let Some(lr) = io_loop_ref.clone() {
+                                    event_loop::wait_until_io_unref(lr).await;
+                                }
+                            }, if io_loop_ref.is_some() => {
+                                break;
+                            }
                             result = reader.as_mut().expect("reader").read_buf(&mut buffer) => {
                                 let bytes_read = result.or_throw(&ctx3)?;
 
