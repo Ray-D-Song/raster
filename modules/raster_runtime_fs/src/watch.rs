@@ -13,6 +13,7 @@ use notify::{
 };
 use raster_runtime_context::CtxExtension;
 use raster_runtime_events::{Emitter, EventEmitter, EventList};
+use raster_runtime_utils::event_loop::{self, EventLoopRef};
 use rquickjs::{
     class::{Trace, Tracer},
     prelude::{Opt, This},
@@ -33,6 +34,7 @@ pub struct FSWatcher<'js> {
     emitter: EventEmitter<'js>,
     watcher: Option<RecommendedWatcher>,
     closed: Arc<AtomicBool>,
+    loop_ref: Arc<EventLoopRef>,
 }
 
 unsafe impl<'js> JsLifetime<'js> for FSWatcher<'js> {
@@ -71,10 +73,12 @@ impl<'js> FSWatcher<'js> {
 
     #[qjs(rename = "ref")]
     pub fn r#ref(this: This<Class<'js, Self>>) -> Result<Class<'js, Self>> {
+        this.borrow().loop_ref.reference();
         Ok(this.0)
     }
 
     pub fn unref(this: This<Class<'js, Self>>) -> Result<Class<'js, Self>> {
+        this.borrow().loop_ref.unreference();
         Ok(this.0)
     }
 }
@@ -119,12 +123,17 @@ impl<'js> FSWatcher<'js> {
             )
             .map_err(|err| Exception::throw_message(&ctx, &err.to_string()))?;
 
+        let rt_ptr = unsafe { rquickjs::qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+        let rt_key = event_loop::rt_key_from_ptr(rt_ptr as *mut std::ffi::c_void);
+        let loop_ref = EventLoopRef::new_referenced(rt_key);
+
         let instance = Class::instance(
             ctx.clone(),
             Self {
                 emitter: EventEmitter::new(),
                 watcher: Some(watcher),
                 closed,
+                loop_ref,
             },
         )?;
 
@@ -134,37 +143,53 @@ impl<'js> FSWatcher<'js> {
 
         let instance_for_task = instance.clone();
         let ctx_for_task = ctx.clone();
+        let loop_ref = instance.borrow().loop_ref.clone();
         ctx.spawn_exit_simple(async move {
-            while let Some(message) = rx.recv().await {
-                if instance_for_task.borrow().closed.load(Ordering::SeqCst) {
+            loop {
+                if !event_loop::keeps_event_loop_alive(&loop_ref) {
                     break;
                 }
 
-                match message {
-                    WatchMessage::Event {
-                        event_type,
-                        filename,
-                    } => {
-                        let event_type = event_type.into_js(&ctx_for_task)?;
-                        let filename = filename.into_js(&ctx_for_task)?;
-                        Self::emit_str(
-                            instance_for_task.clone(),
-                            &ctx_for_task,
-                            "change",
-                            vec![event_type, filename],
-                            false,
-                        )?;
-                    },
-                    WatchMessage::Error(message) => {
-                        let error = Exception::from_message(ctx_for_task.clone(), &message)?;
-                        Self::emit_str(
-                            instance_for_task.clone(),
-                            &ctx_for_task,
-                            "error",
-                            vec![error.into()],
-                            false,
-                        )?;
-                    },
+                tokio::select! {
+                    _ = event_loop::wait_until_io_unref(loop_ref.clone()) => {
+                        break;
+                    }
+                    message = rx.recv() => {
+                        let Some(message) = message else {
+                            break;
+                        };
+
+                        if instance_for_task.borrow().closed.load(Ordering::SeqCst) {
+                            break;
+                        }
+
+                        match message {
+                            WatchMessage::Event {
+                                event_type,
+                                filename,
+                            } => {
+                                let event_type = event_type.into_js(&ctx_for_task)?;
+                                let filename = filename.into_js(&ctx_for_task)?;
+                                Self::emit_str(
+                                    instance_for_task.clone(),
+                                    &ctx_for_task,
+                                    "change",
+                                    vec![event_type, filename],
+                                    false,
+                                )?;
+                            },
+                            WatchMessage::Error(message) => {
+                                let error = Exception::from_message(ctx_for_task.clone(), &message)?;
+                                Self::emit_str(
+                                    instance_for_task.clone(),
+                                    &ctx_for_task,
+                                    "error",
+                                    vec![error.into()],
+                                    false,
+                                )?;
+                            },
+                        }
+                    }
                 }
             }
             Ok(())

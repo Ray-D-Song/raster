@@ -595,13 +595,14 @@ impl<'js> TlsSocket<'js> {
     {
         let this2 = this.clone();
         let this3 = this.clone();
+        let loop_ref = this.borrow().loop_ref.clone();
         let readable_done =
-            ReadableStream::process_callback(this.clone(), ctx, reader, move || {
+            ReadableStream::process_callback_loop(this.clone(), ctx, reader, move || {
                 if !allow_half_open {
                     WritableStream::end(This(this3));
                 }
-            })?;
-        let writable_done = WritableStream::process(this2, ctx, writer)?;
+            }, loop_ref.clone())?;
+        let writable_done = WritableStream::process_loop(this2, ctx, writer, Some(loop_ref))?;
         Ok((readable_done, writable_done))
     }
 

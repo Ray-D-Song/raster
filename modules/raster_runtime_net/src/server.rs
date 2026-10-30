@@ -10,7 +10,7 @@ use std::sync::{
 use raster_runtime_context::CtxExtension;
 use raster_runtime_events::{EmitError, Emitter, EventEmitter, EventList};
 use raster_runtime_stream::{impl_stream_events, SteamEvents};
-use raster_runtime_utils::{object::ObjectExt, result::ResultExt, reuse_list::ReuseList};
+use raster_runtime_utils::{event_loop::EventLoopRef, object::ObjectExt, result::ResultExt, reuse_list::ReuseList};
 #[cfg(unix)]
 use rquickjs::IntoJs;
 use rquickjs::{
@@ -43,6 +43,7 @@ pub struct Server<'js> {
     already_listen: Arc<AtomicBool>,
     sockets: ReuseList<Class<'js, Socket<'js>>>,
     should_close: Arc<AtomicBool>,
+    loop_ref: Arc<EventLoopRef>,
 }
 
 impl<'js> Trace<'js> for Server<'js> {
@@ -88,6 +89,10 @@ impl<'js> Server<'js> {
 
         let emitter = EventEmitter::new();
         let (close_tx, _) = broadcast::channel::<()>(1);
+        let rt_ptr = unsafe { rquickjs::qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+        let rt_key =
+            raster_runtime_utils::event_loop::rt_key_from_ptr(rt_ptr as *mut std::ffi::c_void);
+        let loop_ref = EventLoopRef::new_referenced(rt_key);
 
         let instance = Class::instance(
             ctx.clone(),
@@ -99,6 +104,7 @@ impl<'js> Server<'js> {
                 already_listen: Arc::new(AtomicBool::new(false)),
                 sockets: ReuseList::with_capacity(8),
                 should_close: Arc::new(AtomicBool::new(false)),
+                loop_ref,
             },
         )?;
 
@@ -125,6 +131,18 @@ impl<'js> Server<'js> {
             cb.call::<_, ()>((Undefined, self.sockets.len()))?;
         }
         Ok(())
+    }
+
+    #[qjs(rename = "ref")]
+    pub fn js_ref(this: This<Class<'js, Self>>) -> Class<'js, Self> {
+        this.borrow().loop_ref.reference();
+        this.0
+    }
+
+    #[qjs(rename = "unref")]
+    pub fn js_unref(this: This<Class<'js, Self>>) -> Class<'js, Self> {
+        this.borrow().loop_ref.unreference();
+        this.0
     }
 
     #[allow(unused_assignments)]
@@ -211,6 +229,7 @@ impl<'js> Server<'js> {
         }
 
         let ctx2 = ctx.clone();
+        let listen_loop_ref = this.borrow().loop_ref.clone();
 
         if port.is_none() && path.is_none() {
             port = Some(0)
@@ -236,7 +255,14 @@ impl<'js> Server<'js> {
                 let ctx3 = ctx2.clone();
                 let this2 = this.clone();
 
+                if !raster_runtime_utils::event_loop::keeps_event_loop_alive(&listen_loop_ref) {
+                    break;
+                }
+
                 select! {
+                    _ = raster_runtime_utils::event_loop::wait_until_io_unref(listen_loop_ref.clone()) => {
+                        break;
+                    }
                     socket = listener.accept(&ctx3) => {
                         Self::handle_socket_connection(
                             this2.clone(),

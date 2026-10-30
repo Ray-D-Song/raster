@@ -10,7 +10,7 @@ use raster_runtime_context::CtxExtension;
 use raster_runtime_events::{EmitError, Emitter, EventEmitter, EventKey, EventList};
 use raster_runtime_utils::{
     bytes::ObjectBytes,
-    event_loop::EventLoopRef,
+    event_loop::{self, EventLoopRef},
     latch::Latch,
     object::ObjectExt,
     result::ResultExt,
@@ -196,13 +196,21 @@ impl<'js> Socket<'js> {
                     let recv_running = receiver_running.clone();
                     let recv_ctx = ctx.clone();
                     let mut close_rx = recv_close_rx;
+                    let loop_ref = socket_class.borrow().loop_ref.clone();
 
                     ctx.clone().spawn_exit(async move {
                         let recv_result = async {
                             let mut buf = vec![0u8; 65536];
 
                             loop {
+                                if !event_loop::keeps_event_loop_alive(&loop_ref) {
+                                    break;
+                                }
+
                                 tokio::select! {
+                                    _ = event_loop::wait_until_io_unref(loop_ref.clone()) => {
+                                        break;
+                                    }
                                     _ = close_rx.recv() => {
                                         break;
                                     }
@@ -255,10 +263,18 @@ impl<'js> Socket<'js> {
                 let send_socket = socket_arc.clone();
                 let mut close_rx = send_close_rx;
                 let send_ctx = ctx.clone();
+                let send_loop_ref = socket_class.borrow().loop_ref.clone();
                 ctx.spawn_exit(async move {
                     let send_result = {
                         loop {
+                            if !event_loop::keeps_event_loop_alive(&send_loop_ref) {
+                                break;
+                            }
+
                             tokio::select! {
+                                _ = event_loop::wait_until_io_unref(send_loop_ref.clone()) => {
+                                    break;
+                                }
                                 _ = close_rx.recv() => {
                                     break;
                                 }
