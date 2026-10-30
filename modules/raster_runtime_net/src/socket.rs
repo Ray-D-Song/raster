@@ -16,7 +16,7 @@ use raster_runtime_stream::{
     writable::{WritableStream, WritableStreamInner},
     SteamEvents,
 };
-use raster_runtime_utils::{object::ObjectExt, result::ResultExt};
+use raster_runtime_utils::{event_loop::EventLoopRef, object::ObjectExt, result::ResultExt};
 use rquickjs::{
     class::{Trace, Tracer},
     prelude::{Opt, Rest, This},
@@ -90,6 +90,7 @@ pub struct Socket<'js> {
     /// Control handle for TCP socket options / force-close. Not shared with
     /// the raw HTTP shutdown handle (`raw_shutdown`).
     pub(crate) tcp_control: Option<Arc<std::net::TcpStream>>,
+    loop_ref: Arc<EventLoopRef>,
 }
 
 unsafe impl<'js> JsLifetime<'js> for Socket<'js> {
@@ -284,17 +285,17 @@ impl<'js> Socket<'js> {
     }
 
     /// Node-compatible `socket.ref()` — keep the event loop alive while the socket is open.
-    /// Raster currently treats this as a successful no-op so libraries that call
-    /// `stream.ref()` (e.g. node-postgres Pool) do not throw.
     #[qjs(rename = "ref")]
     pub fn js_ref(this: This<Class<'js, Self>>) -> Class<'js, Self> {
+        this.borrow().loop_ref.reference();
         this.0
     }
 
     /// Node-compatible `socket.unref()` — allow the process to exit if the socket is
-    /// the only remaining handle. Currently a successful no-op (see `ref`).
+    /// the only remaining handle.
     #[qjs(rename = "unref")]
     pub fn js_unref(this: This<Class<'js, Self>>) -> Class<'js, Self> {
+        this.borrow().loop_ref.unreference();
         this.0
     }
 
@@ -586,6 +587,11 @@ impl<'js> Socket<'js> {
         let readable_stream_inner = ReadableStreamInner::new(emitter.clone(), false);
         let writable_stream_inner = WritableStreamInner::new(emitter.clone(), false);
 
+        let rt_ptr = unsafe { rquickjs::qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+        let rt_key =
+            raster_runtime_utils::event_loop::rt_key_from_ptr(rt_ptr as *mut std::ffi::c_void);
+        let loop_ref = EventLoopRef::new_referenced(rt_key);
+
         let instance = Class::instance(
             ctx,
             Self {
@@ -612,6 +618,7 @@ impl<'js> Socket<'js> {
                 handoff_prefix: None,
                 tcp_options: TcpSocketOptions::default(),
                 tcp_control: None,
+                loop_ref,
             },
         )?;
         Ok(instance)

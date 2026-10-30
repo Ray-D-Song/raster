@@ -9,7 +9,11 @@ use raster_runtime_buffer::Buffer;
 use raster_runtime_context::CtxExtension;
 use raster_runtime_events::{EmitError, Emitter, EventEmitter, EventKey, EventList};
 use raster_runtime_utils::{
-    bytes::ObjectBytes, latch::Latch, object::ObjectExt, result::ResultExt,
+    bytes::ObjectBytes,
+    event_loop::EventLoopRef,
+    latch::Latch,
+    object::ObjectExt,
+    result::ResultExt,
 };
 use rquickjs::{
     class::{Trace, Tracer},
@@ -38,6 +42,7 @@ pub struct Socket<'js> {
     close_tx: broadcast::Sender<()>,
     send_tx: Option<mpsc::UnboundedSender<SendMessage>>,
     ready_latch: Arc<Latch>,
+    loop_ref: Arc<EventLoopRef>,
 }
 
 unsafe impl<'js> JsLifetime<'js> for Socket<'js> {
@@ -83,6 +88,10 @@ impl<'js> Socket<'js> {
 
         let emitter = EventEmitter::new();
         let (close_tx, _) = broadcast::channel(1);
+        let rt_ptr = unsafe { rquickjs::qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+        let rt_key =
+            raster_runtime_utils::event_loop::rt_key_from_ptr(rt_ptr as *mut std::ffi::c_void);
+        let loop_ref = EventLoopRef::new_referenced(rt_key);
 
         let instance = Self {
             emitter,
@@ -100,6 +109,7 @@ impl<'js> Socket<'js> {
             close_tx,
             send_tx: None,
             ready_latch: Arc::new(Latch::default()),
+            loop_ref,
         };
 
         Class::instance(ctx, instance)
@@ -527,16 +537,13 @@ impl<'js> Socket<'js> {
     }
 
     pub fn unref(this: This<Class<'js, Self>>) -> Result<Class<'js, Self>> {
-        // In Node.js, unref() allows the process to exit if this is the only active handle
-        // In raster_runtime's context, this is a no-op but we keep it for API compatibility
-        trace!("Socket.unref() called - no-op for API compatibility");
+        this.borrow().loop_ref.unreference();
         Ok(this.0)
     }
 
     #[qjs(rename = "ref")]
     pub fn r#ref(this: This<Class<'js, Self>>) -> Result<Class<'js, Self>> {
-        // Counterpart to unref(), also a no-op in raster_runtime
-        trace!("Socket.ref() called - no-op for API compatibility");
+        this.borrow().loop_ref.reference();
         Ok(this.0)
     }
 }
