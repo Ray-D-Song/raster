@@ -27,6 +27,7 @@ use raster_runtime_events::{Emitter, EventEmitter, EventList};
 use raster_runtime_net::Socket;
 use raster_runtime_utils::{
     bytes::ObjectBytes,
+    event_loop::EventLoopRef,
     module::{export_default, ModuleInfo},
     object::ObjectExt,
 };
@@ -615,6 +616,7 @@ pub struct Server<'js> {
     headers_timeout: u64,
     request_timeout: u64,
     keep_alive_timeout: u64,
+    loop_ref: Arc<EventLoopRef>,
 }
 unsafe impl<'js> JsLifetime<'js> for Server<'js> {
     type Changed<'to> = Server<'to>;
@@ -637,6 +639,10 @@ impl<'js> Server<'js> {
         let (close_tx, _) = broadcast::channel(1);
         let (connection_close_tx, _) = broadcast::channel(1);
         let (idle_close_tx, _) = broadcast::channel(1);
+        let rt_ptr = unsafe { rquickjs::qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+        let rt_key =
+            raster_runtime_utils::event_loop::rt_key_from_ptr(rt_ptr as *mut std::ffi::c_void);
+        let loop_ref = EventLoopRef::new_referenced(rt_key);
         let instance = Class::instance(
             ctx.clone(),
             Self {
@@ -655,6 +661,7 @@ impl<'js> Server<'js> {
                 headers_timeout: 60_000,
                 request_timeout: 300_000,
                 keep_alive_timeout: 65_000,
+                loop_ref,
             },
         )?;
         if let Some(listener) = listener.0 {
@@ -735,6 +742,16 @@ impl<'js> Server<'js> {
     pub fn close_idle_connections(&self) {
         let _ = self.idle_close_tx.send(());
     }
+    #[qjs(rename = "ref")]
+    pub fn js_ref(this: This<Class<'js, Self>>) -> Class<'js, Self> {
+        this.borrow().loop_ref.reference();
+        this.0
+    }
+    #[qjs(rename = "unref")]
+    pub fn js_unref(this: This<Class<'js, Self>>) -> Class<'js, Self> {
+        this.borrow().loop_ref.unreference();
+        this.0
+    }
     pub fn listen(
         this: This<Class<'js, Self>>,
         ctx: Ctx<'js>,
@@ -775,6 +792,7 @@ impl<'js> Server<'js> {
         let server = this.0;
         let ctx2 = ctx.clone();
         let mut close = server.borrow().close_tx.subscribe();
+        let listen_loop_ref = server.borrow().loop_ref.clone();
         ctx.spawn_exit_simple(async move {
             let (listener, address) = if let Some(path) = path {
                 #[cfg(unix)]
@@ -787,7 +805,27 @@ impl<'js> Server<'js> {
                 let address = Object::new(ctx2.clone())?; address.set("address", addr.ip().to_string())?; address.set("port", addr.port())?; address.set("family", if addr.is_ipv4() { "IPv4" } else { "IPv6" })?; (Listener::Tcp(listener), address.into_value())
             };
             server.borrow_mut().address = address; server.borrow().listening.store(true, Ordering::Relaxed); Self::emit_str(server.clone(), &ctx2, "listening", vec![], false)?;
-            loop { tokio::select! { _ = close.recv() => break, accepted = listener.accept() => { let stream = accepted.map_err(|e| Exception::throw_message(&ctx2, &e.to_string()))?; let ctx3 = ctx2.clone(); let srv = server.clone(); match stream { AcceptedStream::Tcp(stream) => spawn_tcp_connection(ctx3, srv, stream)?, #[cfg(unix)] AcceptedStream::Unix(stream) => spawn_unix_connection(ctx3, srv, stream)?, } } } }
+            loop {
+                if !raster_runtime_utils::event_loop::keeps_event_loop_alive(&listen_loop_ref) {
+                    break;
+                }
+                tokio::select! {
+                    _ = raster_runtime_utils::event_loop::wait_until_io_unref(listen_loop_ref.clone()) => {
+                        break;
+                    }
+                    _ = close.recv() => break,
+                    accepted = listener.accept() => {
+                        let stream = accepted.map_err(|e| Exception::throw_message(&ctx2, &e.to_string()))?;
+                        let ctx3 = ctx2.clone();
+                        let srv = server.clone();
+                        match stream {
+                            AcceptedStream::Tcp(stream) => spawn_tcp_connection(ctx3, srv, stream)?,
+                            #[cfg(unix)]
+                            AcceptedStream::Unix(stream) => spawn_unix_connection(ctx3, srv, stream)?,
+                        }
+                    }
+                }
+            }
             server.borrow().listening.store(false, Ordering::Relaxed);
             emit_close_if_ready(&ctx2, server)?;
             Ok(())
