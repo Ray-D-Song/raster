@@ -6,7 +6,7 @@ use std::{
     rc::Rc,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Mutex, MutexGuard,
+        Arc, Mutex, MutexGuard,
     },
     time::Duration,
 };
@@ -16,14 +16,16 @@ use raster_runtime_context::CtxExtension;
 use raster_runtime_hooking::allocate_hook_resource_id;
 pub use raster_runtime_hooking::{invoke_async_hook, HookType};
 use raster_runtime_utils::{
+    event_loop::{self, EventLoopRef},
     module::{export_default, ModuleInfo},
     object::ObjectExt,
     provider::ProviderType,
 };
 use rquickjs::{
+    class::Trace,
     module::{Declarations, Exports, ModuleDef},
-    prelude::Opt,
-    qjs, Ctx, Exception, Function, Object, Persistent, Result, Value,
+    prelude::{Func, Opt},
+    qjs, Class, Ctx, Exception, Function, IntoJs, Object, Persistent, Result, Value,
 };
 use tokio::{
     select,
@@ -76,6 +78,7 @@ pub struct Timeout {
     /// before After runs and leak the async context stack); poll_timers
     /// fires destroy after After once this flag is set.
     pending_destroy: bool,
+    referenced: bool,
 }
 
 impl Default for Timeout {
@@ -89,8 +92,112 @@ impl Default for Timeout {
             repeating: false,
             interval: 0,
             pending_destroy: false,
+            referenced: true,
         }
     }
+}
+
+/// Node-compatible timer handle returned from `setTimeout` / `setInterval` / `setImmediate`.
+#[derive(rquickjs::JsLifetime)]
+#[rquickjs::class]
+pub struct TimerHandle {
+    id: usize,
+    rt: RtKey,
+    loop_ref: Arc<EventLoopRef>,
+}
+
+type RtKey = usize;
+
+unsafe impl Send for TimerHandle {}
+
+impl Trace<'_> for TimerHandle {
+    fn trace<'a>(&self, _tracer: rquickjs::class::Tracer<'a, '_>) {}
+}
+
+#[rquickjs::methods(rename_all = "camelCase")]
+impl TimerHandle {
+    #[qjs(rename = "ref")]
+    pub fn js_ref(this: rquickjs::prelude::This<Class<'_, Self>>) -> Class<'_, Self> {
+        this.borrow().loop_ref.reference();
+        set_timer_referenced(this.borrow().rt, this.borrow().id, true);
+        this.0
+    }
+
+    pub fn unref(this: rquickjs::prelude::This<Class<'_, Self>>) -> Class<'_, Self> {
+        this.borrow().loop_ref.unreference();
+        set_timer_referenced(this.borrow().rt, this.borrow().id, false);
+        this.0
+    }
+
+    #[qjs(get)]
+    pub fn has_ref(&self) -> bool {
+        self.loop_ref.is_referenced()
+    }
+
+    #[qjs(rename = "valueOf")]
+    pub fn value_of(&self) -> f64 {
+        self.id as f64
+    }
+}
+
+fn set_timer_referenced(rt: RtKey, id: usize, referenced: bool) {
+    let rt_ptr = rt as *mut qjs::JSRuntime;
+    let Ok(mut rt_timers) = RT_TIMER_STATE.lock() else {
+        return;
+    };
+    let Some(state) = rt_timers.iter_mut().find(|s| s.rt == rt_ptr) else {
+        return;
+    };
+    if let Some(timeout) = state.timers.iter_mut().find(|t| t.id == id) {
+        timeout.referenced = referenced;
+        if !referenced {
+            state.notify.notify_one();
+        }
+    }
+}
+
+fn timer_id_from_value<'js>(_ctx: &Ctx<'js>, value: Value<'js>) -> Option<usize> {
+    if let Some(n) = value.as_number() {
+        return Some(n as usize);
+    }
+    if let Ok(handle) = Class::<TimerHandle>::from_value(&value) {
+        return Some(handle.borrow().id);
+    }
+    None
+}
+
+/// Opaque ref/unref controller for pure-JS handles (e.g. `MessagePort`).
+#[derive(rquickjs::JsLifetime)]
+#[rquickjs::class]
+struct LoopRefController {
+    inner: Arc<EventLoopRef>,
+}
+
+impl Trace<'_> for LoopRefController {
+    fn trace<'a>(&self, _tracer: rquickjs::class::Tracer<'a, '_>) {}
+}
+
+#[rquickjs::methods]
+impl LoopRefController {
+    #[qjs(rename = "ref")]
+    fn js_ref(this: rquickjs::prelude::This<Class<'_, Self>>) {
+        this.borrow().inner.reference();
+    }
+
+    fn unref(this: rquickjs::prelude::This<Class<'_, Self>>) {
+        this.borrow().inner.unreference();
+    }
+}
+
+fn create_loop_ref_controller(ctx: Ctx<'_>) -> Result<Class<'_, LoopRefController>> {
+    let rt_ptr = unsafe { qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+    let rt_key = event_loop::rt_key_from_ptr(rt_ptr as *mut std::ffi::c_void);
+    Class::instance(
+        ctx,
+        LoopRefController {
+            inner: EventLoopRef::new_referenced(rt_key),
+        },
+    )
 }
 
 fn queue_microtask<'js>(ctx: Ctx<'js>, cb: Function<'js>) -> Result<()> {
@@ -125,7 +232,8 @@ pub fn set_timeout_interval<'js>(
     cb: Function<'js>,
     delay: u64,
     provider_type: ProviderType,
-) -> Result<usize> {
+    referenced: bool,
+) -> Result<Value<'js>> {
     // NOTE: https://noncodersuccess.medium.com/understanding-setimmediate-vs-settimeout-in-node-js-6a3ef8fc02d4
     // If `setImmediate(fn)` and `setTimeout(fn, 0) are queued at the exact same time,
     // `setImmediate(fn) takes precedence in Node.js, regardless of their execution order.
@@ -151,6 +259,14 @@ pub fn set_timeout_interval<'js>(
 
     let callback = Persistent::<Function>::save(ctx, cb);
 
+    let rt_ptr = unsafe { qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+    let rt_key = event_loop::rt_key_from_ptr(rt_ptr as *mut std::ffi::c_void);
+    let loop_ref = if referenced {
+        EventLoopRef::new_referenced(rt_key)
+    } else {
+        EventLoopRef::new_unreferenced(rt_key)
+    };
+
     let timeout = Timeout {
         deadline,
         callback: Some(callback),
@@ -160,9 +276,8 @@ pub fn set_timeout_interval<'js>(
         repeating,
         interval: delay,
         pending_destroy: false,
+        referenced,
     };
-
-    let rt_ptr = unsafe { qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
 
     let mut rt_timer = RT_TIMER_STATE.lock().unwrap();
     let state = get_timer_state(&mut rt_timer, rt_ptr);
@@ -173,14 +288,24 @@ pub fn set_timeout_interval<'js>(
             state.deadline = deadline;
             state.notify.notify_one();
         }
-    } else {
+    } else if should_keep_timer_loop(state, rt_key) {
         state.running = true;
         let timer_abort = state.notify.clone();
         drop(rt_timer);
         create_spawn_loop(rt_ptr, ctx, timer_abort, deadline)?;
+    } else {
+        drop(rt_timer);
     }
 
-    Ok(id)
+    let handle = Class::instance(
+        ctx.clone(),
+        TimerHandle {
+            id,
+            rt: rt_key,
+            loop_ref,
+        },
+    )?;
+    handle.into_js(ctx)
 }
 
 fn get_timer_state<'a>(
@@ -193,9 +318,28 @@ fn get_timer_state<'a>(
     unsafe { rt_timers.unwrap_unchecked() }
 }
 
-fn clear_timeout_interval(ctx: Ctx<'_>, id: Opt<Value>) -> Result<()> {
-    if let Some(id) = id.0.and_then(|v| v.as_number()) {
-        let id = id as usize;
+fn should_keep_timer_loop(state: &RuntimeTimerState, rt_key: RtKey) -> bool {
+    let pending = state
+        .timers
+        .iter()
+        .any(|t| t.callback.is_some());
+    if !pending {
+        return false;
+    }
+    if event_loop::has_refed_handles(rt_key) {
+        return true;
+    }
+    state
+        .timers
+        .iter()
+        .any(|t| t.callback.is_some() && t.referenced)
+}
+
+fn clear_timeout_interval<'js>(ctx: Ctx<'js>, id: Opt<Value<'js>>) -> Result<()> {
+    if let Some(id_val) = id.0 {
+        let Some(id) = timer_id_from_value(&ctx, id_val) else {
+            return Ok(());
+        };
         let rt = unsafe { qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
         let mut rt_timers = RT_TIMER_STATE.lock().unwrap();
 
@@ -325,8 +469,6 @@ const TIMERS_PROMISES_FACTORY_JS: &str = r#"(function () {
       return Promise.reject(err);
     }
     const signal = options.signal;
-    // { ref: false } is accepted for API compatibility; Raster does not yet
-    // change event-loop lifetime based on timer handles.
     if (signal && signal.aborted) {
       return Promise.reject(signal.reason);
     }
@@ -348,6 +490,9 @@ const TIMERS_PROMISES_FACTORY_JS: &str = r#"(function () {
         }
         resolve(value);
       }, ms);
+      if (options.ref === false && typeof id.unref === "function") {
+        id.unref();
+      }
       if (signal) {
         signal.addEventListener("abort", onAbort);
       }
@@ -381,6 +526,9 @@ const TIMERS_PROMISES_FACTORY_JS: &str = r#"(function () {
         }
         resolve(value);
       });
+      if (options.ref === false && typeof id.unref === "function") {
+        id.unref();
+      }
       if (signal) {
         signal.addEventListener("abort", onAbort);
       }
@@ -487,14 +635,14 @@ pub fn init(ctx: &Ctx<'_>) -> Result<()> {
 
     let native_set_timeout = Function::new(ctx.clone(), move |ctx, cb, delay: Opt<f64>| {
         let delay = delay.unwrap_or(0.).max(0.) as u64;
-        set_timeout_interval(&ctx, cb, delay, ProviderType::Timeout)
+        set_timeout_interval(&ctx, cb, delay, ProviderType::Timeout, true)
     })?;
     let native_set_interval = Function::new(ctx.clone(), move |ctx, cb, delay: Opt<f64>| {
         let delay = delay.unwrap_or(0.).max(0.) as u64;
-        set_timeout_interval(&ctx, cb, delay, ProviderType::Interval)
+        set_timeout_interval(&ctx, cb, delay, ProviderType::Interval, true)
     })?;
     let native_set_immediate = Function::new(ctx.clone(), move |ctx, cb| {
-        set_timeout_interval(&ctx, cb, 0, ProviderType::Immediate)
+        set_timeout_interval(&ctx, cb, 0, ProviderType::Immediate, true)
     })?;
     let native_clear = Function::new(ctx.clone(), clear_timeout_interval)?;
     let native_queue_microtask = Function::new(ctx.clone(), queue_microtask)?;
@@ -507,6 +655,11 @@ pub fn init(ctx: &Ctx<'_>) -> Result<()> {
         native_clear,
         native_queue_microtask,
     ))?;
+
+    ctx.globals().set(
+        "__rasterCreateLoopRefController",
+        Func::from(create_loop_ref_controller),
+    )?;
 
     Ok(())
 }
@@ -693,14 +846,41 @@ pub fn poll_timers(
     }
     call_vec.clear();
 
-    if !has_items {
-        let mut rt_timers = RT_TIMER_STATE.lock().unwrap();
-        let state = get_timer_state(&mut rt_timers, rt);
-        let is_empty = state.timers.is_empty();
-        state.running = !is_empty;
+    let rt_key = event_loop::rt_key_from_ptr(rt as *mut std::ffi::c_void);
+    let mut rt_timers = RT_TIMER_STATE.lock().unwrap();
+    let state = get_timer_state(&mut rt_timers, rt);
 
-        return Ok(!is_empty);
+    if !should_keep_timer_loop(state, rt_key) {
+        let destroy_ctx = state.timers.first().map(|t| t.raw_ctx);
+        let hook_ids: Vec<usize> = state
+            .timers
+            .iter()
+            .filter(|t| !t.referenced && t.callback.is_some())
+            .map(|t| t.hook_id)
+            .collect();
+        state.timers.retain(|t| t.referenced && t.callback.is_some());
+        let still_running = should_keep_timer_loop(state, rt_key);
+        state.running = still_running;
+        drop(rt_timers);
+        if let Some(raw) = destroy_ctx {
+            let ctx2 = unsafe { Ctx::from_raw(raw) };
+            if let Ok(Some(func)) = ctx2.globals().get_optional::<_, Function>("invokeAsyncHook") {
+                for hook_id in hook_ids {
+                    let _ = func.call::<_, ()>(("destroy", "Timeout", hook_id));
+                }
+            }
+        }
+        return Ok(still_running);
     }
+
+    if !has_items {
+        state.running = false;
+        drop(rt_timers);
+        return Ok(false);
+    }
+
+    state.running = true;
+    drop(rt_timers);
     Ok(true)
 }
 
