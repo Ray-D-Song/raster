@@ -148,8 +148,8 @@ pub fn kill(ctx: &Ctx<'_>, pid: u32, signal: Opt<Value<'_>>) -> Result<bool> {
             let is_not_found = true; // On Windows, any OpenProcess failure during check implies "not found" (or not accessible)
 
             #[cfg(not(any(unix, windows)))]
-            let is_not_found = e.kind() == io::ErrorKind::NotFound
-                || e.kind() == io::ErrorKind::Unsupported;
+            let is_not_found =
+                e.kind() == io::ErrorKind::NotFound || e.kind() == io::ErrorKind::Unsupported;
 
             if signal == 0 && is_not_found {
                 Ok(false)

@@ -11,7 +11,11 @@ use std::{
 use raster_runtime_buffer::Buffer;
 use raster_runtime_context::CtxExtension;
 use raster_runtime_events::{EmitError, Emitter, EventEmitter, EventKey, EventList};
-use raster_runtime_utils::{bytearray_buffer::BytearrayBuffer, event_loop::{self, EventLoopRef}, result::ResultExt};
+use raster_runtime_utils::{
+    bytearray_buffer::BytearrayBuffer,
+    event_loop::{self, EventLoopRef},
+    result::ResultExt,
+};
 use rquickjs::{
     class::{Trace, Tracer},
     prelude::{Func, Opt, This},
@@ -279,7 +283,10 @@ where
         Self::do_process(this, ctx, readable, on_end, None)
     }
 
-    fn process_callback_loop<T: AsyncRead + Send + 'static + 'js + Unpin, C: FnOnce() + Sized + 'js>(
+    fn process_callback_loop<
+        T: AsyncRead + Send + 'static + 'js + Unpin,
+        C: FnOnce() + Sized + 'js,
+    >(
         this: Class<'js, Self>,
         ctx: &Ctx<'js>,
         readable: T,

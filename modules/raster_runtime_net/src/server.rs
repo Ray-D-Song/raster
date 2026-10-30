@@ -10,7 +10,9 @@ use std::sync::{
 use raster_runtime_context::CtxExtension;
 use raster_runtime_events::{EmitError, Emitter, EventEmitter, EventList};
 use raster_runtime_stream::{impl_stream_events, SteamEvents};
-use raster_runtime_utils::{event_loop::EventLoopRef, object::ObjectExt, result::ResultExt, reuse_list::ReuseList};
+use raster_runtime_utils::{
+    event_loop::EventLoopRef, object::ObjectExt, result::ResultExt, reuse_list::ReuseList,
+};
 #[cfg(unix)]
 use rquickjs::IntoJs;
 use rquickjs::{
