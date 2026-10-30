@@ -5,13 +5,13 @@
  * Raster supports `setTimeout` and `setImmediate`. `setInterval` (async iterator)
  * and `scheduler` are not implemented.
  *
- * Options may include `{ signal?: AbortSignal, ref?: boolean }`. `ref: false` is
- * accepted for API compatibility but does not yet change event-loop lifetime.
+ * Options may include `{ signal?: AbortSignal, ref?: boolean }`. `ref: false` keeps
+ * the scheduled timer from holding the event loop open by itself.
  */
 declare module "timers/promises" {
   interface TimerOptions {
     /**
-     * Accepted for Node compatibility. Raster does not yet honor unref semantics.
+     * When `false`, the timer is unref'd and does not keep the process alive alone.
      * @default true
      */
     ref?: boolean;

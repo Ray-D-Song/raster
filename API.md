@@ -725,7 +725,7 @@ _Also available globally_
 
 [setTimeout](https://nodejs.org/api/timers.html#settimeoutcallback-delay-args)
 
-> Timer handles are numeric ids. `ref()` / `unref()` / event-loop lifetime control are not implemented.
+> Timer handles are `Timeout` objects with Node-compatible `ref()` / `unref()`. Unref'd timers do not keep the process alive when they are the only remaining handle.
 
 ## timers/promises
 
@@ -733,7 +733,7 @@ _Also available globally_
 
 [setImmediate](https://nodejs.org/api/timers.html#timerspromisessetimmediatevalue-options)
 
-> `setInterval` (async iterator) and `scheduler` are not implemented. `{ ref: false }` is accepted for API compatibility but does not change event-loop lifetime.
+> `setInterval` (async iterator) and `scheduler` are not implemented. `{ ref: false }` schedules an unref'd timer (same as calling `.unref()` on the underlying handle).
 
 ## tls
 
@@ -854,7 +854,7 @@ Partial main-thread compatibility surface:
 - `getEnvironmentData()` and `setEnvironmentData()` with clone isolation
 - `markAsUntransferable()`, `isMarkedAsUntransferable()`, and `receiveMessageOnPort()` compatibility stubs
 
-Constructing `Worker` and calling `moveMessagePortToContext()` throw. Raster does not currently spawn JavaScript worker threads, and `MessagePort.ref()` / `unref()` do not control event-loop lifetime.
+Constructing `Worker` and calling `moveMessagePortToContext()` throw. Raster does not spawn JavaScript worker threads; `MessagePort.ref()` / `unref()` control event-loop lifetime like Node.
 
 ## zlib
 

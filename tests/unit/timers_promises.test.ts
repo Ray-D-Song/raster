@@ -50,7 +50,7 @@ it("settles only once when abort and timer race", async () => {
   }
 });
 
-it("accepts { ref: false } without changing behavior", async () => {
+it("accepts { ref: false } and unrefs the underlying timer", async () => {
   await expect(
     defaultImport.setImmediate("r", { ref: false })
   ).resolves.toBe("r");

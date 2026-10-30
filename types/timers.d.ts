@@ -11,10 +11,15 @@ declare module "timers" {
      * This object is created internally and is returned from `setTimeout()` and `setInterval()`. It can be passed to either `clearTimeout()` or `clearInterval()` in order to cancel the
      * scheduled actions.
      *
-     * Raster currently returns a numeric timer id (not a full Node Timeout handle).
-     * `ref()` / `unref()` / event-loop lifetime semantics are not implemented.
+     * Raster returns a `Timeout` handle object (Node-compatible). Use `ref()` / `unref()` to
+     * control whether the timer alone keeps the process alive; `{ ref: false }` on
+     * `timers/promises` schedules an unref'd timer.
      */
-    class Timeout {}
+    class Timeout {
+      ref(): this;
+      unref(): this;
+      hasRef(): boolean;
+    }
 
     /**
      * Schedules execution of a one-time `callback` after `delay` milliseconds.
