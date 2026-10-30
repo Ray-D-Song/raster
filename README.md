@@ -2,7 +2,7 @@
 
 raster_runtime is a lightweight JavaScript runtime built on QuickJS.
 
-This project is forked from [LLRT](https://github.com/awslabs/llrt). The difference from LLRT is that this project takes Node.js compatibility as its primary goal, aiming to become a lightweight direct drop-in replacement for Node.js. Its compatibility matrix includes Wasm, N-API, and V8-API, while removing all AWS SDK content.
+It takes Node.js compatibility as its primary goal, aiming to become a lightweight direct drop-in replacement for Node.js. Its compatibility matrix includes Wasm, N-API, and V8-API.
 
 It's built in Rust, utilizing QuickJS as the JavaScript engine, ensuring efficient memory usage and swift startup.
 
@@ -93,7 +93,7 @@ The test runner also has support for filters. Using filters is as simple as addi
 | node:worker_threads                              | ✔︎       | ✔︎⚠️            |
 | node:zlib                                        | ✔︎       | ✔︎⚠️            |
 
-| [raster_runtime API](https://github.com/ray-d-song/raster_runtime/blob/main/API.md) | Node.js | raster_runtime |
+| [raster_runtime API](https://github.com/Ray-D-Song/raster/blob/main/API.md) | Node.js | raster_runtime |
 | ----------------------------------------------------------------------------------- | ------- | -------------- |
 | raster_runtime:hex                                                                  | ✘       | ✔︎              |
 | raster_runtime:qjs                                                                  | ✘       | ✔︎              |

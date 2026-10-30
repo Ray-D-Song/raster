@@ -7,7 +7,7 @@
   "description": "Type definitions for raster_runtime",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ray-d-song/raster_runtime",
+    "url": "https://github.com/Ray-D-Song/raster",
     "directory": "types"
   },
   "files": [

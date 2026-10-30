@@ -1,6 +1,6 @@
 # Contributing Guidelines
 
-Thank you for your interest in contributing to raster_runtime. This fork is
+Thank you for your interest in contributing to raster_runtime. This project is
 maintained by Ray-D-Song for the Raster project.
 
 Please read through this document before submitting any issues or pull requests to ensure we have all the necessary

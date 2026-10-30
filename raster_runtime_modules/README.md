@@ -12,9 +12,9 @@ Use this script to set everything up:
 
 ```bash
 cd your_project_dir
-git clone https://github.com/ray-d-song/raster_runtime.git
+git clone https://github.com/Ray-D-Song/raster.git
 
-cd raster_runtime
+cd raster
 npm i
 make js
 ```
@@ -24,7 +24,7 @@ Check the [Compability matrix](#compatibility-matrix) for the full list.
 
 ```toml
 [dependencies]
-raster_runtime_modules = { path = "raster_runtime/raster_runtime_modules", default-features = true } # load from local path
+raster_runtime_modules = { path = "raster/raster_runtime_modules", default-features = true } # load from local path
 rquickjs = { version = "0.11", features = ["full-async"] }
 tokio = { version = "1", features = ["full"] }
 
