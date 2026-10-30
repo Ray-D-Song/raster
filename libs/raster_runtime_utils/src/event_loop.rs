@@ -76,10 +76,10 @@ fn decrement_ref(rt: RtKey) {
     let state = state_for(rt);
     let prev = state
         .refs
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| {
+        .try_update(Ordering::AcqRel, Ordering::Acquire, |v| {
             Some(v.saturating_sub(1))
         })
-        .expect("fetch_update");
+        .expect("try_update");
     if prev == 1 {
         state.quiescent.notify_waiters();
         // SAFETY: RtKey is the JSRuntime pointer bitcast from callers.

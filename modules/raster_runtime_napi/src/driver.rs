@@ -165,7 +165,7 @@ impl DriverState {
     pub fn release_async_keepalive(&self) {
         let _ = self
             .inflight_async
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
                 if v == 0 {
                     None
                 } else {
@@ -333,7 +333,7 @@ impl DriverState {
     fn dec_pending(&self) {
         let _ = self
             .pending
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
                 Some(v.saturating_sub(1))
             });
     }

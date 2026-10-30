@@ -891,7 +891,7 @@ pub unsafe extern "C" fn napi_release_threadsafe_function(
 
     let prev = tsfn
         .refs
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| {
+        .try_update(Ordering::AcqRel, Ordering::Acquire, |v| {
             if v == 0 {
                 None
             } else {
