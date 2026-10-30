@@ -649,6 +649,9 @@ const ASYNC_LOCAL_STORAGE_FACTORY_JS: &str = r#"(function (
 ) {
   const activeSet = new Set();
   let hookRegistered = false;
+  let runQueue = Promise.resolve();
+  let runQueueIdle = true;
+  let runImplActive = false;
 
   function ensureInternalHook() {
     if (hookRegistered) return;
@@ -657,12 +660,10 @@ const ASYNC_LOCAL_STORAGE_FACTORY_JS: &str = r#"(function (
       init(asyncId, type, triggerAsyncId) {
         for (const als of activeSet) {
           if (!als.enabled) continue;
-          // Schedule-time capture only (current executionAsyncId). Do not inherit
-          // from trigger/parent promise — that would leak a finished run's store
-          // into later reactions on promises created inside that run
-          // (Node: await als.run(async…) leaves getStore() undefined).
-          void triggerAsyncId;
-          const scope = als.storeMap.get(executionAsyncId());
+          let scope = als.storeMap.get(executionAsyncId());
+          if ((!scope || !scope.active) && triggerAsyncId > 1) {
+            scope = als.storeMap.get(triggerAsyncId);
+          }
           if (scope && scope.active) {
             als.storeMap.set(asyncId, scope);
           }
@@ -738,32 +739,61 @@ const ASYNC_LOCAL_STORAGE_FACTORY_JS: &str = r#"(function (
     run(store, callback, ...args) {
       validateFunction(callback, "callback");
       this._enable();
-      const id = executionAsyncId();
-      const had = this.storeMap.has(id);
-      const previous = this.storeMap.get(id);
-      // Node: set store for this execution id, call callback, restore in finally.
-      // Async work scheduled *during* the callback inherits via promise/timer
-      // INIT (same scope object reference). Return value is unmodified.
-      const scope = { store: store, active: true };
-      this.storeMap.set(id, scope);
-      const restore = () => {
-        if (had) {
-          this.storeMap.set(id, previous);
-        } else {
-          this.storeMap.delete(id);
+
+      const runImpl = () => {
+        runImplActive = true;
+        try {
+          const id = executionAsyncId();
+          const had = this.storeMap.has(id);
+          const previous = this.storeMap.get(id);
+          const scope = { store: store, active: true };
+          this.storeMap.set(id, scope);
+          const restore = () => {
+            if (had) {
+              this.storeMap.set(id, previous);
+            } else {
+              this.storeMap.delete(id);
+            }
+          };
+          try {
+            const ret = Reflect.apply(callback, null, args);
+            if (ret !== null && ret !== undefined && typeof ret.then === "function") {
+              return ret.finally(restore);
+            }
+            restore();
+            return ret;
+          } catch (err) {
+            restore();
+            throw err;
+          }
+        } finally {
+          runImplActive = false;
         }
       };
-      try {
-        const ret = Reflect.apply(callback, null, args);
-        if (ret !== null && ret !== undefined && typeof ret.then === "function") {
-          return ret.finally(restore);
-        }
-        restore();
-        return ret;
-      } catch (err) {
-        restore();
-        throw err;
+
+      if (runImplActive) {
+        return runImpl();
       }
+
+      if (!runQueueIdle) {
+        const chained = runQueue.then(() => runImpl());
+        runQueue = chained.finally(() => {
+          runQueueIdle = true;
+        });
+        runQueueIdle = false;
+        return chained;
+      }
+
+      runQueueIdle = false;
+      const ret = runImpl();
+      if (ret !== null && ret !== undefined && typeof ret.then === "function") {
+        runQueue = Promise.resolve(ret).finally(() => {
+          runQueueIdle = true;
+        });
+        return ret;
+      }
+      runQueueIdle = true;
+      return ret;
     }
 
     exit(callback, ...args) {
