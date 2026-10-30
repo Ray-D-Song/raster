@@ -82,4 +82,46 @@ describe("event loop ref/unref", () => {
     expect(code).toBe(0);
     expect(stdout.trim()).toBe("done");
   });
+
+  it("unref http server allows exit while listening", async () => {
+    const { code, stdout } = await spawnCapture(process.argv[0], [
+      "-e",
+      `
+        const http = require("http");
+        const s = http.createServer();
+        s.listen(0, () => {
+          s.unref();
+          console.log("done");
+        });
+      `,
+    ]);
+    expect(code).toBe(0);
+    expect(stdout.trim()).toBe("done");
+  });
+
+  it("unref child process allows exit while child runs", async () => {
+    const { code, stdout } = await spawnCapture(process.argv[0], [
+      "-e",
+      `
+        const { spawn } = require("child_process");
+        const c = spawn("sleep", ["30"], { stdio: "ignore" });
+        c.unref();
+        console.log("done");
+      `,
+    ]);
+    expect(code).toBe(0);
+    expect(stdout.trim()).toBe("done");
+  });
+
+  it("unref process.stdin allows exit without active reader", async () => {
+    const { code, stdout } = await spawnCapture(process.argv[0], [
+      "-e",
+      `
+        process.stdin.unref();
+        console.log("done");
+      `,
+    ]);
+    expect(code).toBe(0);
+    expect(stdout.trim()).toBe("done");
+  });
 });
