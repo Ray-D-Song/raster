@@ -2394,11 +2394,14 @@ dependencies = [
  "raster_runtime_napi",
  "raster_runtime_sqlite",
  "raster_runtime_test",
+ "raster_runtime_utils",
  "raster_runtime_worker_threads",
+ "rquickjs",
  "snmalloc-rs",
  "tokio",
  "tracing",
  "tracing-core",
+ "url",
  "v8_compat",
 ]
 
@@ -3216,14 +3219,10 @@ name = "raster_runtime_worker_threads"
 version = "0.1.0"
 dependencies = [
  "raster_runtime_context",
- "raster_runtime_json",
  "raster_runtime_utils",
  "rquickjs",
- "serde",
- "serde_json",
  "tokio",
  "tracing",
- "url",
 ]
 
 [[package]]
