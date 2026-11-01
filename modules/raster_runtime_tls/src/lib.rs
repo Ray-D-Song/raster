@@ -26,6 +26,7 @@ pub mod certificate;
 pub mod client;
 pub mod connect_args;
 pub mod error;
+pub mod http_handoff;
 pub mod identity;
 pub mod module;
 pub mod options;

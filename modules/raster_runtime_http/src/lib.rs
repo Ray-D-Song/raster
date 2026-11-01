@@ -16,6 +16,13 @@ pub use self::config::*;
     feature = "tls-openssl"
 ))]
 mod client_request;
+#[cfg(any(
+    feature = "tls-ring",
+    feature = "tls-aws-lc",
+    feature = "tls-graviola",
+    feature = "tls-openssl"
+))]
+mod https_server;
 pub use self::server::HttpModule;
 
 #[cfg(any(
@@ -72,22 +79,36 @@ impl ModuleDef for HttpsModule {
             ))]
             {
                 raster_runtime_buffer::init(ctx)?;
+                raster_runtime_tls::http_handoff::register_http_handoff(
+                    crate::server::handoff_tls_to_http_server,
+                );
                 rquickjs::Class::<Agent>::define(default)?;
                 use crate::client_request::{http_get, http_request, ClientRequest};
                 Class::<ClientRequest>::define(default)?;
                 ClientRequest::add_event_emitter_prototype(ctx)?;
                 default.set("request", Func::from(http_request))?;
                 default.set("get", Func::from(http_get))?;
+                default.set(
+                    "createServer",
+                    Func::from(crate::https_server::create_https_server),
+                )?;
             }
-
-            let stub: rquickjs::Function = ctx.eval(
-                r#"(function(){
+            #[cfg(not(any(
+                feature = "tls-ring",
+                feature = "tls-aws-lc",
+                feature = "tls-graviola",
+                feature = "tls-openssl"
+            )))]
+            {
+                let stub: rquickjs::Function = ctx.eval(
+                    r#"(function(){
   return function httpsStub() {
     throw new Error("https.createServer is not implemented in raster_runtime yet");
   };
 })()"#,
-            )?;
-            default.set("createServer", stub)?;
+                )?;
+                default.set("createServer", stub)?;
+            }
 
             Ok(())
         })
