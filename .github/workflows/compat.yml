@@ -15,8 +15,12 @@ jobs:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('rust-unit-tests', inputs.case_filter) }}
     name: rust-unit-tests
     runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
     steps:
       - uses: actions/checkout@v4
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
       - name: Fetch Node 24.3 source
         run: |
           git submodule sync -- refs/node
