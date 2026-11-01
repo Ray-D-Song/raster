@@ -11,11 +11,7 @@ path = "src/lib.rs"
 
 [dependencies]
 raster_runtime_context = { version = "0.1.0", path = "../../libs/raster_runtime_context" }
-raster_runtime_json = { version = "0.1.0", path = "../../libs/raster_runtime_json" }
 raster_runtime_utils = { version = "0.1.0", path = "../../libs/raster_runtime_utils", default-features = false }
 rquickjs = { version = "=0.12.1", features = ["std"], default-features = false }
-serde = { version = "1", features = ["derive", "std"], default-features = false }
-serde_json = { version = "1", default-features = false, features = ["std"] }
-tokio = { version = "1", features = ["io-util", "io-std", "process", "sync"], default-features = false }
+tokio = { version = "1", features = ["sync"], default-features = false }
 tracing = { version = "0.1", default-features = false }
-url = { version = "2", features = ["std"], default-features = false }
