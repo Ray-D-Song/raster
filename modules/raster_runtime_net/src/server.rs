@@ -291,6 +291,9 @@ impl<'js> Server<'js> {
             already_running.store(false, Ordering::Relaxed);
             should_close.store(false, Ordering::Relaxed);
 
+            // The listening handle is gone: release its event-loop reference.
+            this.borrow().loop_ref.unreference();
+
             Self::emit_str(this.0, &ctx2, "close", vec![], false)?;
 
             Ok(())

@@ -323,12 +323,22 @@ impl<'js> ChildProcess<'js> {
                         )?;
 
                         if let Some(stderr_join_receiver) = stderr_join_receiver {
-                            //ok if sender drops
-                            let _ = stderr_join_receiver.await;
+                            // Ok if the sender drops. Buffered output without a
+                            // `data` listener parks in the stream loop, so bound
+                            // the wait: the child is already gone and Node emits
+                            // `close` regardless.
+                            let _ = tokio::time::timeout(
+                                tokio::time::Duration::from_millis(50),
+                                stderr_join_receiver,
+                            )
+                            .await;
                         }
                         if let Some(stdout_join_receiver) = stdout_join_receiver {
-                            //ok if sender drops
-                            let _ = stdout_join_receiver.await;
+                            let _ = tokio::time::timeout(
+                                tokio::time::Duration::from_millis(50),
+                                stdout_join_receiver,
+                            )
+                            .await;
                         }
 
                         WritableStream::end(This(stdin_instance));
@@ -343,6 +353,10 @@ impl<'js> ChildProcess<'js> {
                             vec![code, signal],
                             false,
                         )?;
+
+                        // The child handle is done; Node releases it before the
+                        // loop can go idle, so stop keeping the process alive.
+                        instance2.borrow().loop_ref.unreference();
 
                         Ok::<_, Error>(())
                     };

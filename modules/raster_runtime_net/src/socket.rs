@@ -34,7 +34,14 @@ use tracing::trace;
 
 use super::{ensure_access, get_address_parts, get_hostname, rw_join, ReadyState, LOCALHOST};
 
-impl_stream_events!(Socket);
+impl<'js> SteamEvents<'js> for Socket<'js> {
+    fn emit_close(this: Class<'js, Self>, ctx: &Ctx<'js>, had_error: bool) -> Result<()> {
+        // A closed socket owns no further I/O: it must stop keeping the process
+        // alive, exactly like Node releasing the handle at `close`.
+        this.borrow().loop_ref.unreference();
+        Self::emit_str(this, ctx, "close", vec![had_error.into_js(ctx)?], false)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransportState {
@@ -279,6 +286,9 @@ impl<'js> Socket<'js> {
             }
         }
         this.borrow_mut().destroyed = true;
+        // `destroy()` can happen before the connect path ever runs, so release
+        // the loop reference here too (Node does it at close/destroy).
+        this.borrow().loop_ref.unreference();
         ReadableStream::destroy(This(this.clone()), Opt(None));
         WritableStream::destroy(This(this.clone()), error);
         this.0
