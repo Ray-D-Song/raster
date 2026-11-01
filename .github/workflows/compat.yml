@@ -10,9 +10,70 @@ on:
         type: string
         default: ""
 
+concurrency:
+  group: compat-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      core: ${{ steps.scope.outputs.core }}
+    steps:
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            core:
+              - '**/*.rs'
+              - '**/Cargo.toml'
+              - 'Cargo.lock'
+              - '.cargo/**'
+              - 'Makefile'
+              - 'build.mjs'
+              - 'index.mjs'
+              - 'bundle/**'
+              - 'compat/**'
+              - 'modules/**'
+              - 'libs/**'
+              - 'raster_runtime/**'
+              - 'raster_runtime_core/**'
+              - 'raster_runtime_modules/**'
+              - 'v8_compat/**'
+              - 'vendor/**'
+              - 'refs/**'
+              - 'linker/**'
+              - 'tests/**'
+              - 'fixtures/**'
+              - '**/*.ts'
+              - '**/*.mjs'
+              - 'yarn.lock'
+              - 'package.json'
+              - 'tsconfig.json'
+              - '.github/workflows/**'
+      # Non-PR events (push to main, manual dispatch) must always run everything.
+      - id: scope
+        run: echo "core=${{ github.event_name != 'pull_request' || steps.filter.outputs.core }}" >> "$GITHUB_OUTPUT"
+
+  docs-only:
+    # Stand-in check so a docs-only PR still reports a green status instead of
+    # dangling "expected" checks.
+    name: docs-example-only
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.core != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "Diff touches no Rust/TS/bundle/workflow paths."
+          echo "Heavy Rust + compat jobs skipped."
+
   rust-unit:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('rust-unit-tests', inputs.case_filter) }}
+    needs: changes
+    if: needs.changes.outputs.core == 'true' && (github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('rust-unit-tests', inputs.case_filter))
     name: rust-unit-tests
     runs-on: ubuntu-latest
     steps:
@@ -60,7 +121,8 @@ jobs:
           done
 
   windows-sqlite:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('windows-sqlite', inputs.case_filter) }}
+    needs: changes
+    if: needs.changes.outputs.core == 'true' && (github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('windows-sqlite', inputs.case_filter))
     name: windows-sqlite
     runs-on: windows-latest
     steps:
@@ -94,7 +156,8 @@ jobs:
         run: node compat/run.mjs node-sqlite target/debug/raster_runtime.exe
 
   windows-tty-napi:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('windows-tty-napi', inputs.case_filter) }}
+    needs: changes
+    if: needs.changes.outputs.core == 'true' && (github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('windows-tty-napi', inputs.case_filter))
     name: windows-tty-napi
     runs-on: windows-latest
     steps:
@@ -112,7 +175,8 @@ jobs:
           cargo build -p raster_runtime --features napi
 
   sanitizer:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('sanitizer-address sanitizer-undefined', inputs.case_filter) }}
+    needs: changes
+    if: needs.changes.outputs.core == 'true' && (github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('sanitizer-address sanitizer-undefined', inputs.case_filter))
     name: sanitizer-${{ matrix.sanitizer }}
     runs-on: ubuntu-latest
     strategy:
@@ -150,7 +214,8 @@ jobs:
         run: bash v8_compat/tools/run_sanitizer_ci.sh ${{ matrix.sanitizer }}
 
   v8-abi:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('v8-abi-drift', inputs.case_filter) }}
+    needs: changes
+    if: needs.changes.outputs.core == 'true' && (github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('v8-abi-drift', inputs.case_filter))
     name: v8-abi-drift
     runs-on: ubuntu-latest
     steps:
@@ -169,7 +234,8 @@ jobs:
       - run: bash v8_compat/tools/check_abi.sh
 
   v8-clippy:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('v8-clippy', inputs.case_filter) }}
+    needs: changes
+    if: needs.changes.outputs.core == 'true' && (github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('v8-clippy', inputs.case_filter))
     name: v8-clippy
     runs-on: ubuntu-latest
     steps:
@@ -192,7 +258,8 @@ jobs:
       - run: cargo clippy -p v8_compat --all-targets -- -D warnings
 
   napi-clippy:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('napi-clippy', inputs.case_filter) }}
+    needs: changes
+    if: needs.changes.outputs.core == 'true' && (github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('napi-clippy', inputs.case_filter))
     name: napi-clippy
     runs-on: ubuntu-latest
     steps:
@@ -215,7 +282,8 @@ jobs:
           --all-targets --no-deps -- -D warnings
 
   sqlite-asan:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('sqlite-asan', inputs.case_filter) }}
+    needs: changes
+    if: needs.changes.outputs.core == 'true' && (github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('sqlite-asan', inputs.case_filter))
     name: sqlite-asan
     runs-on: ubuntu-latest
     steps:
@@ -235,7 +303,8 @@ jobs:
       - run: bash compat/node-sqlite/run-asan.sh
 
   mysql-compat:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('mysql-compat', inputs.case_filter) }}
+    needs: changes
+    if: needs.changes.outputs.core == 'true' && (github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('mysql-compat', inputs.case_filter))
     name: mysql-compat
     runs-on: ubuntu-latest
     steps:
@@ -265,7 +334,8 @@ jobs:
           if-no-files-found: ignore
 
   postgres-compat:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('node-postgres-compat', inputs.case_filter) }}
+    needs: changes
+    if: needs.changes.outputs.core == 'true' && (github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('node-postgres-compat', inputs.case_filter))
     name: node-postgres-compat
     runs-on: ubuntu-latest
     steps:
@@ -293,7 +363,8 @@ jobs:
           if-no-files-found: ignore
 
   compatibility:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('napi-hello next vite-plus better-sqlite3 v8-hello node-sqlite', inputs.case_filter) }}
+    needs: changes
+    if: needs.changes.outputs.core == 'true' && (github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('napi-hello next vite-plus better-sqlite3 v8-hello node-sqlite', inputs.case_filter))
     name: ${{ matrix.case }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
