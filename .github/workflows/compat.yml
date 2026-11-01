@@ -2,6 +2,11 @@ name: Compatibility
 
 on:
   pull_request:
+  # Keeps refs/heads/main's rust-cache + yarn caches fresh: PR jobs can only
+  # restore caches from their base branch, and a stale main cache means PRs
+  # rebuild from scratch. Also doubles as post-merge verification.
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       case_filter:
@@ -10,9 +15,74 @@ on:
         type: string
         default: ""
 
+concurrency:
+  group: compat-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      core: ${{ steps.scope.outputs.core }}
+    steps:
+      - uses: actions/checkout@v4
+      # paths-filter needs a git checkout for non-PR events (it diffs against a
+      # base ref); skipping it made workflow_dispatch runs die here.
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name == 'pull_request'
+        with:
+          filters: |
+            core:
+              - '**/*.rs'
+              - '**/Cargo.toml'
+              - 'Cargo.lock'
+              - '.cargo/**'
+              - 'Makefile'
+              - 'build.mjs'
+              - 'index.mjs'
+              - 'bundle/**'
+              - 'compat/**'
+              - 'modules/**'
+              - 'libs/**'
+              - 'raster_runtime/**'
+              - 'raster_runtime_core/**'
+              - 'raster_runtime_modules/**'
+              - 'v8_compat/**'
+              - 'vendor/**'
+              - 'refs/**'
+              - 'linker/**'
+              - 'tests/**'
+              - 'fixtures/**'
+              - '**/*.ts'
+              - '**/*.mjs'
+              - 'yarn.lock'
+              - 'package.json'
+              - 'tsconfig.json'
+              - '.github/workflows/**'
+      # Non-PR events (push to main, manual dispatch) must always run everything.
+      - id: scope
+        run: echo "core=${{ github.event_name != 'pull_request' || steps.filter.outputs.core }}" >> "$GITHUB_OUTPUT"
+
+  docs-only:
+    # Stand-in check so a docs-only PR still reports a green status instead of
+    # dangling "expected" checks.
+    name: docs-example-only
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.core != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "Diff touches no Rust/TS/bundle/workflow paths."
+          echo "Heavy Rust + compat jobs skipped."
+
   rust-unit:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('rust-unit-tests', inputs.case_filter) }}
+    needs: changes
+    if: needs.changes.outputs.core == 'true' && (github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('rust-unit-tests', inputs.case_filter))
     name: rust-unit-tests
     runs-on: ubuntu-latest
     steps:
@@ -33,6 +103,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
+          # Only main writes caches. PR refs restoring-and-resaving their own copy
+          # is what pushed the repo past the 10 GB limit and evicted main's
+          # rust-unit entry, which is the single most valuable cache here.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           shared-key: rust-unit
           # The workspace crates dominate this job (raster_runtime_modules alone is
           # ~5 min), and rust-cache drops non-dependency artifacts by default.
@@ -60,7 +134,8 @@ jobs:
           done
 
   windows-sqlite:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('windows-sqlite', inputs.case_filter) }}
+    needs: changes
+    if: needs.changes.outputs.core == 'true' && (github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('windows-sqlite', inputs.case_filter))
     name: windows-sqlite
     runs-on: windows-latest
     steps:
@@ -72,6 +147,10 @@ jobs:
           cache: yarn
       - uses: Swatinem/rust-cache@v2
         with:
+          # Only main writes caches. PR refs restoring-and-resaving their own copy
+          # is what pushed the repo past the 10 GB limit and evicted main's
+          # rust-unit entry, which is the single most valuable cache here.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           shared-key: windows-sqlite
       - run: yarn install --frozen-lockfile
       - run: make js JS_MINIFY=0
@@ -94,7 +173,8 @@ jobs:
         run: node compat/run.mjs node-sqlite target/debug/raster_runtime.exe
 
   windows-tty-napi:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('windows-tty-napi', inputs.case_filter) }}
+    needs: changes
+    if: needs.changes.outputs.core == 'true' && (github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('windows-tty-napi', inputs.case_filter))
     name: windows-tty-napi
     runs-on: windows-latest
     steps:
@@ -102,6 +182,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
+          # Only main writes caches. PR refs restoring-and-resaving their own copy
+          # is what pushed the repo past the 10 GB limit and evicted main's
+          # rust-unit entry, which is the single most valuable cache here.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           shared-key: windows-tty-napi
       - name: Build and test TTY + N-API + FS (Windows)
         run: |
@@ -112,7 +196,8 @@ jobs:
           cargo build -p raster_runtime --features napi
 
   sanitizer:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('sanitizer-address sanitizer-undefined', inputs.case_filter) }}
+    needs: changes
+    if: needs.changes.outputs.core == 'true' && (github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('sanitizer-address sanitizer-undefined', inputs.case_filter))
     name: sanitizer-${{ matrix.sanitizer }}
     runs-on: ubuntu-latest
     strategy:
@@ -140,6 +225,10 @@ jobs:
           targets: x86_64-unknown-linux-gnu
       - uses: Swatinem/rust-cache@v2
         with:
+          # Only main writes caches. PR refs restoring-and-resaving their own copy
+          # is what pushed the repo past the 10 GB limit and evicted main's
+          # rust-unit entry, which is the single most valuable cache here.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           shared-key: sanitizer-${{ matrix.sanitizer }}
           # Both sanitizer gates rebuild almost everything (the sanitizer rustflags
           # change every crate's fingerprint), so a restored target dir saves little
@@ -150,7 +239,8 @@ jobs:
         run: bash v8_compat/tools/run_sanitizer_ci.sh ${{ matrix.sanitizer }}
 
   v8-abi:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('v8-abi-drift', inputs.case_filter) }}
+    needs: changes
+    if: needs.changes.outputs.core == 'true' && (github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('v8-abi-drift', inputs.case_filter))
     name: v8-abi-drift
     runs-on: ubuntu-latest
     steps:
@@ -169,7 +259,8 @@ jobs:
       - run: bash v8_compat/tools/check_abi.sh
 
   v8-clippy:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('v8-clippy', inputs.case_filter) }}
+    needs: changes
+    if: needs.changes.outputs.core == 'true' && (github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('v8-clippy', inputs.case_filter))
     name: v8-clippy
     runs-on: ubuntu-latest
     steps:
@@ -185,6 +276,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
+          # Only main writes caches. PR refs restoring-and-resaving their own copy
+          # is what pushed the repo past the 10 GB limit and evicted main's
+          # rust-unit entry, which is the single most valuable cache here.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           # Registry only: this gate is short, and the repo's 10 GB cache budget is
           # better spent on the target dirs of the long jobs.
           shared-key: cargo-registry
@@ -192,7 +287,8 @@ jobs:
       - run: cargo clippy -p v8_compat --all-targets -- -D warnings
 
   napi-clippy:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('napi-clippy', inputs.case_filter) }}
+    needs: changes
+    if: needs.changes.outputs.core == 'true' && (github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('napi-clippy', inputs.case_filter))
     name: napi-clippy
     runs-on: ubuntu-latest
     steps:
@@ -200,6 +296,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
+          # Only main writes caches. PR refs restoring-and-resaving their own copy
+          # is what pushed the repo past the 10 GB limit and evicted main's
+          # rust-unit entry, which is the single most valuable cache here.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           # Registry only: short gate, see v8-clippy.
           shared-key: cargo-registry
           cache-targets: "false"
@@ -215,7 +315,8 @@ jobs:
           --all-targets --no-deps -- -D warnings
 
   sqlite-asan:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('sqlite-asan', inputs.case_filter) }}
+    needs: changes
+    if: needs.changes.outputs.core == 'true' && (github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('sqlite-asan', inputs.case_filter))
     name: sqlite-asan
     runs-on: ubuntu-latest
     steps:
@@ -227,6 +328,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
         with:
+          # Only main writes caches. PR refs restoring-and-resaving their own copy
+          # is what pushed the repo past the 10 GB limit and evicted main's
+          # rust-unit entry, which is the single most valuable cache here.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           shared-key: sqlite-asan
           # Nightly changes daily, which rotates the cache key, so the target dir
           # rarely gets reused; only the registry is worth storing.
@@ -235,7 +340,8 @@ jobs:
       - run: bash compat/node-sqlite/run-asan.sh
 
   mysql-compat:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('mysql-compat', inputs.case_filter) }}
+    needs: changes
+    if: needs.changes.outputs.core == 'true' && (github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('mysql-compat', inputs.case_filter))
     name: mysql-compat
     runs-on: ubuntu-latest
     steps:
@@ -249,6 +355,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
+          # Only main writes caches. PR refs restoring-and-resaving their own copy
+          # is what pushed the repo past the 10 GB limit and evicted main's
+          # rust-unit entry, which is the single most valuable cache here.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           # Registry only: with `cargo build -p raster_runtime` the time goes to the
           # workspace crates, which rust-cache does not store by default, so a 365 MB
           # target cache bought ~2 s here. Share the small registry cache instead.
@@ -265,7 +375,8 @@ jobs:
           if-no-files-found: ignore
 
   postgres-compat:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('node-postgres-compat', inputs.case_filter) }}
+    needs: changes
+    if: needs.changes.outputs.core == 'true' && (github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('node-postgres-compat', inputs.case_filter))
     name: node-postgres-compat
     runs-on: ubuntu-latest
     steps:
@@ -279,6 +390,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
+          # Only main writes caches. PR refs restoring-and-resaving their own copy
+          # is what pushed the repo past the 10 GB limit and evicted main's
+          # rust-unit entry, which is the single most valuable cache here.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           # Registry only; see mysql-compat.
           shared-key: cargo-registry
           cache-targets: "false"
@@ -293,7 +408,8 @@ jobs:
           if-no-files-found: ignore
 
   compatibility:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('napi-hello next vite-plus better-sqlite3 v8-hello node-sqlite', inputs.case_filter) }}
+    needs: changes
+    if: needs.changes.outputs.core == 'true' && (github.event_name != 'workflow_dispatch' || inputs.case_filter == '' || contains('napi-hello next vite-plus better-sqlite3 v8-hello node-sqlite', inputs.case_filter))
     name: ${{ matrix.case }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -347,6 +463,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
+          # Only main writes caches. PR refs restoring-and-resaving their own copy
+          # is what pushed the repo past the 10 GB limit and evicted main's
+          # rust-unit entry, which is the single most valuable cache here.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           shared-key: compatibility
           # Keyed by feature set, not matrix case: entries differ only in enabled
           # features, and per-case keys would multiply caches past the repo's
