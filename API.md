@@ -412,7 +412,7 @@ Lightweight and fast hash classes for raster_runtime.
 
 ## http
 
-> `http.Server` supports Node-compatible `ref()` / `unref()` on the listen handle (same event-loop semantics as `net.Server`). `https.createServer` remains a stub.
+> `http.Server` supports Node-compatible `ref()` / `unref()` on the listen handle (same event-loop semantics as `net.Server`). `https.createServer` wraps `tls.createServer` and hands decrypted sockets to an internal `http.Server` (Node-style).
 
 ## https
 

@@ -1,5 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
+use std::cell::RefCell;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex, RwLock,
@@ -51,6 +52,7 @@ pub struct Server<'js> {
     sni_registry: Arc<RwLock<SniRegistry>>,
     request_cert: bool,
     reject_unauthorized: bool,
+    http_handoff_http_server: RefCell<Option<Value<'js>>>,
 }
 
 impl<'js> Trace<'js> for Server<'js> {
@@ -137,6 +139,7 @@ impl<'js> Server<'js> {
                 sni_registry: Arc::new(RwLock::new(SniRegistry::new())),
                 request_cert,
                 reject_unauthorized,
+                http_handoff_http_server: RefCell::new(None),
             },
         )?;
 
@@ -350,6 +353,10 @@ impl<'js> Server<'js> {
 }
 
 impl<'js> Server<'js> {
+    pub fn set_http_handoff_target(this: Class<'js, Self>, http_server: Value<'js>) {
+        *this.borrow().http_handoff_http_server.borrow_mut() = Some(http_server);
+    }
+
     async fn bind(
         this: Class<'js, Self>,
         ctx: Ctx<'js>,
@@ -449,9 +456,23 @@ impl<'js> Server<'js> {
                         this.clone(),
                         &ctx,
                         "secureConnection",
-                        vec![socket_instance],
+                        vec![socket_instance.clone()],
                         false,
                     )?;
+
+                    if let Some(http_server) =
+                        this.borrow().http_handoff_http_server.borrow().clone()
+                    {
+                        if crate::http_handoff::http_handoff_registered() {
+                            crate::http_handoff::handoff_to_http(
+                                ctx.clone(),
+                                http_server,
+                                tls_socket.clone(),
+                                tls_stream,
+                            )?;
+                            return Ok(());
+                        }
+                    }
 
                     let (reader, writer) = tokio::io::split(tls_stream);
                     let (readable_done, writable_done) = TlsSocket::process_split_io(

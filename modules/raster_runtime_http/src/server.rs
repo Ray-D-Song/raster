@@ -138,7 +138,10 @@ pub(super) fn header_value_to_list<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> Re
     Ok(vec![s])
 }
 
-fn create_server<'js>(ctx: Ctx<'js>, args: Rest<Value<'js>>) -> Result<Class<'js, Server<'js>>> {
+pub(crate) fn create_server<'js>(
+    ctx: Ctx<'js>,
+    args: Rest<Value<'js>>,
+) -> Result<Class<'js, Server<'js>>> {
     let mut server_options: Option<Object<'js>> = None;
     for value in &args.0 {
         if let Some(option) = value.as_object().filter(|_| value.as_function().is_none()) {
@@ -230,7 +233,7 @@ pub struct IncomingMessage<'js> {
     complete: bool,
     paused: bool,
     destroyed: bool,
-    socket: Class<'js, Socket<'js>>,
+    socket: Value<'js>,
     response_status_code: Option<u16>,
     response_status_message: Option<String>,
 }
@@ -294,7 +297,7 @@ impl<'js> IncomingMessage<'js> {
         self.complete
     }
     #[qjs(get, enumerable)]
-    fn socket(&self) -> Class<'js, Socket<'js>> {
+    fn socket(&self) -> Value<'js> {
         self.socket.clone()
     }
     pub fn read(this: This<Class<'js, Self>>, ctx: Ctx<'js>) -> Result<Value<'js>> {
@@ -349,7 +352,7 @@ impl<'js> IncomingMessage<'js> {
             complete: false,
             paused: false,
             destroyed: false,
-            socket,
+            socket: socket.into_value(),
             response_status_code: Some(status_code),
             response_status_message: status_message,
         })
@@ -973,7 +976,7 @@ fn spawn_tcp_connection<'js>(
         }
         let _ = writer_stream.shutdown().await;
     });
-    spawn_connection(ctx, server, socket, stream)
+    spawn_connection(ctx, server, socket.into_value(), stream)
 }
 
 #[cfg(unix)]
@@ -1013,13 +1016,21 @@ fn spawn_unix_connection<'js>(
         }
         let _ = writer_stream.shutdown().await;
     });
-    spawn_connection(ctx, server, socket, stream)
+    spawn_connection(ctx, server, socket.into_value(), stream)
+}
+
+fn socket_class<'js>(ctx: &Ctx<'js>, socket: &Value<'js>) -> Result<Class<'js, Socket<'js>>> {
+    let obj = socket
+        .as_object()
+        .ok_or_else(|| Exception::throw_type(ctx, "Invalid socket"))?;
+    Class::<Socket>::from_object(obj)
+        .ok_or_else(|| Exception::throw_type(ctx, "Expected net.Socket"))
 }
 
 fn spawn_connection<'js, T>(
     ctx: Ctx<'js>,
     server: Class<'js, Server<'js>>,
-    socket: Class<'js, Socket<'js>>,
+    socket: Value<'js>,
     stream: T,
 ) -> Result<()>
 where
@@ -1050,7 +1061,7 @@ where
             server.clone(),
             &ctx,
             "connection",
-            vec![socket.clone().into_value()],
+            vec![socket.clone()],
             false,
         );
         let service_socket = socket.clone();
@@ -1197,7 +1208,7 @@ async fn await_response_pumping(
 async fn dispatch<'js>(
     ctx: Ctx<'js>,
     server: Class<'js, Server<'js>>,
-    connection_socket: Class<'js, Socket<'js>>,
+    connection_socket: Value<'js>,
     request: HyperRequest<Incoming>,
     request_timeout: u64,
     max_request_body_size: usize,
@@ -1292,7 +1303,11 @@ async fn dispatch<'js>(
         Err(_) => return Ok(empty()),
     };
     if let Some(on_upgrade) = on_upgrade {
-        let socket = connection_socket;
+        let socket_value = connection_socket.clone();
+        let socket = match socket_class(&ctx, &socket_value) {
+            Ok(socket) => socket,
+            Err(_) => return Ok(empty()),
+        };
         let reader = Arc::new(std::sync::Mutex::new(Vec::new()));
         Socket::attach_raw_reader(&socket, reader.clone());
         let (event_tx, mut event_rx) = mpsc::unbounded_channel::<Vec<u8>>();
@@ -1314,7 +1329,7 @@ async fn dispatch<'js>(
             server,
             &ctx,
             event,
-            vec![req.into_value(), socket.clone().into_value(), head],
+            vec![req.into_value(), socket_value, head],
             false,
         );
         tokio::spawn(async move {
@@ -1493,6 +1508,21 @@ async fn dispatch<'js>(
         let _ = IncomingMessage::emit_str(req, &ctx, "end", vec![], false);
     }
     Ok(await_response_pumping(&ctx, &mut js_pump, rx, empty).await)
+}
+
+pub(crate) fn handoff_tls_to_http_server<'js>(
+    ctx: Ctx<'js>,
+    http_server: Value<'js>,
+    tls_socket: Class<'js, raster_runtime_tls::tls_socket::TlsSocket<'js>>,
+    stream: std::pin::Pin<Box<dyn raster_runtime_tls::http_handoff::AsyncReadWrite + 'static>>,
+) -> Result<()> {
+    let http = Class::<Server>::from_object(
+        http_server
+            .as_object()
+            .ok_or_else(|| Exception::throw_type(&ctx, "Invalid http.Server"))?,
+    )
+    .ok_or_else(|| Exception::throw_type(&ctx, "Invalid http.Server"))?;
+    spawn_connection(ctx.clone(), http, tls_socket.clone().into_js(&ctx)?, stream)
 }
 
 /// Minimal `http.Agent` so Next can run `new http.Agent(httpAgentOptions)`.

@@ -2,6 +2,7 @@ use raster_runtime_test::{call_test, test_async_with, ModuleEvaluator};
 use rquickjs::{Ctx, Function};
 
 use super::HttpModule;
+use crate::HttpsModule;
 
 fn init_test_runtime(ctx: &Ctx<'_>) {
     raster_runtime_async_hooks::init(ctx).expect("async_hooks init");
@@ -9,7 +10,14 @@ fn init_test_runtime(ctx: &Ctx<'_>) {
 
 async fn eval_http_module(ctx: Ctx<'_>) {
     init_test_runtime(&ctx);
-    ModuleEvaluator::eval_rust::<HttpModule>(ctx, "http")
+    ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http")
+        .await
+        .unwrap();
+}
+
+async fn eval_https_module(ctx: Ctx<'_>) {
+    eval_http_module(ctx.clone()).await;
+    ModuleEvaluator::eval_rust::<HttpsModule>(ctx, "https")
         .await
         .unwrap();
 }
@@ -943,6 +951,76 @@ async fn http_get_fetches_local_server() {
             .unwrap();
             let ok: bool = call_test(&ctx, &module, ()).await;
             assert!(ok);
+        })
+    })
+    .await;
+}
+
+fn js_string_literal(s: &str) -> String {
+    format!("{s:?}")
+}
+
+#[tokio::test]
+async fn https_create_server_serves_over_tls() {
+    use raster_runtime_test_tls::fixtures;
+
+    test_async_with(|ctx| {
+        Box::pin(async move {
+            eval_https_module(ctx.clone()).await;
+            let cert = js_string_literal(fixtures::SERVER_CERT);
+            let key = js_string_literal(fixtures::SERVER_KEY);
+            let module = ModuleEvaluator::eval_js(
+                ctx.clone(),
+                "test",
+                &format!(
+                    r#"
+                import {{ createServer }} from 'https';
+                export async function test() {{
+                  const server = createServer({{ cert: {cert}, key: {key} }}, (_req, res) => {{
+                    res.statusCode = 200;
+                    res.end('tls-ok');
+                  }});
+                  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+                  return server.address().port;
+                }}
+            "#
+                ),
+            )
+            .await
+            .unwrap();
+            let port: u16 = call_test(&ctx, &module, ()).await;
+
+            use rustls::pki_types::ServerName;
+            use rustls::RootCertStore;
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            use tokio_rustls::TlsConnector;
+
+            let mut roots = RootCertStore::empty();
+            let mut reader = std::io::Cursor::new(fixtures::ROOT_CA.as_bytes());
+            for cert in rustls_pemfile::certs(&mut reader) {
+                roots.add(cert.unwrap()).unwrap();
+            }
+            let config = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+            let connector = TlsConnector::from(std::sync::Arc::new(config));
+
+            let tcp = tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .unwrap();
+            let server_name = ServerName::try_from("localhost").unwrap();
+            let mut tls = connector.connect(server_name, tcp).await.unwrap();
+            tls.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            let mut response = Vec::new();
+            tls.read_to_end(&mut response).await.unwrap();
+            let response = String::from_utf8_lossy(&response);
+            assert!(response.contains("tls-ok"), "{response}");
         })
     })
     .await;
