@@ -6,6 +6,7 @@ pub mod bytearray_buffer;
 pub mod bytes;
 pub mod class;
 pub mod clone;
+pub mod clone_wire;
 pub mod ctx;
 pub mod driver_poll;
 pub mod error;
