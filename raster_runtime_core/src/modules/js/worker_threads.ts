@@ -194,7 +194,11 @@ export class MessagePort {
   dispatchMessage(data: unknown): void {
     this.#dispatch("message", data);
     if (typeof this.onmessage === "function") {
-      this.onmessage({ data });
+      try {
+        this.onmessage({ data });
+      } catch {
+        // Node continues after onmessage throws; other listeners already ran.
+      }
     }
   }
 
@@ -235,7 +239,11 @@ export class MessagePort {
     const set = this.#listeners.get(type);
     if (!set) return;
     for (const fn of [...set]) {
-      fn(data);
+      try {
+        fn(data);
+      } catch {
+        // Match Node: one listener throwing must not skip the rest.
+      }
     }
   }
 }

@@ -10,18 +10,12 @@ use std::path::PathBuf;
 
 use raster_runtime_context::CtxExtension;
 use raster_runtime_events::Emitter;
-use raster_runtime_utils::{
-    event_loop::EventLoopRef,
-    object::ObjectExt,
-    result::ResultExt,
-};
+use raster_runtime_utils::{event_loop::EventLoopRef, object::ObjectExt, result::ResultExt};
 use rquickjs::{convert::Coerced, prelude::Rest, Class, Ctx, Exception, IntoJs, Result, Value};
 use tokio::net::UnixStream;
 
 use crate::ipc_channel;
-use crate::{
-    ChildProcess, DefaultReadableStream, DefaultWritableStream,
-};
+use crate::{ChildProcess, DefaultReadableStream, DefaultWritableStream};
 
 const IPC_FD: i32 = 3;
 
@@ -40,10 +34,12 @@ pub fn fork<'js>(
     let child_socket_fd = std_child.into_raw_fd();
     clear_cloexec(child_socket_fd);
 
-    let exe = opts
-        .exec_path
-        .clone()
-        .unwrap_or_else(|| env::current_exe().unwrap_or_default().to_string_lossy().into_owned());
+    let exe = opts.exec_path.clone().unwrap_or_else(|| {
+        env::current_exe()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned()
+    });
 
     let pid = unsafe { libc::fork() };
     if pid < 0 {
@@ -82,14 +78,7 @@ pub fn fork<'js>(
 
     let _ = unsafe { libc::close(child_socket_fd) };
     let stream = UnixStream::from_std(std_parent).or_throw(&ctx)?;
-    ChildProcess::new_fork_ipc(
-        ctx,
-        pid as u32,
-        stream,
-        module_path,
-        Some(exec_args),
-        opts,
-    )
+    ChildProcess::new_fork_ipc(ctx, pid as u32, stream, module_path, Some(exec_args), opts)
 }
 
 struct ForkOpts {
@@ -135,11 +124,7 @@ fn parse_fork_args<'js>(
             opts.silent = obj.get_optional("silent")?.unwrap_or(false);
             opts.exec_path = obj.get_optional("execPath")?;
             if let Some(env) = obj.get_optional::<_, HashMap<String, Coerced<String>>>("env")? {
-                opts.env = Some(
-                    env.into_iter()
-                        .map(|(k, v)| (k, v.to_string()))
-                        .collect(),
-                );
+                opts.env = Some(env.into_iter().map(|(k, v)| (k, v.to_string())).collect());
             }
         }
     }

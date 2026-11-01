@@ -5,14 +5,9 @@ use raster_runtime_core::modules::module_builder::{ModuleBuilder, ModuleBuilderC
 use raster_runtime_core::vm::{Vm, VmOptions};
 use raster_runtime_utils::clone_wire::{deserialize, serialize};
 use raster_runtime_worker_threads::{
-    set_worker_isolate_runner, set_worker_thread_id, MainToWorker, WorkerIsolateStart,
-    WorkerToMain,
+    set_worker_isolate_runner, set_worker_thread_id, MainToWorker, WorkerIsolateStart, WorkerToMain,
 };
-use rquickjs::{
-    function::Opt,
-    prelude::Func,
-    CatchResultExt, Ctx, Function, Promise, Value,
-};
+use rquickjs::{function::Opt, prelude::Func, CatchResultExt, Ctx, Function, Promise, Value};
 
 use url::Url;
 
@@ -41,9 +36,7 @@ async fn run_worker_isolate_async(start: WorkerIsolateStart) -> Result<(), Strin
         .with_global(raster_runtime_worker_threads::init)
         .with_module(raster_runtime_core::modules::raster_runtime::hex::RasterRuntimeHexModule)
         .with_module(raster_runtime_core::modules::raster_runtime::qjs::RasterRuntimeQjsModule)
-        .with_module(
-            raster_runtime_core::modules::raster_runtime::util::RasterRuntimeUtilModule,
-        )
+        .with_module(raster_runtime_core::modules::raster_runtime::util::RasterRuntimeUtilModule)
         .with_module(raster_runtime_core::modules::raster_runtime::xml::RasterRuntimeXmlModule),
         ..VmOptions::default()
     })
@@ -75,9 +68,8 @@ async fn run_worker_isolate_async(start: WorkerIsolateStart) -> Result<(), Strin
                 .map_err(|e| e.to_string())?;
 
             let script_path = resolve_script(&ctx, &start.script)?;
-            let import_url = Url::from_file_path(&script_path).map_err(|_| {
-                format!("Path is not absolute: {script_path}")
-            })?;
+            let import_url = Url::from_file_path(&script_path)
+                .map_err(|_| format!("Path is not absolute: {script_path}"))?;
             let import_url_lit = format!("{:?}", import_url.as_str());
 
             let code = format!(

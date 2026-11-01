@@ -11,7 +11,12 @@ readme = "README.md"
 default = ["base", "console", "tls-ring", "crypto-rust"]
 
 # TLS crypto backend features
-tls-ring = ["raster_runtime_http?/tls-ring", "raster_runtime_tls?/tls-ring", "raster_runtime_fetch?/tls-ring"]
+tls-ring = [
+  "raster_runtime_http?/tls-ring",
+  "raster_runtime_http2?/tls-ring",
+  "raster_runtime_tls?/tls-ring",
+  "raster_runtime_fetch?/tls-ring",
+]
 tls-aws-lc = [
   "raster_runtime_http?/tls-aws-lc",
   "raster_runtime_tls?/tls-aws-lc",
@@ -75,6 +80,7 @@ base = [
   "worker-threads",
   "zlib",
   "sqlite",
+  "http2",
 ]
 
 
@@ -107,6 +113,11 @@ compression-rust = [
 ]
 fs = ["raster_runtime_fs"]
 http = ["raster_runtime_http", "raster_runtime_http?/http1"]
+http2 = [
+  "raster_runtime_http2",
+  "raster_runtime_http2?/tls-ring",
+  "tls",
+]
 https = [
   "raster_runtime_http",
   "raster_runtime_http?/webpki-roots",
@@ -165,6 +176,7 @@ raster_runtime_exceptions = { version = "0.1.0", path = "../modules/raster_runti
 raster_runtime_fetch = { version = "0.1.0", path = "../modules/raster_runtime_fetch", default-features = false, optional = true }
 raster_runtime_fs = { version = "0.1.0", path = "../modules/raster_runtime_fs", optional = true }
 raster_runtime_http = { version = "0.1.0", path = "../modules/raster_runtime_http", default-features = false, optional = true }
+raster_runtime_http2 = { version = "0.1.0", path = "../modules/raster_runtime_http2", default-features = false, optional = true }
 raster_runtime_inspector = { version = "0.1.0", path = "../modules/raster_runtime_inspector", optional = true }
 raster_runtime_intl = { version = "0.1.0", path = "../modules/raster_runtime_intl", optional = true }
 raster_runtime_navigator = { version = "0.1.0", path = "../modules/raster_runtime_navigator", optional = true }

@@ -32,10 +32,15 @@ enum WireNode {
     Array(Vec<u32>),
     Object(Vec<(String, u32)>),
     Date(f64),
-    RegExp { source: String, flags: String },
+    RegExp {
+        source: String,
+        flags: String,
+    },
     Error(String),
     ArrayBufferCopy(Vec<u8>),
-    SharedArrayBuffer { id: u64 },
+    SharedArrayBuffer {
+        id: u64,
+    },
     SharedView {
         id: u64,
         byte_offset: u32,
@@ -75,7 +80,10 @@ pub fn serialize<'js>(
 
 pub fn deserialize<'js>(ctx: &Ctx<'js>, payload: &CloneWirePayload) -> Result<Value<'js>> {
     if payload.body.len() < 4 || &payload.body[0..4] != MAGIC {
-        return Err(Exception::throw_type(ctx, "Invalid structured-clone wire payload"));
+        return Err(Exception::throw_type(
+            ctx,
+            "Invalid structured-clone wire payload",
+        ));
     }
     let mut pos = 4;
     let root = read_u32(&payload.body, &mut pos)?;
@@ -113,7 +121,9 @@ fn encode_index<'js>(
         return Ok(idx);
     }
     let idx = nodes.borrow().len() as u32;
-    nodes.borrow_mut().push(encode_node_inner(ctx, value, nodes, memo, transfers)?);
+    nodes
+        .borrow_mut()
+        .push(encode_node_inner(ctx, value, nodes, memo, transfers)?);
     Ok(idx)
 }
 
@@ -130,9 +140,7 @@ fn encode_node_inner<'js>(
         Type::Null => Ok(WireNode::Null),
         Type::Bool => Ok(WireNode::Bool(value.as_bool().unwrap_or(false))),
         Type::Int | Type::Float => Ok(WireNode::Number(value.as_number().unwrap_or(f64::NAN))),
-        Type::String => Ok(WireNode::String(
-            value.as_string().unwrap().to_string()?,
-        )),
+        Type::String => Ok(WireNode::String(value.as_string().unwrap().to_string()?)),
         Type::BigInt => Err(Exception::throw_type(
             ctx,
             "BigInt cannot be cloned across worker processes yet",
@@ -183,9 +191,7 @@ fn encode_node_inner<'js>(
                 return Ok(WireNode::ArrayBufferCopy(bytes));
             }
             if object.is_instance_of(&primordials.constructor_map) {
-                let entries: Array = primordials
-                    .function_array_from
-                    .call((object.clone(),))?;
+                let entries: Array = primordials.function_array_from.call((object.clone(),))?;
                 let mut pairs = Vec::new();
                 for entry in entries.iter::<Array>() {
                     let entry = entry?;
@@ -196,9 +202,7 @@ fn encode_node_inner<'js>(
                 return Ok(WireNode::Map(pairs));
             }
             if object.is_instance_of(&primordials.constructor_set) {
-                let entries: Array = primordials
-                    .function_array_from
-                    .call((object.clone(),))?;
+                let entries: Array = primordials.function_array_from.call((object.clone(),))?;
                 let mut items = Vec::new();
                 for item in entries.iter::<Value>() {
                     items.push(encode_index(ctx, &item?, nodes, memo, transfers)?);
@@ -284,10 +288,9 @@ fn decode_at<'js>(
         },
         WireNode::RegExp { source, flags } => {
             let primordials = BasePrimordials::get(ctx)?;
-            let obj: Object =
-                primordials
-                    .constructor_regexp
-                    .construct((source.clone(), flags.clone()))?;
+            let obj: Object = primordials
+                .constructor_regexp
+                .construct((source.clone(), flags.clone()))?;
             obj.into_js(ctx)?
         },
         WireNode::Error(message) => {
@@ -386,7 +389,11 @@ fn sab_id_from_array_buffer<'js>(ctx: &Ctx<'js>, ab: &ArrayBuffer<'js>) -> Resul
 fn array_buffer_data_ptr<'js>(ctx: &Ctx<'js>, ab: &ArrayBuffer<'js>) -> Result<*mut u8> {
     unsafe {
         let mut len = 0u64;
-        let ptr = rquickjs::qjs::JS_GetArrayBuffer(ctx.as_raw().as_ptr(), &mut len, ab.as_value().as_raw());
+        let ptr = rquickjs::qjs::JS_GetArrayBuffer(
+            ctx.as_raw().as_ptr(),
+            &mut len,
+            ab.as_value().as_raw(),
+        );
         if ptr.is_null() {
             return Err(Exception::throw_type(ctx, "Invalid ArrayBuffer"));
         }
@@ -548,19 +555,20 @@ fn read_node(data: &[u8], pos: &mut usize) -> Result<WireNode> {
             byte_length: read_u32(data, pos)?,
             view_name: read_string(data, pos)?,
         },
-        _ => return Err(rquickjs::Error::new_from_js_message(
-            "clone_wire",
-            "decode",
-            "Unknown wire node tag",
-        )),
+        _ => {
+            return Err(rquickjs::Error::new_from_js_message(
+                "clone_wire",
+                "decode",
+                "Unknown wire node tag",
+            ))
+        },
     })
 }
 
 fn read_string(data: &[u8], pos: &mut usize) -> Result<String> {
     let bytes = read_vec(data, pos)?;
-    String::from_utf8(bytes).map_err(|_| {
-        rquickjs::Error::new_from_js_message("clone_wire", "decode", "Invalid UTF-8")
-    })
+    String::from_utf8(bytes)
+        .map_err(|_| rquickjs::Error::new_from_js_message("clone_wire", "decode", "Invalid UTF-8"))
 }
 
 fn write_u32(out: &mut Vec<u8>, v: u32) {
@@ -671,8 +679,8 @@ mod tests {
             let sab: Value = ctx.eval("new SharedArrayBuffer(4)")?;
             let wire = serialize(&ctx, sab.clone(), Opt(None))?;
             let back = deserialize(&ctx, &wire)?;
-            let check: Function = ctx
-                .eval("(a,b) => { new Uint8Array(a)[0] = 7; return new Uint8Array(b)[0]; }")?;
+            let check: Function =
+                ctx.eval("(a,b) => { new Uint8Array(a)[0] = 7; return new Uint8Array(b)[0]; }")?;
             let shared: i32 = check.call((sab, back))?;
             assert_eq!(shared, 7);
             Ok(())

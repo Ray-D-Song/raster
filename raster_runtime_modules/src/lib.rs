@@ -45,6 +45,8 @@ mod modules {
     pub use raster_runtime_http as http;
     #[cfg(feature = "https")]
     pub use raster_runtime_http as https;
+    #[cfg(feature = "http2")]
+    pub use raster_runtime_http2 as http2;
     #[cfg(feature = "inspector")]
     pub use raster_runtime_inspector as inspector;
     #[cfg(feature = "intl")]

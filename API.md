@@ -420,10 +420,11 @@ Lightweight and fast hash classes for raster_runtime.
 
 ## http2
 
-Load-time compatibility surface for packages that probe `node:http2`.
+Node-compatible HTTP/2 surface via native module `raster_runtime_http2`:
 
-- `constants`, `sensitiveHeaders`, `getDefaultSettings()`, `getPackedSettings()`, and `getUnpackedSettings()` are exported.
-- `connect()`, `createServer()`, and `createSecureServer()` throw because HTTP/2 client and server sessions are not implemented.
+- `createServer()` / `createSecureServer()` — h2c or TLS+ALPN `h2`, `(req, res)` callback with `res.end()` buffering.
+- `connect()` — h2c or `https` client session with `request()` and `connect` event.
+- `constants`, `getDefaultSettings()`, `getPackedSettings()`, `getUnpackedSettings()`, and `sensitiveHeaders` are exported from the native module.
 
 ## module
 

@@ -11,7 +11,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 pub const FRAME_MESSAGE: u8 = 3;
 pub const FRAME_EXIT: u8 = 5;
 
-pub fn write_frame_sync(writer: &mut impl Write, tag: u8, payload: &CloneWirePayload) -> std::io::Result<()> {
+pub fn write_frame_sync(
+    writer: &mut impl Write,
+    tag: u8,
+    payload: &CloneWirePayload,
+) -> std::io::Result<()> {
     writer.write_all(&[tag])?;
     write_u32(writer, payload.body.len() as u32)?;
     writer.write_all(&payload.body)?;

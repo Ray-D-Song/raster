@@ -165,6 +165,10 @@ impl ModuleBuilder {
         {
             builder = builder.with_module(crate::modules::https::HttpsModule);
         }
+        #[cfg(feature = "http2")]
+        {
+            builder = builder.with_module(crate::modules::http2::Http2Module);
+        }
         #[cfg(feature = "inspector")]
         {
             builder = builder.with_module(crate::modules::inspector::InspectorModule);

@@ -645,8 +645,11 @@ class TestServer {
     if (!overflow) {
       suffix = suffix.slice(0, -2);
     }
-    const elapsed = Math.floor(progressbarWidth * progress);
-    const remaining = progressbarWidth - elapsed;
+    const elapsed = Math.max(
+      0,
+      Math.min(progressbarWidth, Math.floor(progressbarWidth * progress))
+    );
+    const remaining = Math.max(0, progressbarWidth - elapsed);
 
     message += spinnerFrame;
     if (showProgressBarDesc) {

@@ -102,7 +102,7 @@ fn transfer_options<'js>(transfer: Opt<Value<'js>>) -> Opt<Object<'js>> {
             } else {
                 Opt(None)
             }
-        }
+        },
     }
 }
 
@@ -157,7 +157,8 @@ fn spawn_worker<'js>(
 
     let loop_ref = EventLoopRef::new_referenced(event_loop::rt_key_from_ptr(unsafe {
         rquickjs::qjs::JS_GetRuntime(ctx.as_raw().as_ptr())
-    } as *mut std::ffi::c_void));
+    }
+        as *mut std::ffi::c_void));
 
     let state = Arc::new(WorkerState {
         to_worker: to_worker_tx,
@@ -188,13 +189,13 @@ fn spawn_worker<'js>(
     let state_post = state.clone();
     out.set(
         "postMessage",
-        Func::from(move |ctx: Ctx<'js>, data: Value<'js>, transfer: Opt<Value<'js>>| {
-            let wire = serialize(&ctx, data, transfer_options(transfer))?;
-            let _ = state_post
-                .to_worker
-                .send(MainToWorker::Message(wire));
-            Ok::<(), rquickjs::Error>(())
-        }),
+        Func::from(
+            move |ctx: Ctx<'js>, data: Value<'js>, transfer: Opt<Value<'js>>| {
+                let wire = serialize(&ctx, data, transfer_options(transfer))?;
+                let _ = state_post.to_worker.send(MainToWorker::Message(wire));
+                Ok::<(), rquickjs::Error>(())
+            },
+        ),
     )?;
 
     let state_term = state.clone();
@@ -257,12 +258,7 @@ fn spawn_worker<'js>(
                     }
                 },
                 WorkerToMain::Exit { code, signal } => {
-                    let _ = emit_worker_exit(
-                        &ctx_events,
-                        &on_event_loop,
-                        code,
-                        signal.as_deref(),
-                    );
+                    let _ = emit_worker_exit(&ctx_events, &on_event_loop, code, signal.as_deref());
                     break;
                 },
             }

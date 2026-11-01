@@ -134,7 +134,7 @@ async fn main() -> Result<(), Error> {
 | fetch | ✔︎ | ⚠️ | `fetch` | `raster_runtime_fetch` |
 | fs / fs/promises | ✔︎ | ⚠️ | `fs` | `raster_runtime_fs` |
 | http | ✔︎ | ⚠️ | `http` | `raster_runtime_http` |
-| http2 | ✔︎ | ⚠️ | N/A | embedded JS load-time surface; networking methods throw |
+| http2 | ✔︎ | ✔︎ | N/A | native `raster_runtime_http2`; embedded JS fallback for browser |
 | https | ✔︎ | ⚠️ | `https` | `raster_runtime_http` |
 | inspector | ✔︎ | ⚠️ | `inspector` | `raster_runtime_inspector` |
 | intl | ✔︎ | ⚠️ | `intl` | `raster_runtime_intl` |

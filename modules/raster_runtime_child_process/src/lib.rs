@@ -2,11 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 #![allow(clippy::uninlined_format_args)]
 
+#[cfg(unix)]
 mod fork;
+#[cfg(unix)]
 mod ipc_channel;
 
 #[cfg(unix)]
 pub use fork::fork;
+#[cfg(unix)]
 pub use ipc_channel::install_child_process_ipc;
 
 #[cfg(windows)]
@@ -39,7 +42,6 @@ use raster_runtime_utils::{
     object::ObjectExt,
     result::ResultExt,
 };
-use tokio::sync::mpsc::UnboundedSender;
 use rquickjs::{
     class::{Trace, Tracer},
     convert::Coerced,
@@ -47,6 +49,7 @@ use rquickjs::{
     prelude::{Func, Opt, Rest, This},
     Class, Ctx, Error, Exception, IntoJs, Result, Value,
 };
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::{
     io::AsyncRead,
     process::{Child, Command},
@@ -209,7 +212,13 @@ impl<'js> ChildProcess<'js> {
         message: Value<'js>,
         transfer: Opt<Value<'js>>,
     ) -> Result<bool> {
-        ipc_channel::child_send(this, ctx, message, transfer)
+        #[cfg(unix)]
+        return ipc_channel::child_send(this, ctx, message, transfer);
+        #[cfg(not(unix))]
+        {
+            let _ = (this, ctx, message, transfer);
+            Ok(false)
+        }
     }
 }
 
