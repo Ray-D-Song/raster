@@ -152,6 +152,13 @@ impl<'js> ReadableStreamInner<'js> {
     pub fn is_destroyed(&self) -> bool {
         self.is_destroyed
     }
+
+    /// Whether JS is consuming this stream: a `data`/`readable` listener is
+    /// attached, or the stream is in flowing mode.
+    #[inline]
+    pub fn has_consumer(&self) -> bool {
+        self.listener.is_some() || self.state == ReadableState::Flowing
+    }
 }
 
 #[rquickjs::class]
@@ -453,6 +460,15 @@ where
                                                 return Ok(());
                                             }
                                             break;
+                                        } else if !this2.borrow().inner().has_consumer() {
+                                            // Nobody consumes this stream: buffering
+                                            // past the high-water mark would block on
+                                            // backpressure until the child exits, and
+                                            // the exit path itself waits for this loop.
+                                            // Node still emits `close` here, so drop the
+                                            // bytes and keep draining to EOF.
+                                            buffer.clear();
+                                            buffer.reserve(DEFAULT_BUFFER_SIZE);
                                         } else {
                                             let write_buffer_future = ba_buffer.write_consuming(&mut buffer);
                                             Self::emit_str(
@@ -493,8 +509,21 @@ where
                                         }
                                     },
                                     _ => {
-                                        //should not happen
-                                    }
+                                        // Init (or an unexpected state): no consumer has
+                                        // switched us to Flowing yet. Once the pipe hits
+                                        // EOF `read` keeps returning 0 forever, so stop
+                                        // instead of spinning at 100% CPU and stalling the
+                                        // whole event loop (which also blocks the child
+                                        // reap path that emits `exit`).
+                                        if bytes_read == 0 {
+                                            break;
+                                        }
+                                        if !this2.borrow().inner().has_consumer() {
+                                            // Nobody will read these bytes; drain and drop.
+                                            buffer.clear();
+                                            buffer.reserve(DEFAULT_BUFFER_SIZE);
+                                        }
+                                    },
                                 }
 
                                 last_state = state;

@@ -60,7 +60,17 @@ pub fn install_child_process_ipc(ctx: &Ctx<'_>, stream: UnixStream) -> Result<()
     });
 
     let globals = ctx.globals();
-    let process: rquickjs::Object = globals.get("process")?;
+    // The fork child installs IPC before any module runs, so the `process`
+    // global may not exist yet; creating it here keeps `get::<Object>` from
+    // failing with "converting from js 'undefined' into type 'object'".
+    let process: rquickjs::Object = match globals.get::<_, Value>("process")? {
+        v if v.is_object() => v.as_object().cloned().expect("checked object"),
+        _ => {
+            let obj = rquickjs::Object::new(ctx.clone())?;
+            globals.set("process", obj.clone())?;
+            obj
+        },
+    };
     process.set("connected", true)?;
     process.set(
         "send",
@@ -73,10 +83,15 @@ fn dispatch_process_message(ctx: &Ctx<'_>, wire: CloneWirePayload) -> Result<()>
     let value = deserialize(ctx, &wire)?;
     let process: rquickjs::Object = ctx.globals().get("process")?;
     let emit: Function = process.get("emit")?;
-    emit.call::<_, ()>(("message", value))?;
+    // `Function::call` leaves `this` undefined, but the EventEmitter method
+    // reads its listener registry from `this`.
+    let mut args = rquickjs::function::Args::new(ctx.clone(), 2);
+    args.this(process)?;
+    args.push_arg("message")?;
+    args.push_arg(value)?;
+    emit.call_arg::<()>(args)?;
     Ok(())
 }
-
 fn child_process_send<'js>(
     ctx: Ctx<'js>,
     message: Value<'js>,

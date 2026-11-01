@@ -8,6 +8,7 @@ pub use messages::{MainToWorker, WorkerToMain};
 pub use thread_state::set_worker_thread_id;
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::{
     path::PathBuf,
     sync::{
@@ -43,6 +44,8 @@ use thread_state::{worker_is_main_thread, worker_thread_id};
 pub struct WorkerIsolateStart {
     pub thread_id: u64,
     pub script: String,
+    /// When set, `script` is source code to evaluate instead of a file path.
+    pub eval: bool,
     pub worker_data: CloneWirePayload,
     pub env_snapshot: CloneWirePayload,
     pub to_main: UnboundedSender<WorkerToMain>,
@@ -123,6 +126,31 @@ fn emit_worker_exit<'js>(
     Ok(())
 }
 
+thread_local! {
+    /// JS event sinks keyed by worker thread id.
+    ///
+    /// Storing a `Persistent` here (instead of capturing the `Function` inside a
+    /// `'js` closure handed to JS) lets teardown release every worker root
+    /// explicitly; a captured `Function` outlives the context and aborts QuickJS
+    /// with `gc_obj_list`.
+    static WORKER_EVENT_SINKS: RefCell<HashMap<u64, rquickjs::Persistent<Function<'static>>>> =
+        RefCell::new(HashMap::new());
+}
+
+fn register_event_sink<'js>(ctx: &Ctx<'js>, thread_id: u64, on_event: Function<'js>) {
+    let saved = rquickjs::Persistent::save(ctx, on_event);
+    WORKER_EVENT_SINKS.with(|sinks| {
+        sinks.borrow_mut().insert(thread_id, saved);
+    });
+}
+
+fn restore_event_sink<'js>(thread_id: u64, ctx: &Ctx<'js>) -> Option<Function<'js>> {
+    WORKER_EVENT_SINKS.with(|sinks| {
+        let saved = sinks.borrow().get(&thread_id).cloned()?;
+        saved.restore(ctx).ok()
+    })
+}
+
 fn spawn_worker<'js>(
     ctx: Ctx<'js>,
     filename: String,
@@ -133,7 +161,17 @@ fn spawn_worker<'js>(
         Exception::throw_type(&ctx, "worker_threads.Worker is unavailable in this build")
     })?;
 
-    let script = resolve_worker_filename(&ctx, filename)?;
+    // `new Worker(code, { eval: true })` runs the string as the worker script
+    // instead of resolving it as a file path.
+    let is_eval = options
+        .get::<_, Value>("eval")
+        .map(|v| v.as_bool().unwrap_or(false))
+        .unwrap_or(false);
+    let script = if is_eval {
+        filename
+    } else {
+        resolve_worker_filename(&ctx, filename)?
+    };
     let worker_data: Value = options
         .get("workerData")
         .unwrap_or(Undefined.into_value(ctx.clone()));
@@ -146,6 +184,7 @@ fn spawn_worker<'js>(
     let env_wire = serialize(&ctx, env_snapshot, Opt(None))?;
 
     let thread_id = NEXT_THREAD_ID.fetch_add(1, Ordering::Relaxed);
+    register_event_sink(&ctx, thread_id, on_event.clone());
     let (to_main_tx, mut to_main_rx) = unbounded_channel::<WorkerToMain>();
     let (to_worker_tx, to_worker_rx) = mpsc::channel::<MainToWorker>();
 
@@ -174,6 +213,7 @@ fn spawn_worker<'js>(
                 runner(WorkerIsolateStart {
                     thread_id,
                     script,
+                    eval: is_eval,
                     worker_data: worker_wire,
                     env_snapshot: env_wire,
                     to_main: to_main_tx,
@@ -199,7 +239,6 @@ fn spawn_worker<'js>(
     )?;
 
     let state_term = state.clone();
-    let on_event_term = on_event.clone();
     out.set(
         "terminate",
         Func::from(move |ctx: Ctx<'js>| {
@@ -209,12 +248,16 @@ fn spawn_worker<'js>(
                 .lock()
                 .unwrap()
                 .retain(|w| w.registry_id != state_term.registry_id);
-            let on_event = on_event_term.clone();
-            let ctx_async = ctx.clone();
-            ctx.spawn_exit_simple(async move {
-                let _ = emit_worker_exit(&ctx_async, &on_event, 1, Some("SIGTERM"));
-                Ok(())
-            });
+            if let Ok(exit_obj) = Object::new(ctx.clone()) {
+                let _ = exit_obj.set("code", 1i32);
+                let _ = exit_obj.set("signal", "SIGTERM");
+                let _ = dispatch_worker_event_js(
+                    ctx.clone(),
+                    state_term.registry_id,
+                    "exit".to_string(),
+                    Opt(Some(exit_obj.into_value())),
+                );
+            }
             Ok::<(), rquickjs::Error>(())
         }),
     )?;
@@ -238,29 +281,13 @@ fn spawn_worker<'js>(
     )?;
 
     let ctx_events = ctx.clone();
-    let on_event_loop = on_event.clone();
     let loop_ref_stdout = loop_ref.clone();
+    let dispatch_id = thread_id;
     ctx.spawn_exit_simple(async move {
         while let Some(ev) = to_main_rx.recv().await {
-            match ev {
-                WorkerToMain::Online => {
-                    let _ = on_event_loop.call::<_, ()>(("online", Undefined));
-                },
-                WorkerToMain::Message(wire) => {
-                    if let Ok(value) = deserialize(&ctx_events, &wire) {
-                        let _ = on_event_loop.call::<_, ()>(("message", value));
-                    }
-                },
-                WorkerToMain::Error(msg) => {
-                    if let Ok(err) = Object::new(ctx_events.clone()) {
-                        let _ = err.set("message", msg);
-                        let _ = on_event_loop.call::<_, ()>(("error", err));
-                    }
-                },
-                WorkerToMain::Exit { code, signal } => {
-                    let _ = emit_worker_exit(&ctx_events, &on_event_loop, code, signal.as_deref());
-                    break;
-                },
+            if let Some(exit_event) = dispatch_worker_event(&ctx_events, dispatch_id, ev) {
+                emit_worker_exit_object(&ctx_events, dispatch_id, exit_event);
+                break;
             }
         }
         loop_ref_stdout.unreference();
@@ -270,8 +297,102 @@ fn spawn_worker<'js>(
     Ok(out)
 }
 
+/// Forward one worker event to the JS side dispatch hook. Returns the exit
+/// payload when the worker finished.
+fn dispatch_worker_event(
+    ctx: &Ctx<'_>,
+    thread_id: u64,
+    ev: WorkerToMain,
+) -> Option<(i32, Option<String>)> {
+    match ev {
+        WorkerToMain::Online => {
+            let _ =
+                dispatch_worker_event_js(ctx.clone(), thread_id, "online".to_string(), Opt(None));
+            None
+        },
+        WorkerToMain::Message(wire) => {
+            if let Ok(value) = deserialize(ctx, &wire) {
+                let _ = dispatch_worker_event_js(
+                    ctx.clone(),
+                    thread_id,
+                    "message".to_string(),
+                    Opt(Some(value)),
+                );
+            }
+            None
+        },
+        WorkerToMain::Error(msg) => {
+            if let Ok(err) = Object::new(ctx.clone()) {
+                let _ = err.set("message", msg);
+                let _ = dispatch_worker_event_js(
+                    ctx.clone(),
+                    thread_id,
+                    "error".to_string(),
+                    Opt(Some(err.into_value())),
+                );
+            }
+            None
+        },
+        WorkerToMain::Exit { code, signal } => Some((code, signal)),
+    }
+}
+
+fn emit_worker_exit_object(ctx: &Ctx<'_>, thread_id: u64, (code, signal): (i32, Option<String>)) {
+    let Ok(exit_obj) = Object::new(ctx.clone()) else {
+        return;
+    };
+    let _ = exit_obj.set("code", code);
+    let signal_val: Value = match signal {
+        Some(s) => match s.into_js(ctx) {
+            Ok(v) => v,
+            Err(_) => return,
+        },
+        None => Null.into_value(ctx.clone()),
+    };
+    let _ = exit_obj.set("signal", signal_val);
+    let _ = dispatch_worker_event_js(
+        ctx.clone(),
+        thread_id,
+        "exit".to_string(),
+        Opt(Some(exit_obj.into_value())),
+    );
+}
+
 pub fn set_worker_parent_channel(tx: UnboundedSender<WorkerToMain>) {
     PARENT_TO_MAIN.with(|c| *c.borrow_mut() = Some(tx));
+}
+
+/// Native side of the worker event dispatch: restores the sink registered for
+/// this thread id and calls it.
+fn dispatch_worker_event_js<'js>(
+    ctx: Ctx<'js>,
+    thread_id: u64,
+    event: String,
+    arg: Opt<Value<'js>>,
+) -> Result<()> {
+    let Some(sink) = restore_event_sink(thread_id, &ctx) else {
+        return Ok(());
+    };
+    match arg.0 {
+        Some(value) => sink.call::<_, ()>((event, value))?,
+        None => sink.call::<_, ()>((event, Undefined.into_value(ctx.clone())))?,
+    }
+    Ok(())
+}
+
+/// Release every worker handle held by the process-wide registry.
+///
+/// The registry keeps `mpsc::Sender`s alive for the whole process, so a handle
+/// that is still registered keeps its worker's channel open. Dropping them
+/// before runtime teardown lets the worker read loops finish and release the JS
+/// values they captured (otherwise QuickJS aborts with `gc_obj_list`).
+pub fn shutdown_workers() {
+    if let Some(registry) = WORKER_REGISTRY.get() {
+        registry.workers.lock().unwrap().clear();
+    }
+    // Drop the saved JS sinks: they are the only Rust-side roots for worker
+    // objects, and QuickJS asserts none remain when the runtime is freed.
+    WORKER_EVENT_SINKS.with(|sinks| sinks.borrow_mut().clear());
 }
 
 pub fn worker_parent_post_message_hook<'js>(
@@ -323,6 +444,10 @@ pub fn init(ctx: &Ctx<'_>) -> Result<()> {
     )?;
     globals.set("__rasterWorkerThreadId", Func::from(worker_thread_id_ctx))?;
     globals.set("__rasterWorkerSpawn", Func::from(spawn_worker))?;
+    globals.set(
+        "__rasterWorkerDispatchEvent",
+        Func::from(dispatch_worker_event_js),
+    )?;
     globals.set(
         "__rasterWorkerBroadcastEnv",
         Func::from(worker_broadcast_env),

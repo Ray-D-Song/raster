@@ -299,6 +299,7 @@ export class Worker extends EventEmitter {
     if (options.env != null) spawnOptions.env = options.env;
     if (options.argv != null) spawnOptions.argv = options.argv;
     if (options.name != null) spawnOptions.name = options.name;
+    if (options.eval) spawnOptions.eval = true;
 
     const handle = globalThis.__rasterWorkerSpawn(path, spawnOptions, (event, arg) => {
       if (event === "exit" && arg != null && typeof arg === "object") {
