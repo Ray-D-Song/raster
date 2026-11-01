@@ -118,6 +118,10 @@ impl Vm {
 
         let ctx = AsyncContext::full(&runtime).await?;
         ctx.with(|ctx| {
+            unsafe {
+                let rt = rquickjs::qjs::JS_GetRuntime(ctx.as_raw().as_ptr());
+                raster_runtime_utils::shared_array_buffer::install_on_runtime(rt);
+            }
             (|| {
                 BasePrimordials::init(&ctx)?;
                 global_attachment.attach(&ctx)?;
