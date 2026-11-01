@@ -88,6 +88,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-build
+          key: ${{ matrix.target }}
       - uses: mlugg/setup-zig@v2
         if: matrix.zig
         with:

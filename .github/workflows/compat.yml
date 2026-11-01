@@ -31,6 +31,14 @@ jobs:
           cache: yarn
       - run: yarn install --frozen-lockfile
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-unit
+          # The workspace crates dominate this job (raster_runtime_modules alone is
+          # ~5 min), and rust-cache drops non-dependency artifacts by default.
+          cache-workspace-crates: "true"
+          # A red run still leaves reusable artifacts; keep them for the next try.
+          cache-on-failure: "true"
       - run: cargo fmt --all -- --check
       - run: cargo test -p v8_compat --lib
       - run: cargo test -p raster_runtime_napi --lib -- --test-threads=1
@@ -61,6 +69,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24.3.0
+          cache: yarn
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-sqlite
       - run: yarn install --frozen-lockfile
       - run: make js JS_MINIFY=0
       - name: Build raster_runtime and sqlite extension
@@ -88,6 +100,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-tty-napi
       - name: Build and test TTY + N-API + FS (Windows)
         run: |
           cargo test -p raster_runtime_tty --lib
@@ -123,6 +138,11 @@ jobs:
         with:
           toolchain: ${{ matrix.sanitizer == 'address' && 'nightly' || 'stable' }}
           targets: x86_64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: sanitizer-${{ matrix.sanitizer }}
+          # run_sanitizer_ci.sh redirects CARGO_TARGET_DIR to this path.
+          workspaces: ". -> target-sanitizer-${{ matrix.sanitizer }}"
       - name: Run sanitizer gate
         run: bash v8_compat/tools/run_sanitizer_ci.sh ${{ matrix.sanitizer }}
 
@@ -160,6 +180,12 @@ jobs:
           grep -q '#define NODE_MAJOR_VERSION 24' refs/node/src/node_version.h
           grep -q '#define NODE_MINOR_VERSION 3' refs/node/src/node_version.h
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Registry only: this gate is short, and the repo's 10 GB cache budget is
+          # better spent on the target dirs of the long jobs.
+          shared-key: cargo-registry
+          cache-targets: "false"
       - run: cargo clippy -p v8_compat --all-targets -- -D warnings
 
   napi-clippy:
@@ -169,6 +195,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Registry only: short gate, see v8-clippy.
+          shared-key: cargo-registry
+          cache-targets: "false"
       - run: >
           cargo clippy
           -p raster_runtime_napi
@@ -189,7 +220,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24.3.0
+          cache: yarn
       - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: sqlite-asan
+          # run-asan.sh redirects CARGO_TARGET_DIR to this path.
+          workspaces: ". -> target-sqlite-asan"
       - run: yarn install --frozen-lockfile
       - run: bash compat/node-sqlite/run-asan.sh
 
@@ -206,6 +243,9 @@ jobs:
       - run: yarn install --frozen-lockfile
       - run: make js JS_MINIFY=0
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: mysql-compat
       - name: Build raster_runtime
         run: cargo build -p raster_runtime
       - run: make compat-mysql
@@ -229,6 +269,9 @@ jobs:
       - run: yarn install --frozen-lockfile
       - run: make js JS_MINIFY=0
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: node-postgres-compat
       - name: Build raster_runtime
         run: cargo build -p raster_runtime
       - run: make compat-node-postgres
@@ -292,6 +335,13 @@ jobs:
       - run: yarn install --frozen-lockfile
       - run: make js JS_MINIFY=0
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: compatibility
+          # Keyed by feature set, not matrix case: entries differ only in enabled
+          # features, and per-case keys would multiply caches past the repo's
+          # 10 GB cache budget.
+          key: ${{ matrix.os }}-${{ (matrix.case == 'napi-hello' || matrix.case == 'vite-plus') && 'napi' || (matrix.case == 'better-sqlite3' || matrix.case == 'v8-hello') && 'v8-compat' || 'default' }}
       - name: Build raster_runtime
         run: |
           FEATURES=""
