@@ -94,7 +94,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22.18.0
-          cache: yarn
       - run: yarn install --frozen-lockfile
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -136,7 +135,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24.3.0
-          cache: yarn
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: windows-sqlite
@@ -201,7 +199,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24.3.0
-          cache: yarn
       - run: yarn install --frozen-lockfile
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -296,7 +293,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24.3.0
-          cache: yarn
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
         with:
@@ -317,7 +313,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22.18.0
-          cache: yarn
       - run: yarn install --frozen-lockfile
       - run: make js JS_MINIFY=0
       - uses: dtolnay/rust-toolchain@stable
@@ -348,7 +343,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22.18.0
-          cache: yarn
       - run: yarn install --frozen-lockfile
       - run: make js JS_MINIFY=0
       - uses: dtolnay/rust-toolchain@stable
@@ -417,7 +411,6 @@ jobs:
         with:
           # Vite+ / Next install with Node 22.18 (not system 24.3). V8 fixtures pin 24.3 ABI.
           node-version: ${{ (matrix.case == 'better-sqlite3' || matrix.case == 'v8-hello' || matrix.case == 'node-sqlite') && '24.3.0' || '22.18.0' }}
-          cache: yarn
       - run: yarn install --frozen-lockfile
       - run: make js JS_MINIFY=0
       - uses: dtolnay/rust-toolchain@stable
