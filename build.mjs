@@ -16,6 +16,7 @@ const ENTRYPOINTS = [
   "readline/promises",
   "worker_threads",
   "http2",
+  "test",
   "@raster_runtime/test/index",
   "@raster_runtime/test/worker",
 ];
@@ -101,6 +102,8 @@ const ES_BUILD_OPTIONS = {
     "node:worker_threads",
     "http2",
     "node:http2",
+    "test",
+    "node:test",
     "querystring",
     "node:querystring",
     "diagnostics_channel",
