@@ -44,6 +44,8 @@ use thread_state::{worker_is_main_thread, worker_thread_id};
 pub struct WorkerIsolateStart {
     pub thread_id: u64,
     pub script: String,
+    /// When set, `script` is source code to evaluate instead of a file path.
+    pub eval: bool,
     pub worker_data: CloneWirePayload,
     pub env_snapshot: CloneWirePayload,
     pub to_main: UnboundedSender<WorkerToMain>,
@@ -159,7 +161,17 @@ fn spawn_worker<'js>(
         Exception::throw_type(&ctx, "worker_threads.Worker is unavailable in this build")
     })?;
 
-    let script = resolve_worker_filename(&ctx, filename)?;
+    // `new Worker(code, { eval: true })` runs the string as the worker script
+    // instead of resolving it as a file path.
+    let is_eval = options
+        .get::<_, Value>("eval")
+        .map(|v| v.as_bool().unwrap_or(false))
+        .unwrap_or(false);
+    let script = if is_eval {
+        filename
+    } else {
+        resolve_worker_filename(&ctx, filename)?
+    };
     let worker_data: Value = options
         .get("workerData")
         .unwrap_or(Undefined.into_value(ctx.clone()));
@@ -201,6 +213,7 @@ fn spawn_worker<'js>(
                 runner(WorkerIsolateStart {
                     thread_id,
                     script,
+                    eval: is_eval,
                     worker_data: worker_wire,
                     env_snapshot: env_wire,
                     to_main: to_main_tx,

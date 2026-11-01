@@ -67,10 +67,15 @@ async fn run_worker_isolate_async(start: WorkerIsolateStart) -> Result<(), Strin
                 )
                 .map_err(|e| e.to_string())?;
 
-            let script_path = resolve_script(&ctx, &start.script)?;
-            let import_url = Url::from_file_path(&script_path)
-                .map_err(|_| format!("Path is not absolute: {script_path}"))?;
-            let import_url_lit = format!("{:?}", import_url.as_str());
+            let body = if start.eval {
+                // `new Worker(code, { eval: true })`: run the string directly.
+                start.script.clone()
+            } else {
+                let script_path = resolve_script(&ctx, &start.script)?;
+                let import_url = Url::from_file_path(&script_path)
+                    .map_err(|_| format!("Path is not absolute: {script_path}"))?;
+                format!("await import({:?});", import_url.as_str())
+            };
 
             let code = format!(
                 r#"
@@ -84,7 +89,7 @@ delete globalThis.__rasterWorkerBootstrapData;
   }}
   delete globalThis.__rasterWorkerEnvironmentSnapshot;
 }})();
-await import({import_url_lit});
+{body}
 "#
             );
 
@@ -98,6 +103,17 @@ await import({import_url_lit});
             }
 
             let _ = to_main.send(WorkerToMain::Online);
+
+            // `eval` workers have no channel listener by construction, so they
+            // finish as soon as the script settles (Node semantics). A file
+            // worker keeps waiting for messages until told to terminate.
+            if start.eval {
+                let _ = to_main.send(WorkerToMain::Exit {
+                    code: 0,
+                    signal: None,
+                });
+                return Ok(());
+            }
 
             loop {
                 match from_main.recv() {
