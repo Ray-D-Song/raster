@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use rquickjs::qjs::{self, JSSharedArrayBufferFunctions};
+use rquickjs::{ArrayBuffer, ArrayBufferSource, Ctx, Exception, Function, IntoJs, Result, Value};
 
 type SabPtr = *mut std::ffi::c_void;
 
@@ -95,4 +96,75 @@ pub fn dup_block(id: u64) -> Option<*mut u8> {
 
 pub fn block_len(id: u64) -> Option<usize> {
     blocks().lock().unwrap().get(&id).map(|b| b.data.len())
+}
+
+struct WireSabHandle {
+    ptr: usize,
+    len: usize,
+}
+
+unsafe impl Send for WireSabHandle {}
+
+impl WireSabHandle {
+    fn new(id: u64) -> Option<Self> {
+        let len = block_len(id)?;
+        let ptr = dup_block(id)?;
+        Some(Self {
+            ptr: ptr as usize,
+            len,
+        })
+    }
+}
+
+unsafe impl ArrayBufferSource for WireSabHandle {
+    fn as_ptr(&self) -> *mut u8 {
+        self.ptr as *mut u8
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+}
+
+/// Wrap an existing backing block in a new isolate's `SharedArrayBuffer` (refs via `sab_dup`).
+pub fn new_shared_array_buffer_value<'js>(ctx: &Ctx<'js>, id: u64) -> Result<Value<'js>> {
+    let handle = WireSabHandle::new(id)
+        .ok_or_else(|| Exception::throw_type(ctx, "Invalid SharedArrayBuffer reference"))?;
+    ArrayBuffer::from_source_shared(ctx.clone(), handle)?.into_js(ctx)
+}
+
+fn is_valid_typed_array_name(name: &str) -> bool {
+    matches!(
+        name,
+        "Int8Array"
+            | "Uint8Array"
+            | "Uint8ClampedArray"
+            | "Int16Array"
+            | "Uint16Array"
+            | "Int32Array"
+            | "Uint32Array"
+            | "BigInt64Array"
+            | "BigUint64Array"
+            | "Float16Array"
+            | "Float32Array"
+            | "Float64Array"
+    )
+}
+
+/// Reconstruct a typed array view on shared memory in another isolate.
+pub fn new_shared_typed_array_value<'js>(
+    ctx: &Ctx<'js>,
+    id: u64,
+    byte_offset: u32,
+    byte_length: u32,
+    view_name: &str,
+) -> Result<Value<'js>> {
+    if !is_valid_typed_array_name(view_name) {
+        return Err(Exception::throw_type(ctx, "Invalid typed array on wire"));
+    }
+    let buffer = new_shared_array_buffer_value(ctx, id)?;
+    let mk: Function = ctx.eval(format!(
+        "(function (b,o,l) {{ return new {view_name}(b,o,l); }})"
+    ))?;
+    mk.call((buffer, byte_offset, byte_length))
 }

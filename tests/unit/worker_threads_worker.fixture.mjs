@@ -5,6 +5,13 @@ import {
 } from "node:worker_threads";
 
 parentPort.on("message", (msg) => {
+  if (msg?.type === "sab-add") {
+    const sab = workerData?.sab;
+    const view = new Int32Array(sab);
+    Atomics.add(view, 0, msg.delta ?? 0);
+    parentPort.postMessage({ sabOk: true, value: view[0] });
+    return;
+  }
   if (msg?.type === "clone-check") {
     const { when, tags } = msg.payload;
     parentPort.postMessage({
