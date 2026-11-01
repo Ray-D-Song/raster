@@ -67,7 +67,9 @@ pub fn adjust_http_inflight(rt: RtKey, delta: i32) {
             .http_inflight
             .fetch_add(delta as usize, Ordering::AcqRel);
     } else {
-        state.http_inflight.fetch_sub((-delta) as usize, Ordering::AcqRel);
+        state
+            .http_inflight
+            .fetch_sub((-delta) as usize, Ordering::AcqRel);
     }
     crate::driver_poll::wake_native_drivers(rt as *mut rquickjs::qjs::JSRuntime);
 }

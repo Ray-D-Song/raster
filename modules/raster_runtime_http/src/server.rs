@@ -987,8 +987,7 @@ where
     count.fetch_add(1, Ordering::Relaxed);
     let request_ctx = ctx.clone();
     let rt_ptr = unsafe { rquickjs::qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
-    let http_rt_key =
-        event_loop::rt_key_from_ptr(rt_ptr as *mut std::ffi::c_void);
+    let http_rt_key = event_loop::rt_key_from_ptr(rt_ptr as *mut std::ffi::c_void);
     let service_server = server.clone();
     let active_requests = Arc::new(AtomicUsize::new(0));
     let service_active_requests = active_requests.clone();
