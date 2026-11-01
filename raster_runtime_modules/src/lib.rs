@@ -87,6 +87,8 @@ mod modules {
     pub use raster_runtime_vm as vm;
     #[cfg(feature = "webassembly")]
     pub use raster_runtime_webassembly as webassembly;
+    #[cfg(feature = "worker-threads")]
+    pub use raster_runtime_worker_threads as worker_threads;
     #[cfg(feature = "zlib")]
     pub use raster_runtime_zlib as zlib;
 }

@@ -2394,6 +2394,7 @@ dependencies = [
  "raster_runtime_napi",
  "raster_runtime_sqlite",
  "raster_runtime_test",
+ "raster_runtime_worker_threads",
  "snmalloc-rs",
  "tokio",
  "tracing",
@@ -2862,6 +2863,7 @@ dependencies = [
  "raster_runtime_v8",
  "raster_runtime_vm",
  "raster_runtime_webassembly",
+ "raster_runtime_worker_threads",
  "raster_runtime_zlib",
  "rquickjs",
  "simd-json",
@@ -3207,6 +3209,21 @@ dependencies = [
  "wasmi",
  "wasmparser 0.239.0",
  "wat",
+]
+
+[[package]]
+name = "raster_runtime_worker_threads"
+version = "0.1.0"
+dependencies = [
+ "raster_runtime_context",
+ "raster_runtime_json",
+ "raster_runtime_utils",
+ "rquickjs",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]

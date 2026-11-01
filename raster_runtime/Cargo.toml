@@ -43,6 +43,7 @@ v8-compat = ["napi", "raster_runtime_napi/v8-compat", "raster_runtime_core/v8-co
 constcat = { version = "0.6", default-features = false }
 jiff = { version = "0.2" }
 raster_runtime_core = { path = "../raster_runtime_core", default-features = false }
+raster_runtime_worker_threads = { path = "../modules/raster_runtime_worker_threads" }
 raster_runtime_sqlite = { path = "../modules/raster_runtime_sqlite", optional = true }
 raster_runtime_napi = { path = "../modules/raster_runtime_napi", optional = true }
 v8_compat = { path = "../v8_compat", optional = true }
