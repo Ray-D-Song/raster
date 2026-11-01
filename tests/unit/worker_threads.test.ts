@@ -190,5 +190,51 @@ describe("worker_threads Worker spawn", () => {
     worker.postMessage({ ping: 1 });
     expect(await reply).toEqual({ pong: 1, workerData: { tag: "hello" } });
     worker.terminate();
+    await new Promise<void>((resolve) => worker.once("exit", () => resolve()));
+  });
+
+  it("passes structured-clone payloads (Date, Map) across process IPC", async () => {
+    const { Worker } = await import("node:worker_threads");
+    const { join } = await import("node:path");
+    const workerPath = join(
+      process.cwd(),
+      "tests/unit/worker_threads_worker.fixture.mjs"
+    );
+    const worker = new Worker(workerPath, { workerData: null });
+    await new Promise<void>((resolve) => worker.once("online", resolve));
+    const when = new Date("2020-01-02T03:04:05.000Z");
+    const payload = { when, tags: new Map([["a", 1]]) };
+    const reply = new Promise<unknown>((resolve) => {
+      worker.once("message", resolve);
+    });
+    worker.postMessage({ type: "clone-check", payload });
+    const got = (await reply) as { ok?: boolean; when?: string; mapSize?: number };
+    expect(got.ok).toBe(true);
+    expect(got.when).toBe(when.toISOString());
+    expect(got.mapSize).toBe(1);
+    worker.terminate();
+    await new Promise<void>((resolve) => worker.once("exit", () => resolve()));
+  });
+
+  it("syncs environmentData to workers", async () => {
+    const { Worker, setEnvironmentData, getEnvironmentData } = await import(
+      "node:worker_threads"
+    );
+    const { join } = await import("node:path");
+    setEnvironmentData("raster-worker-env-key", { v: 42 });
+    const workerPath = join(
+      process.cwd(),
+      "tests/unit/worker_threads_worker.fixture.mjs"
+    );
+    const worker = new Worker(workerPath, { workerData: { askEnv: true } });
+    await new Promise<void>((resolve) => worker.once("online", resolve));
+    const reply = new Promise<unknown>((resolve) => {
+      worker.once("message", resolve);
+    });
+    worker.postMessage({ ping: 2 });
+    expect(await reply).toEqual({ envV: 42 });
+    worker.terminate();
+    await new Promise<void>((resolve) => worker.once("exit", () => resolve()));
+    expect(getEnvironmentData("raster-worker-env-key")).toEqual({ v: 42 });
   });
 });

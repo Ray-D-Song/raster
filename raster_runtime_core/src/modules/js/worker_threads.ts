@@ -11,17 +11,25 @@ declare global {
   var __rasterWorkerSpawn:
     | ((
         filename: string,
-        workerDataJson: string,
+        options: Record<string, unknown>,
         onEvent: (event: string, arg?: unknown) => void
       ) => {
         threadId: number;
-        postMessage: (data: unknown) => void;
+        postMessage: (data: unknown, transfer?: unknown[]) => void;
         terminate: () => void;
         ref: () => void;
         unref: () => void;
       })
     | undefined;
-  var __rasterWorkerParentPostMessage: ((json: string) => void) | undefined;
+  var __rasterWorkerParentPostMessage:
+    | ((data: unknown, transfer?: unknown[]) => void)
+    | undefined;
+  var __rasterWorkerBroadcastEnv:
+    | ((key: unknown, value: unknown) => void)
+    | undefined;
+  var __rasterWorkerApplyEnvironmentSnapshot: ((snapshot: unknown) => void) | undefined;
+  var __rasterWorkerApplyEnvPatch: ((key: unknown, value: unknown) => void) | undefined;
+  var __rasterWorkerDispatchParentMessage: ((data: unknown) => void) | undefined;
   var __rasterCreateLoopRefController: () => {
     ref(): void;
     unref(): void;
@@ -52,7 +60,57 @@ export const workerData: unknown = isMainThread
 
 type LoopRefController = ReturnType<typeof __rasterCreateLoopRefController>;
 
+/** Worker-side environment mirror (synced from main via bootstrap / patches). */
+const workerEnvironmentData = new Map<unknown, unknown>();
+
+const envBootstrap = (globalThis as { __rasterWorkerEnvBootstrap?: Map<unknown, unknown> })
+  .__rasterWorkerEnvBootstrap;
+if (envBootstrap) {
+  for (const [k, v] of envBootstrap.entries()) {
+    workerEnvironmentData.set(k, v);
+  }
+  delete (globalThis as { __rasterWorkerEnvBootstrap?: Map<unknown, unknown> })
+    .__rasterWorkerEnvBootstrap;
+}
+
+globalThis.__rasterWorkerApplyEnvironmentSnapshot = (snapshot: unknown) => {
+  workerEnvironmentData.clear();
+  if (snapshot && typeof snapshot === "object") {
+    for (const [k, v] of Object.entries(snapshot as Record<string, unknown>)) {
+      workerEnvironmentData.set(k, v);
+    }
+  }
+};
+
+globalThis.__rasterWorkerApplyEnvPatch = (key: unknown, value: unknown) => {
+  workerEnvironmentData.set(key, value);
+};
+
 const environmentData = new Map<unknown, unknown>();
+
+function environmentSnapshotForSpawn(): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of environmentData.entries()) {
+    out[String(k)] = v;
+  }
+  return out;
+}
+
+function transferOptions(transfer?: unknown[]): { transfer: unknown[] } | undefined {
+  if (transfer == null) return undefined;
+  if (!Array.isArray(transfer)) {
+    throw new TypeError('The "transferList" argument must be an instance of Array.');
+  }
+  if (transfer.length === 0) return undefined;
+  return { transfer };
+}
+
+export interface WorkerOptions {
+  workerData?: unknown;
+  env?: Record<string, string>;
+  argv?: string[];
+  name?: string;
+}
 
 function toDataCloneError(err: unknown): DOMException {
   if (
@@ -190,26 +248,14 @@ class WorkerParentPort extends MessagePort {
     if (typeof globalThis.__rasterWorkerParentPostMessage !== "function") {
       throw new Error("worker parent IPC is unavailable");
     }
-    let transferOptions: { transfer: unknown[] } | undefined;
-    if (transfer != null) {
-      if (!Array.isArray(transfer)) {
-        throw new TypeError(
-          'The "transferList" argument must be an instance of Array.'
-        );
-      }
-      if (transfer.length > 0) {
-        transferOptions = { transfer };
-      }
-    }
-    let cloned: unknown;
     try {
-      cloned = transferOptions
-        ? structuredClone(message, transferOptions as object)
-        : structuredClone(message);
+      globalThis.__rasterWorkerParentPostMessage(
+        message,
+        transferOptions(transfer)
+      );
     } catch (err) {
       throw toDataCloneError(err);
     }
-    globalThis.__rasterWorkerParentPostMessage(JSON.stringify(cloned));
   }
 }
 
@@ -226,55 +272,44 @@ export const parentPort: WorkerParentPort | null = isMainThread
 export class Worker extends EventEmitter {
   readonly threadId: number;
   #handle: {
-    postMessage: (json: string) => void;
+    postMessage: (data: unknown, transfer?: { transfer?: unknown[] }) => void;
     terminate: () => void;
     ref: () => void;
     unref: () => void;
   };
 
-  constructor(filename: string | URL, options: { workerData?: unknown } = {}) {
+  constructor(filename: string | URL, options: WorkerOptions = {}) {
     super();
-    if (!isMainThread) {
-      throw new Error("Worker is not supported inside a worker");
-    }
     if (typeof globalThis.__rasterWorkerSpawn !== "function") {
       throw new Error("worker_threads.Worker is unavailable in this build");
     }
-    const path =
-      filename instanceof URL ? filename.href : String(filename);
-    const workerDataOpt = options.workerData ?? null;
-    const handle = globalThis.__rasterWorkerSpawn(
-      path,
-      JSON.stringify(workerDataOpt),
-      (event, arg) => {
-        this.emit(event, arg);
+    const path = filename instanceof URL ? filename.href : String(filename);
+    const spawnOptions: Record<string, unknown> = {
+      workerData: options.workerData ?? null,
+      rasterEnvironmentSnapshot: environmentSnapshotForSpawn(),
+    };
+    if (options.env != null) spawnOptions.env = options.env;
+    if (options.argv != null) spawnOptions.argv = options.argv;
+    if (options.name != null) spawnOptions.name = options.name;
+
+    const handle = globalThis.__rasterWorkerSpawn(path, spawnOptions, (event, arg) => {
+      if (event === "exit" && arg != null && typeof arg === "object") {
+        const rec = arg as { code?: unknown; signal?: unknown };
+        this.emit("exit", rec.code ?? 0, rec.signal ?? null);
+        return;
       }
-    );
+      this.emit(event, arg);
+    });
     this.threadId = handle.threadId;
     this.#handle = handle;
   }
 
   postMessage(value: unknown, transfer?: unknown[]): void {
-    let transferOptions: { transfer: unknown[] } | undefined;
-    if (transfer != null) {
-      if (!Array.isArray(transfer)) {
-        throw new TypeError(
-          'The "transferList" argument must be an instance of Array.'
-        );
-      }
-      if (transfer.length > 0) {
-        transferOptions = { transfer };
-      }
-    }
-    let cloned: unknown;
     try {
-      cloned = transferOptions
-        ? structuredClone(value, transferOptions as object)
-        : structuredClone(value);
+      this.#handle.postMessage(value, transferOptions(transfer));
     } catch (err) {
       throw toDataCloneError(err);
     }
-    this.#handle.postMessage(JSON.stringify(cloned));
   }
 
   terminate(): void {
@@ -304,14 +339,22 @@ export class MessageChannel {
 }
 
 export function getEnvironmentData(key: unknown): unknown {
-  if (!environmentData.has(key)) {
+  const store = readIsMainThread() ? environmentData : workerEnvironmentData;
+  if (!store.has(key)) {
     return undefined;
   }
-  return structuredClone(environmentData.get(key));
+  return structuredClone(store.get(key));
 }
 
 export function setEnvironmentData(key: unknown, value: unknown): void {
-  environmentData.set(key, structuredClone(value));
+  if (!isMainThread) {
+    throw new Error("setEnvironmentData is not supported in workers");
+  }
+  const cloned = structuredClone(value);
+  environmentData.set(key, cloned);
+  if (typeof globalThis.__rasterWorkerBroadcastEnv === "function") {
+    globalThis.__rasterWorkerBroadcastEnv(key, cloned);
+  }
 }
 
 export function markAsUntransferable(_object: unknown): void {}
