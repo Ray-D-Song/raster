@@ -4,10 +4,6 @@
 //! Node-compatible process shutdown: drain the event loop, emit `beforeExit`,
 //! drain again, then emit `exit` — the process only leaves through an explicit
 //! `process.exit()`/signal default, never through `std::process::exit` here.
-//!
-//! One turn of the loop is: run pending JS work (`Vm::idle`), poll native
-//! drivers, dispatch queued OS signals, then re-check whether anything still
-//! keeps the process alive.
 
 use std::sync::atomic::Ordering;
 
@@ -29,9 +25,6 @@ use crate::signal_bridge;
 static SIGNAL_EXIT_REQUESTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-/// How long a drain turn waits on `Vm::idle` before re-checking liveness.
-const DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(20);
-
 pub async fn run_until_process_exit(
     vm: &Vm,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -42,8 +35,7 @@ pub async fn run_until_process_exit(
             continue;
         }
 
-        idle_turn(vm).await?;
-        poll_drivers(vm).await;
+        run_event_loop(vm, rt_key).await?;
 
         if schedule_signals(vm).await? {
             continue;
@@ -54,7 +46,6 @@ pub async fn run_until_process_exit(
         }
 
         if stay_alive(vm, rt_key).await? {
-            wait_for_loop_wake(rt_key).await;
             continue;
         }
 
@@ -63,8 +54,7 @@ pub async fn run_until_process_exit(
             .await
             .map_err(|e: rquickjs::Error| e.to_string())?;
 
-        idle_turn(vm).await?;
-        poll_drivers(vm).await;
+        run_event_loop(vm, rt_key).await?;
 
         if schedule_signals(vm).await? {
             continue;
@@ -75,7 +65,6 @@ pub async fn run_until_process_exit(
         }
 
         if stay_alive(vm, rt_key).await? {
-            wait_for_loop_wake(rt_key).await;
             continue;
         }
 
@@ -87,7 +76,8 @@ pub async fn run_until_process_exit(
             .await
             .map_err(|e: rquickjs::Error| e.to_string())?;
 
-        idle_turn(vm).await?;
+        run_event_loop(vm, rt_key).await?;
+        poll_drivers(vm).await;
 
         vm.ctx
             .with(|ctx| emit_process_exit(&ctx))
@@ -100,11 +90,39 @@ pub async fn run_until_process_exit(
     Ok(())
 }
 
-/// Run one turn of the QuickJS event loop, returning early when an OS signal is
-/// queued or the poll interval elapses so the drain loop can re-check liveness.
-/// `idle` parks while any spawned task is pending, including tasks that merely
-/// wait on another handle.
-async fn idle_turn(vm: &Vm) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+/// Let pending JS work run, then poll native drivers.
+///
+/// `idle` is never cancelled: dropping it mid-poll skips the runtime's pending
+/// context cleanup and strands JS values, which later aborts teardown with
+/// QuickJS's `gc_obj_list` assertion. It parks while spawned tasks are pending,
+/// so the handles that own those tasks release the loop reference when they
+/// finish; when they do, the quiescence notify wakes this wait.
+async fn run_event_loop(
+    vm: &Vm,
+    rt_key: usize,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    loop {
+        poll_drivers(vm).await;
+        if !stay_alive(vm, rt_key).await? {
+            // Nothing owns pending work any more: take one last bounded turn so
+            // already-runnable JS callbacks still execute, then stop.
+            idle_bounded(vm).await?;
+            poll_drivers(vm).await;
+            return Ok(());
+        }
+
+        idle_until_wake(vm, rt_key).await?;
+        poll_drivers(vm).await;
+    }
+}
+
+/// Run the loop until it settles or a signal arrives.
+///
+/// Used only when no handle keeps the loop alive. `idle` is never cancelled:
+/// dropping it mid-poll skips the runtime's pending-context cleanup and strands
+/// JS values, which later aborts teardown with QuickJS's `gc_obj_list`
+/// assertion.
+async fn idle_bounded(vm: &Vm) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     #[cfg(target_family = "wasm")]
     {
         vm.idle().await?;
@@ -113,26 +131,65 @@ async fn idle_turn(vm: &Vm) -> Result<(), Box<dyn std::error::Error + Send + Syn
 
     #[cfg(not(target_family = "wasm"))]
     {
-        if signal_bridge::has_pending_signal() {
-            return Ok(());
-        }
-
         let wake = signal_bridge::wake_handle();
         tokio::select! {
             res = vm.idle() => res?,
             _ = wake.notified() => {},
-            _ = sleep(DRAIN_POLL_INTERVAL) => {},
         }
 
         Ok(())
     }
 }
 
+/// Run the loop while a referenced handle is alive, waking on quiescence or a
+/// signal instead of polling, so `idle` is never cancelled mid-flight.
+async fn idle_until_wake(
+    vm: &Vm,
+    rt_key: usize,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if signal_bridge_active() {
+        return Ok(());
+    }
+
+    let quiescent = quiescence_watch(rt_key);
+
+    #[cfg(target_family = "wasm")]
+    {
+        let _ = quiescent;
+        vm.idle().await?;
+        return Ok(());
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let wake = signal_bridge::wake_handle();
+        tokio::select! {
+            res = vm.idle() => res?,
+            _ = wake.notified() => {},
+            _ = quiescent.notified() => {},
+        }
+
+        Ok(())
+    }
+}
+
+fn signal_bridge_active() -> bool {
+    #[cfg(target_family = "wasm")]
+    {
+        false
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    {
+        signal_bridge::has_pending_signal()
+    }
+}
+
 /// Queue JS tasks for signals that arrived since the last turn.
 ///
 /// The tasks are spawned into the runtime so they run inside `idle`, on the JS
-/// thread and with the module's context — signal streams itself must not touch
-/// QuickJS.
+/// thread and with the module's context — signal streams themselves must not
+/// touch QuickJS.
 async fn schedule_signals(vm: &Vm) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     #[cfg(target_family = "wasm")]
     {
@@ -236,12 +293,4 @@ async fn stay_alive(vm: &Vm, rt_key: usize) -> Result<bool, String> {
 fn event_loop_alive(rt_key: usize, rt: *mut qjs::JSRuntime) -> bool {
     raster_runtime_utils::event_loop::should_keep_process_alive(rt_key)
         || raster_runtime_timers::keeps_timers_alive(rt)
-}
-
-async fn wait_for_loop_wake(rt_key: usize) {
-    let quiescent = quiescence_watch(rt_key);
-    tokio::select! {
-        _ = quiescent.notified() => {},
-        _ = sleep(Duration::from_millis(50)) => {},
-    }
 }
