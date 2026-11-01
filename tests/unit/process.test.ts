@@ -332,3 +332,43 @@ describe("unhandledRejection timing", () => {
     expect((globalThis as any).__rasterRejectionSchedule).toBeUndefined();
   });
 });
+
+describe("process lifecycle drain", () => {
+  it("emits exit on natural drain without process.exit", async () => {
+    const { code, stderr } = await spawnCapture(process.argv[0], [
+      "-e",
+      `process.on("exit", (c) => { console.error("exit:" + c); });`,
+    ]);
+    expect(code).toBe(0);
+    expect(stderr).toContain("exit:0");
+  });
+
+  it("emits beforeExit when the loop would otherwise drain", async () => {
+    const { code, stderr } = await spawnCapture(process.argv[0], [
+      "-e",
+      `
+        let sawBeforeExit = false;
+        process.on("beforeExit", () => { sawBeforeExit = true; });
+        process.on("exit", () => {
+          console.error("beforeExit:" + sawBeforeExit);
+        });
+      `,
+    ]);
+    expect(code).toBe(0);
+    expect(stderr).toContain("beforeExit:true");
+  });
+
+  it("waits for referenced timers before exit", async () => {
+    const start = Date.now();
+    const { code, stderr } = await spawnCapture(process.argv[0], [
+      "-e",
+      `
+        process.on("exit", (c) => console.error("exit:" + c));
+        setTimeout(() => {}, 80).ref();
+      `,
+    ]);
+    expect(code).toBe(0);
+    expect(stderr).toContain("exit:0");
+    expect(Date.now() - start).toBeGreaterThanOrEqual(40);
+  });
+});
