@@ -4,10 +4,12 @@
 
 #[cfg(unix)]
 mod fork;
+#[cfg(unix)]
 mod ipc_channel;
 
 #[cfg(unix)]
 pub use fork::fork;
+#[cfg(unix)]
 pub use ipc_channel::install_child_process_ipc;
 
 #[cfg(windows)]
@@ -210,7 +212,13 @@ impl<'js> ChildProcess<'js> {
         message: Value<'js>,
         transfer: Opt<Value<'js>>,
     ) -> Result<bool> {
-        ipc_channel::child_send(this, ctx, message, transfer)
+        #[cfg(unix)]
+        return ipc_channel::child_send(this, ctx, message, transfer);
+        #[cfg(not(unix))]
+        {
+            let _ = (this, ctx, message, transfer);
+            Ok(false)
+        }
     }
 }
 
