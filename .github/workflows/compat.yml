@@ -2,6 +2,11 @@ name: Compatibility
 
 on:
   pull_request:
+  # Keeps refs/heads/main's rust-cache + yarn caches fresh: PR jobs can only
+  # restore caches from their base branch, and a stale main cache means PRs
+  # rebuild from scratch. Also doubles as post-merge verification.
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       case_filter:
