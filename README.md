@@ -79,7 +79,7 @@ The test runner also has support for filters. Using filters is as simple as addi
 | node:stream/promises                             | ✔︎       | ✔︎\*            |
 | node:stream/web                                  | ✔︎       | ✔︎⚠️            |
 | node:string_decoder                              | ✔︎       | ✔︎              |
-| node:test                                        | ✔︎       | ✘              |
+| node:test                                        | ✔︎       | ✔︎\*            |
 | node:timers                                      | ✔︎       | ✔︎⚠️            |
 | node:timers/promises                             | ✔︎       | ✔︎⚠️            |
 | node:tls                                         | ✔︎       | ✔︎⚠️            |

@@ -718,6 +718,10 @@ Also available as `node:stream/web`. `TextEncoderStream` and `TextDecoderStream`
 
 [StringDecoder](https://nodejs.org/api/string_decoder.html#class-stringdecoder)
 
+## test
+
+> Embedded JS (`bundle/js/test.js`). Exports `test`, `describe` / `suite`, `it`, hook helpers, `test.skip` / `only` / `todo`, and `run()` (summary object). Top-level `test()` runs immediately and returns a `Promise`. Node’s `TestsStream` / `node --test` file discovery are not implemented yet.
+
 ## timers
 
 _Also available globally_

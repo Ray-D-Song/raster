@@ -151,6 +151,7 @@ async fn main() -> Result<(), Error> {
 | stream / stream/promises | ✔︎ | ✔︎ | N/A | `raster_runtime_stream` / embedded JS |
 | stream/web | ✔︎ | ⚠️ | `stream-web` | `raster_runtime_stream_web` |
 | string_decoder | ✔︎ | ✔︎ | `string-decoder` | `raster_runtime_string_decoder` |
+| test | ✔︎ | ✔︎ | N/A | embedded JS (`test.js`) |
 | temporal | ✔︎ | ⚠️ | `temporal` | `raster_runtime_temporal` |
 | timers / timers/promises | ✔︎ | ⚠️ | `timers` | `raster_runtime_timers` |
 | tls | ✔︎ | ⚠️ | `tls` | `raster_runtime_tls` |
