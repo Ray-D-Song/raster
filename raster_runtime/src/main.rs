@@ -13,11 +13,14 @@ use std::{
 };
 
 mod base;
+mod drain;
 #[cfg(unix)]
 mod fork_child;
 mod minimal_tracer;
 #[cfg(not(target_family = "wasm"))]
 mod repl;
+#[cfg(not(target_family = "wasm"))]
+mod signal_bridge;
 mod worker_isolate;
 
 use constcat::concat;
@@ -164,7 +167,10 @@ async fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
 
     start_cli(&vm).await;
 
-    vm.idle().await?;
+    #[cfg(not(target_family = "wasm"))]
+    signal_bridge::install(&vm).await?;
+
+    drain::run_until_process_exit(&vm).await?;
 
     #[cfg(feature = "napi")]
     {

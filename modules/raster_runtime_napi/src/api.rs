@@ -80,6 +80,22 @@ pub fn poll_pending_drivers(rt: *mut rquickjs::qjs::JSRuntime) {
     }
 }
 
+/// Whether this runtime still has driver work (async work, referenced TSFNs,
+/// queued jobs). Used by the process drain loop, which cannot see these tasks
+/// through the event-loop reference count.
+pub fn drivers_busy(rt: *mut rquickjs::qjs::JSRuntime) -> bool {
+    crate::async_work::has_refed_tsfn()
+        || crate::async_work::has_pending_async_work()
+        || crate::dlopen::env_ptrs_for_runtime(rt)
+            .into_iter()
+            .any(|ptr| {
+                let env = unsafe { &*ptr };
+                env.driver
+                    .as_ref()
+                    .is_some_and(|driver| driver.should_keep_loop_alive())
+            })
+}
+
 // --- Module registration ---
 
 #[no_mangle]

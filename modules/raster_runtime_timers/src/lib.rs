@@ -79,6 +79,9 @@ pub struct Timeout {
     /// fires destroy after After once this flag is set.
     pending_destroy: bool,
     referenced: bool,
+    /// The same handle the JS `TimerHandle` holds, so clearing the timer can
+    /// release its hold on the event loop.
+    loop_ref: Arc<EventLoopRef>,
 }
 
 impl Default for Timeout {
@@ -93,6 +96,7 @@ impl Default for Timeout {
             interval: 0,
             pending_destroy: false,
             referenced: true,
+            loop_ref: EventLoopRef::new_unreferenced(0),
         }
     }
 }
@@ -277,6 +281,7 @@ pub fn set_timeout_interval<'js>(
         interval: delay,
         pending_destroy: false,
         referenced,
+        loop_ref: loop_ref.clone(),
     };
 
     let mut rt_timer = RT_TIMER_STATE.lock().unwrap();
@@ -348,6 +353,10 @@ fn clear_timeout_interval<'js>(ctx: Ctx<'js>, id: Opt<Value<'js>>) -> Result<()>
             let _ = timeout.callback.take();
             timeout.repeating = false;
             timeout.deadline = Instant::now() - Duration::from_secs(1);
+            // A cleared timer owns no further work: release its hold on the
+            // event loop and drop the entry so the process can drain.
+            timeout.referenced = false;
+            timeout.loop_ref.clone().unreference();
             let hook_id = timeout.hook_id;
             // If this timer's own callback is currently executing, defer the
             // destroy until After has run and popped the async context
@@ -768,6 +777,10 @@ pub fn poll_timers(
             let ctx = timeout.raw_ctx;
             if let Some(cb) = timeout.callback.take() {
                 if !timeout.repeating {
+                    // A one-shot timer is finished once it has fired: release
+                    // its hold on the loop so the process can drain.
+                    timeout.referenced = false;
+                    timeout.loop_ref.unreference();
                     call_vec.push(Some(ExecutingTimer(
                         timeout.deadline,
                         ctx,
@@ -868,6 +881,9 @@ pub fn poll_timers(
                         {
                             let _ = func.call::<_, ()>(("destroy", "Timeout", hook_id));
                         }
+                        let mut rt_timers = RT_TIMER_STATE.lock().unwrap();
+                        let state = get_timer_state(&mut rt_timers, rt);
+                        state.timers.retain(|t| t.hook_id != hook_id);
                     }
                 }
             }
@@ -895,6 +911,69 @@ pub fn poll_timers(
     state.running = true;
     drop(rt_timers);
     Ok(true)
+}
+
+/// Whether referenced timers or HTTP/ref state require the timer loop to stay up.
+pub fn keeps_timers_alive(rt: *mut qjs::JSRuntime) -> bool {
+    let rt_key = event_loop::rt_key_from_ptr(rt as *mut std::ffi::c_void);
+    let Ok(guard) = RT_TIMER_STATE.lock() else {
+        return false;
+    };
+    let Some(state) = guard.iter().find(|s| s.rt == rt) else {
+        return false;
+    };
+    should_keep_timer_loop(state, rt_key)
+}
+
+/// Any scheduled timer callback (including unref) still pending execution.
+pub fn has_pending_timer_callbacks(rt: *mut qjs::JSRuntime) -> bool {
+    let Ok(guard) = RT_TIMER_STATE.lock() else {
+        return false;
+    };
+    guard
+        .iter()
+        .find(|s| s.rt == rt)
+        .is_some_and(|state| state.timers.iter().any(|t| t.callback.is_some()))
+}
+
+/// Drop every pending timer callback for this runtime before a natural exit.
+///
+/// Node does not run timers left over at shutdown, and holding their
+/// `Persistent<Function>` values past runtime teardown trips QuickJS's
+/// `list_empty(&rt->gc_obj_list)` assertion. Referenced callbacks normally keep
+/// the loop alive, so reaching this point means we are exiting regardless.
+pub fn discard_all_timers_on_process_exit<'js>(
+    ctx: &Ctx<'js>,
+    rt: *mut qjs::JSRuntime,
+) -> Result<()> {
+    let destroy_ids: Vec<usize> = {
+        let mut rt_timers = RT_TIMER_STATE.lock().unwrap();
+        let state = get_timer_state(&mut rt_timers, rt);
+        let ids: Vec<usize> = state
+            .timers
+            .iter()
+            .filter(|t| t.callback.is_some())
+            .map(|t| t.hook_id)
+            .collect();
+        for timeout in state.timers.iter_mut() {
+            timeout.callback.take();
+            timeout.repeating = false;
+            timeout.loop_ref.unreference();
+        }
+        state.timers.clear();
+        state.running = false;
+        state.notify.notify_one();
+        ids
+    };
+
+    if let Ok(Some(func)) = ctx.globals().get_optional::<_, Function>("invokeAsyncHook") {
+        for hook_id in destroy_ids {
+            if hook_id != 0 {
+                let _ = func.call::<_, ()>(("destroy", "Timeout", hook_id));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

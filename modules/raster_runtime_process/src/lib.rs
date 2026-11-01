@@ -39,6 +39,8 @@ static PROCESS_ARGV: OnceLock<Vec<String>> = OnceLock::new();
 pub static NO_WARNINGS: AtomicBool = AtomicBool::new(false);
 pub static TRACE_WARNINGS: AtomicBool = AtomicBool::new(false);
 
+pub mod lifecycle;
+
 fn process_id() -> u32 {
     #[cfg(target_family = "wasm")]
     {
@@ -304,8 +306,7 @@ fn to_exit_code(ctx: &Ctx<'_>, code: &Value<'_>) -> Result<Option<u8>> {
 }
 
 /// Synchronously emit `process` `"exit"` without terminating the process.
-/// Used by `process.exit` before `std::process::exit`.
-fn emit_exit<'js>(ctx: &Ctx<'js>, process: &Object<'js>, code: u8) -> Result<()> {
+pub(crate) fn emit_exit<'js>(ctx: &Ctx<'js>, process: &Object<'js>, code: u8) -> Result<()> {
     let emit: Function = process.get("emit")?;
     let mut args = Args::new(ctx.clone(), 2);
     args.this(process.clone())?;

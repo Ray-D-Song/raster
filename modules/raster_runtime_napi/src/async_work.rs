@@ -465,6 +465,21 @@ pub(crate) fn has_pending_tsfn() -> bool {
     !TSFN_REGISTRY.lock().is_empty()
 }
 
+/// Whether any TSFN is still referenced, i.e. keeps the event loop alive.
+///
+/// An unref'd TSFN must not hold the process open: Node lets it exit while the
+/// callback is still pending.
+pub(crate) fn has_refed_tsfn() -> bool {
+    TSFN_REGISTRY.lock().values().any(|tsfn| {
+        tsfn.idle_refs.load(Ordering::SeqCst) != 0 && tsfn.refs.load(Ordering::SeqCst) != 0
+    })
+}
+
+/// Whether any async work item is still queued or running.
+pub(crate) fn has_pending_async_work() -> bool {
+    !ASYNC_WORK_REGISTRY.lock().is_empty()
+}
+
 fn tsfn_snapshot_all() -> Vec<Arc<ThreadsafeFunction>> {
     TSFN_REGISTRY.lock().values().cloned().collect()
 }

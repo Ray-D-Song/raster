@@ -544,7 +544,7 @@ _performance is available globally_
 
 _process is available globally_
 
-Process is an EventEmitter. Explicit `process.exit(code)` emits `"exit"` synchronously before terminating. OS signal bridging and natural event-loop drain exit events are not implemented yet.
+Process is an EventEmitter. Explicit `process.exit(code)` emits `"exit"` synchronously before terminating. When the event loop drains naturally, `"beforeExit"` then `"exit"` are emitted with the current `process.exitCode`. OS signals (`SIGINT`, `SIGTERM`, `SIGHUP` on Unix; Ctrl+C on Windows) are bridged to `process.emit("signal", name)`; default termination matches Node when no `"signal"` listener is registered.
 
 `process.version` / `process.versions.node` advertise Node `24.3.0` for ecosystem gates; `process.versions.raster_runtime` and CLI `--version` remain the real Raster version.
 

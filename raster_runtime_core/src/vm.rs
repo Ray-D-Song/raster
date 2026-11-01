@@ -30,6 +30,7 @@ use crate::{environment, http, security};
 pub struct Vm {
     pub runtime: AsyncRuntime,
     pub ctx: AsyncContext,
+    rt_key: usize,
 }
 
 pub struct VmOptions {
@@ -152,7 +153,23 @@ impl Vm {
             )))
             .await;
 
-        Ok(Vm { runtime, ctx })
+        let rt_key = ctx
+            .with(|c| {
+                Ok::<_, Error>(raster_runtime_utils::event_loop::rt_key_from_ptr(unsafe {
+                    rquickjs::qjs::JS_GetRuntime(c.as_raw().as_ptr()) as *mut std::ffi::c_void
+                }))
+            })
+            .await?;
+
+        Ok(Vm {
+            runtime,
+            ctx,
+            rt_key,
+        })
+    }
+
+    pub fn js_runtime_key(&self) -> usize {
+        self.rt_key
     }
 
     pub async fn new() -> StdResult<Self, Box<dyn std::error::Error + Send + Sync>> {

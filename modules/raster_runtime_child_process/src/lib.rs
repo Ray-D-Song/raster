@@ -323,18 +323,28 @@ impl<'js> ChildProcess<'js> {
                         )?;
 
                         if let Some(stderr_join_receiver) = stderr_join_receiver {
-                            //ok if sender drops
-                            let _ = stderr_join_receiver.await;
+                            // Ok if the sender drops. Buffered output without a
+                            // `data` listener parks in the stream loop, so bound
+                            // the wait: the child is already gone and Node emits
+                            // `close` regardless.
+                            let _ = tokio::time::timeout(
+                                tokio::time::Duration::from_millis(50),
+                                stderr_join_receiver,
+                            )
+                            .await;
                         }
                         if let Some(stdout_join_receiver) = stdout_join_receiver {
-                            //ok if sender drops
-                            let _ = stdout_join_receiver.await;
+                            let _ = tokio::time::timeout(
+                                tokio::time::Duration::from_millis(50),
+                                stdout_join_receiver,
+                            )
+                            .await;
                         }
 
                         WritableStream::end(This(stdin_instance));
 
-                        ReadableStream::drain(stdout_instance, &ctx3)?;
-                        ReadableStream::drain(stderr_instance, &ctx3)?;
+                        ReadableStream::drain(stdout_instance.clone(), &ctx3)?;
+                        ReadableStream::drain(stderr_instance.clone(), &ctx3)?;
 
                         ChildProcess::emit_str(
                             instance2.clone(),
@@ -343,6 +353,17 @@ impl<'js> ChildProcess<'js> {
                             vec![code, signal],
                             false,
                         )?;
+
+                        // The child is reaped: its stdio read loops have nothing
+                        // left to deliver. Leaving them parked keeps a spawned
+                        // task pending forever, so a natural exit can never
+                        // observe an idle loop.
+                        ReadableStream::destroy(This(stdout_instance), Opt(None));
+                        ReadableStream::destroy(This(stderr_instance), Opt(None));
+
+                        // The child handle is done; Node releases it before the
+                        // loop can go idle, so stop keeping the process alive.
+                        instance2.borrow().loop_ref.unreference();
 
                         Ok::<_, Error>(())
                     };

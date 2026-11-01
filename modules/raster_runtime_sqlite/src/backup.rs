@@ -113,6 +113,15 @@ pub fn backup<'js>(
     let resolve_p = Persistent::save(&ctx, resolve);
     let reject_p = Persistent::save(&ctx, reject);
 
+    // The backup runs as a spawned task while the loop is otherwise idle, so it
+    // must hold a loop reference: otherwise a natural drain could decide the
+    // process is finished while SQLite is still stepping pages.
+    let loop_ref = {
+        let rt = unsafe { rquickjs::qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+        let rt_key = raster_runtime_utils::event_loop::rt_key_from_ptr(rt as *mut std::ffi::c_void);
+        raster_runtime_utils::event_loop::EventLoopRef::new_referenced(rt_key)
+    };
+
     let source_ptr = inner.connection_ptr()?;
     let dest_c = CString::new(dest_path).map_err(|_| Error::Unknown)?;
     let mut dest_ptr: *mut sqlite3 = ptr::null_mut();
@@ -167,6 +176,8 @@ pub fn backup<'js>(
 
     ctx.clone().spawn(async move {
         let result = run_backup_steps(state, &ctx).await;
+        // Release the loop reference only after the promise settles.
+        drop(loop_ref);
         match result {
             Ok(total_pages) => {
                 if let Ok(resolve) = resolve_p.clone().restore(&ctx) {

@@ -39,6 +39,7 @@ pub fn register_async_context(ctx: std::ptr::NonNull<rquickjs::qjs::JSContext>) 
     init_v8_shim();
     let _ = ctx;
     raster_runtime_utils::driver_poll::set_driver_poll_hook(Some(crate::api::poll_pending_drivers));
+    raster_runtime_utils::driver_poll::set_driver_busy_hook(Some(crate::api::drivers_busy));
 }
 
 pub const NAPI_VERSION: u32 = 9;

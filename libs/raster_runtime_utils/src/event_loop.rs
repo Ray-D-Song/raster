@@ -14,6 +14,8 @@ use tokio::sync::Notify;
 
 type RtKey = usize;
 
+pub type RuntimeLoopKey = RtKey;
+
 struct RuntimeLoopState {
     refs: AtomicUsize,
     /// In-flight HTTP request handlers (keeps timer loop polling unref timers).
@@ -53,6 +55,10 @@ pub fn rt_key_from_ptr(rt: *mut std::ffi::c_void) -> RtKey {
 
 pub fn has_refed_handles(rt: RtKey) -> bool {
     state_for(rt).refs.load(Ordering::Acquire) > 0
+}
+
+pub fn should_keep_process_alive(rt: RtKey) -> bool {
+    has_refed_handles(rt) || has_http_inflight(rt)
 }
 
 pub fn has_http_inflight(rt: RtKey) -> bool {
