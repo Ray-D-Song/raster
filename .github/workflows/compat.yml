@@ -98,7 +98,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22.18.0
-          cache: yarn
+          # No yarn cache: installs 15 devDependencies (264 MB unpacked) and the
+          # restore (13-19 s) costs more than the install it saves (2-13 s), for
+          # ~888 MB of a 10 GB cache budget. Measured on rust-unit-tests.
       - run: yarn install --frozen-lockfile
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
