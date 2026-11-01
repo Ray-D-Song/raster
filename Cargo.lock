@@ -2748,6 +2748,7 @@ dependencies = [
  "hyper-util",
  "once_cell",
  "openssl",
+ "raster_runtime_async_hooks",
  "raster_runtime_buffer",
  "raster_runtime_context",
  "raster_runtime_dns_cache",

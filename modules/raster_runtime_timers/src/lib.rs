@@ -695,6 +695,28 @@ fn create_spawn_loop(
     Ok(())
 }
 
+/// Restart the background timer task when unref timers were parked but HTTP (or refs) needs them.
+pub fn resume_timer_loop_if_idle(ctx: &Ctx<'_>) -> Result<()> {
+    let rt_ptr = unsafe { qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+    let rt_key = event_loop::rt_key_from_ptr(rt_ptr as *mut std::ffi::c_void);
+    let (should_run, deadline, notify) = {
+        let mut rt_timer = RT_TIMER_STATE.lock().unwrap();
+        let state = get_timer_state(&mut rt_timer, rt_ptr);
+        if state.running {
+            return Ok(());
+        }
+        if !should_keep_timer_loop(state, rt_key) {
+            return Ok(());
+        }
+        state.running = true;
+        (true, state.deadline, state.notify.clone())
+    };
+    if should_run {
+        create_spawn_loop(rt_ptr, ctx, notify, deadline)?;
+    }
+    Ok(())
+}
+
 pub struct ExecutingTimer(
     Instant,
     NonNull<qjs::JSContext>,

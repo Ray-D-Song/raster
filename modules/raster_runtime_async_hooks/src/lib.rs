@@ -455,6 +455,53 @@ fn async_resource_after(ctx: Ctx<'_>, async_id: u64) -> Result<()> {
     Ok(())
 }
 
+/// Per-request `HTTPINCOMINGMESSAGE` async context (Node `Server` request scope).
+pub struct HttpIncomingMessageScope<'js> {
+    ctx: Ctx<'js>,
+    async_id: AsyncId,
+    needs_destroy: bool,
+}
+
+pub fn begin_http_incoming_message_scope<'js>(
+    ctx: Ctx<'js>,
+    incoming: Object<'js>,
+) -> Result<HttpIncomingMessageScope<'js>> {
+    let (async_id, trigger_async_id) = {
+        let bind_ids = ctx.userdata::<RefCell<AsyncHookIds>>().or_throw(&ctx)?;
+        let mut ids = bind_ids.borrow_mut();
+        let trigger_async_id = ids.current_id.0 as TriggerAsyncId;
+        let async_id = allocate_async_id(&mut ids);
+        (async_id, trigger_async_id)
+    };
+
+    let needs_destroy = async_resource_emit_init(
+        ctx.clone(),
+        incoming,
+        "HTTPINCOMINGMESSAGE".into(),
+        async_id,
+        trigger_async_id,
+    )?;
+    async_resource_before(ctx.clone(), async_id, trigger_async_id)?;
+
+    Ok(HttpIncomingMessageScope {
+        ctx,
+        async_id,
+        needs_destroy,
+    })
+}
+
+impl Drop for HttpIncomingMessageScope<'_> {
+    fn drop(&mut self) {
+        let ctx = self.ctx.clone();
+        let async_id = self.async_id;
+        let needs_destroy = self.needs_destroy;
+        let _ = async_resource_after(ctx.clone(), async_id);
+        if needs_destroy {
+            let _ = async_resource_destroy(ctx, async_id);
+        }
+    }
+}
+
 fn async_resource_destroy(ctx: Ctx<'_>, async_id: u64) -> Result<()> {
     let (internal_fns, user_fns) = {
         let bind_state = ctx.userdata::<RefCell<AsyncHookState>>().or_throw(&ctx)?;
@@ -649,9 +696,6 @@ const ASYNC_LOCAL_STORAGE_FACTORY_JS: &str = r#"(function (
 ) {
   const activeSet = new Set();
   let hookRegistered = false;
-  let runQueue = Promise.resolve();
-  let runQueueIdle = true;
-  let runImplActive = false;
 
   function ensureInternalHook() {
     if (hookRegistered) return;
@@ -661,7 +705,15 @@ const ASYNC_LOCAL_STORAGE_FACTORY_JS: &str = r#"(function (
         for (const als of activeSet) {
           if (!als.enabled) continue;
           let scope = als.storeMap.get(executionAsyncId());
-          if ((!scope || !scope.active) && triggerAsyncId > 1) {
+          if (
+            (!scope || !scope.active) &&
+            triggerAsyncId > 1 &&
+            (type === "Timeout" ||
+              type === "Immediate" ||
+              type === "TickObject" ||
+              type === "Microtask" ||
+              type === "HTTPINCOMINGMESSAGE")
+          ) {
             scope = als.storeMap.get(triggerAsyncId);
           }
           if (scope && scope.active) {
@@ -739,61 +791,29 @@ const ASYNC_LOCAL_STORAGE_FACTORY_JS: &str = r#"(function (
     run(store, callback, ...args) {
       validateFunction(callback, "callback");
       this._enable();
-
-      const runImpl = () => {
-        runImplActive = true;
-        try {
-          const id = executionAsyncId();
-          const had = this.storeMap.has(id);
-          const previous = this.storeMap.get(id);
-          const scope = { store: store, active: true };
-          this.storeMap.set(id, scope);
-          const restore = () => {
-            if (had) {
-              this.storeMap.set(id, previous);
-            } else {
-              this.storeMap.delete(id);
-            }
-          };
-          try {
-            const ret = Reflect.apply(callback, null, args);
-            if (ret !== null && ret !== undefined && typeof ret.then === "function") {
-              return ret.finally(restore);
-            }
-            restore();
-            return ret;
-          } catch (err) {
-            restore();
-            throw err;
-          }
-        } finally {
-          runImplActive = false;
+      const id = executionAsyncId();
+      const had = this.storeMap.has(id);
+      const previous = this.storeMap.get(id);
+      const scope = { store: store, active: true };
+      this.storeMap.set(id, scope);
+      const restore = () => {
+        if (had) {
+          this.storeMap.set(id, previous);
+        } else {
+          this.storeMap.delete(id);
         }
       };
-
-      if (runImplActive) {
-        return runImpl();
-      }
-
-      if (!runQueueIdle) {
-        const chained = runQueue.then(() => runImpl());
-        runQueue = chained.finally(() => {
-          runQueueIdle = true;
-        });
-        runQueueIdle = false;
-        return chained;
-      }
-
-      runQueueIdle = false;
-      const ret = runImpl();
-      if (ret !== null && ret !== undefined && typeof ret.then === "function") {
-        runQueue = Promise.resolve(ret).finally(() => {
-          runQueueIdle = true;
-        });
+      try {
+        const ret = Reflect.apply(callback, null, args);
+        if (ret !== null && ret !== undefined && typeof ret.then === "function") {
+          return ret.finally(restore);
+        }
+        restore();
         return ret;
+      } catch (err) {
+        restore();
+        throw err;
       }
-      runQueueIdle = true;
-      return ret;
     }
 
     exit(callback, ...args) {
