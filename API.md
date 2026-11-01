@@ -744,9 +744,13 @@ _Also available globally_
 
 [setTimeout](https://nodejs.org/api/timers.html#timerspromisessettimeoutdelay-value-options)
 
+[setInterval](https://nodejs.org/api/timers.html#timerspromisessetintervaldelay-value-options) — returns an async iterator that yields `value` once per tick until the `signal` aborts or the consumer stops iterating.
+
 [setImmediate](https://nodejs.org/api/timers.html#timerspromisessetimmediatevalue-options)
 
-> `setInterval` (async iterator) and `scheduler` are not implemented. `{ ref: false }` schedules an unref'd timer (same as calling `.unref()` on the underlying handle).
+[scheduler](https://nodejs.org/api/timers.html#timerspromisesscheduler) — `wait(delay, options)` and `yield()`.
+
+> `{ ref: false }` schedules an unref'd timer (same as calling `.unref()` on the underlying handle).
 
 ## tls
 

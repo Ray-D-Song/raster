@@ -544,10 +544,160 @@ const TIMERS_PROMISES_FACTORY_JS: &str = r#"(function () {
     });
   }
 
+  // Node's `timers/promises.setInterval` returns an async iterator that yields
+  // `value` once per tick until it is aborted or the consumer stops iterating.
+  // Ticks never overlap: the next timer starts only after the consumer asks for
+  // the following value.
+  function setInterval(delay, value, options) {
+    try {
+      options = validateOptions(options, "options");
+    } catch (err) {
+      // Node surfaces this at call time, not on first iteration.
+      throw err;
+    }
+    const signal = options.signal;
+    const ms = delay === undefined || delay === null ? 1 : Number(delay);
+    let active = true;
+    let pending = null;
+    let resolveTick = null;
+    let rejectTick = null;
+
+    const stop = (reason) => {
+      if (!active) return;
+      active = false;
+      if (pending) {
+        clearInterval(pending);
+        pending = null;
+      }
+      if (signal) signal.removeEventListener("abort", onAbort);
+      if (rejectTick) {
+        const reject = rejectTick;
+        resolveTick = null;
+        rejectTick = null;
+        reject(reason);
+      }
+    };
+    const finish = () => {
+      active = false;
+      if (pending) {
+        clearInterval(pending);
+        pending = null;
+      }
+      if (signal) signal.removeEventListener("abort", onAbort);
+      // Resolve, don't reject: returning from `for await` must end the loop
+      // instead of surfacing an error.
+      if (resolveTick) {
+        const resolve = resolveTick;
+        resolveTick = null;
+        rejectTick = null;
+        resolve({ value: undefined, done: true });
+      }
+    };
+    const onAbort = () => stop(signal.reason);
+
+    if (signal && signal.aborted) {
+      active = false;
+    } else if (signal) {
+      signal.addEventListener("abort", onAbort);
+    }
+
+    const iterator = {
+      next() {
+        if (!active) {
+          return Promise.resolve({ value: undefined, done: true });
+        }
+        return new Promise((resolve, reject) => {
+          resolveTick = resolve;
+          rejectTick = reject;
+          pending = globalThis.setInterval(() => {
+            clearInterval(pending);
+            pending = null;
+            resolveTick = null;
+            rejectTick = null;
+            resolve({ value, done: false });
+          }, ms);
+          if (options.ref === false && typeof pending.unref === "function") {
+            pending.unref();
+          }
+        });
+      },
+      return() {
+        finish();
+        return Promise.resolve({ value: undefined, done: true });
+      },
+      throw(err) {
+        stop(err);
+        return Promise.reject(err);
+      },
+      [Symbol.asyncIterator]() {
+        return iterator;
+      },
+      // Node exposes the async iterator symbol under this well-known key too.
+      [Symbol.for("nodejs.rejection")]: undefined,
+    };
+    delete iterator[Symbol.for("nodejs.rejection")];
+    return iterator;
+  }
+
+  function schedulerWait(delay) {
+    const ms = delay === undefined || delay === null ? 1 : Number(delay);
+    return new Promise((resolve) => {
+      globalThis.setTimeout(resolve, ms);
+    });
+  }
+
+  function schedulerYield() {
+    return new Promise((resolve) => {
+      globalThis.setImmediate(resolve);
+    });
+  }
+
+  const scheduler = {
+    wait(delay, options) {
+      try {
+        options = validateOptions(options, "options");
+      } catch (err) {
+        return Promise.reject(err);
+      }
+      const signal = options.signal;
+      if (signal && signal.aborted) {
+        return Promise.reject(signal.reason);
+      }
+      if (!signal) {
+        return schedulerWait(delay);
+      }
+      return new Promise((resolve, reject) => {
+        let settled = false;
+        const onAbort = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(id);
+          signal.removeEventListener("abort", onAbort);
+          reject(signal.reason);
+        };
+        const id = globalThis.setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          signal.removeEventListener("abort", onAbort);
+          resolve(undefined);
+        }, delay === undefined || delay === null ? 1 : Number(delay));
+        if (options.ref === false && typeof id.unref === "function") {
+          id.unref();
+        }
+        signal.addEventListener("abort", onAbort);
+      });
+    },
+    yield() {
+      return schedulerYield();
+    },
+  };
+
   // Extensible CJS export object so Next can assign patched setImmediate.
   return {
     setTimeout,
+    setInterval,
     setImmediate,
+    scheduler,
   };
 })"#;
 
@@ -605,7 +755,9 @@ pub struct TimersPromisesModule;
 impl ModuleDef for TimersPromisesModule {
     fn declare(declare: &Declarations) -> Result<()> {
         declare.declare("setTimeout")?;
+        declare.declare("setInterval")?;
         declare.declare("setImmediate")?;
+        declare.declare("scheduler")?;
         declare.declare("default")?;
         Ok(())
     }
@@ -617,10 +769,14 @@ impl ModuleDef for TimersPromisesModule {
         // Export a single mutable object for both named and default so CJS
         // assignment (Next patches setImmediate) works without freezing.
         let set_timeout: Function = api.get("setTimeout")?;
+        let set_interval: Function = api.get("setInterval")?;
         let set_immediate: Function = api.get("setImmediate")?;
+        let scheduler: Object = api.get("scheduler")?;
 
         exports.export("setTimeout", set_timeout.clone())?;
+        exports.export("setInterval", set_interval.clone())?;
         exports.export("setImmediate", set_immediate.clone())?;
+        exports.export("scheduler", scheduler.clone())?;
         exports.export("default", api)?;
         Ok(())
     }

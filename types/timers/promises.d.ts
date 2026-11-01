@@ -2,8 +2,7 @@
  * The `timers/promises` API provides an alternative set of timer functions
  * that return `Promise` objects.
  *
- * Raster supports `setTimeout` and `setImmediate`. `setInterval` (async iterator)
- * and `scheduler` are not implemented.
+ * Raster supports `setTimeout`, `setInterval` (async iterator) and `scheduler`.
  *
  * Options may include `{ signal?: AbortSignal, ref?: boolean }`. `ref: false` keeps
  * the scheduled timer from holding the event loop open by itself.
@@ -38,6 +37,26 @@ declare module "timers/promises" {
     value?: T,
     options?: TimerOptions
   ): Promise<T>;
+
+  /**
+   * Returns an async iterator that yields `value` once per `delay` until the
+   * signal aborts or the consumer stops iterating.
+   */
+  function setInterval<T = void>(
+    delay?: number,
+    value?: T,
+    options?: TimerOptions
+  ): AsyncIterableIterator<T>;
+
+  /**
+   * Cooperative scheduling helpers.
+   */
+  const scheduler: {
+    /** Wait for `delay` milliseconds. */
+    wait(delay?: number, options?: TimerOptions): Promise<void>;
+    /** Yield to the event loop (macrotask boundary). */
+    yield(): Promise<void>;
+  };
 }
 
 declare module "node:timers/promises" {
