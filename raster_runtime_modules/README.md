@@ -160,7 +160,7 @@ async fn main() -> Result<(), Error> {
 | v8 | ✔︎ | ⚠️ | `v8` | `raster_runtime_v8` |
 | vm | ✔︎ | ⚠️ | `vm` | `raster_runtime_vm` |
 | WebAssembly | ✔︎ | ⚠️ | `webassembly` | `raster_runtime_webassembly` |
-| worker_threads | ✔︎ | ⚠️ | N/A | embedded JS; `Worker` spawning is not implemented |
+| worker_threads | ✔︎ | ⚠️ | N/A | embedded JS; `Worker` uses a child `raster_runtime` process |
 | zlib | ✔︎ | ⚠️ | `zlib` | `raster_runtime_zlib` |
 | Other modules | ✔︎ | ✘ | N/A | N/A |
 
