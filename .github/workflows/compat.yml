@@ -459,7 +459,10 @@ jobs:
         with:
           # Vite+ / Next install with Node 22.18 (not system 24.3). V8 fixtures pin 24.3 ABI.
           node-version: ${{ (matrix.case == 'better-sqlite3' || matrix.case == 'v8-hello' || matrix.case == 'node-sqlite') && '24.3.0' || '22.18.0' }}
-          cache: yarn
+          # The arm64 entry (888 MB) serves only two matrix cases and its restore
+          # (14 s median) exceeds what it saves (2 s); other OS/arch keep the cache
+          # because they amortise it over 5-11 jobs (macOS-x64 saves 33 s alone).
+          cache: ${{ matrix.os != 'ubuntu-24.04-arm' && 'yarn' || '' }}
       - run: yarn install --frozen-lockfile
       - run: make js JS_MINIFY=0
       - uses: dtolnay/rust-toolchain@stable
