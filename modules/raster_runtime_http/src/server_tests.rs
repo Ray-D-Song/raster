@@ -1,12 +1,23 @@
 use raster_runtime_test::{call_test, test_async_with, ModuleEvaluator};
-use rquickjs::Function;
+use rquickjs::{Ctx, Function};
 
 use super::HttpModule;
+
+fn init_test_runtime(ctx: &Ctx<'_>) {
+    raster_runtime_async_hooks::init(ctx).expect("async_hooks init");
+}
+
+async fn eval_http_module(ctx: Ctx<'_>) {
+    init_test_runtime(&ctx);
+    ModuleEvaluator::eval_rust::<HttpModule>(ctx, "http")
+        .await
+        .unwrap();
+}
 
 #[tokio::test]
 async fn exposes_http_and_node_http() {
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import http, { METHODS, STATUS_CODES } from 'http';
                 export function test() {
@@ -30,7 +41,7 @@ async fn serves_a_request_and_streams_response_body() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -65,7 +76,7 @@ async fn write_head_commits_headers_before_end() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -90,7 +101,7 @@ async fn writes_status_message() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -112,7 +123,7 @@ async fn write_head_accepts_status_message_and_headers() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -136,7 +147,7 @@ async fn exposes_the_connection_socket_on_request() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -167,7 +178,7 @@ async fn request_socket_destroy_closes_the_tcp_connection() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -190,7 +201,7 @@ async fn combines_duplicate_headers_and_preserves_raw_headers() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -218,7 +229,7 @@ async fn request_data_events_deliver_buffers() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -244,7 +255,7 @@ async fn rejects_invalid_response_headers_at_api_boundary() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -274,7 +285,7 @@ async fn listens_on_a_unix_socket() {
     let _ = std::fs::remove_file(&path);
     let path_string = path.to_string_lossy().to_string();
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test(path) {
@@ -300,7 +311,7 @@ async fn listens_on_a_unix_socket_path_argument() {
     let _ = std::fs::remove_file(&path);
     let path_string = path.to_string_lossy().to_string();
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test(path) {
@@ -320,7 +331,7 @@ async fn enforces_max_headers_count() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -343,7 +354,7 @@ async fn enforces_max_header_size() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -367,7 +378,7 @@ async fn closes_slow_headers_after_headers_timeout() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -392,7 +403,7 @@ async fn enforces_request_body_timeout() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -414,7 +425,7 @@ async fn does_not_block_completed_response_on_unread_body() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -437,7 +448,7 @@ async fn rejects_upgrade_and_connect_without_listeners() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -465,7 +476,7 @@ async fn limits_buffered_request_body_size() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -487,7 +498,7 @@ async fn closes_idle_keep_alive_connections() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -512,7 +523,7 @@ async fn reports_and_closes_connections() {
     use tokio::io::AsyncReadExt;
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -541,7 +552,7 @@ async fn closes_idle_connections_on_demand() {
     use tokio::io::AsyncReadExt;
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -566,7 +577,7 @@ async fn serves_http1_pipelined_requests_in_order() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -591,7 +602,7 @@ async fn suppresses_response_body_for_head_requests() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -613,7 +624,7 @@ async fn suppresses_response_body_for_204_and_304() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -637,7 +648,7 @@ async fn handles_expect_continue_like_node() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -662,7 +673,7 @@ async fn check_continue_can_reject_without_sending_100() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -687,7 +698,7 @@ async fn emits_client_error_for_malformed_requests() {
     use tokio::io::AsyncWriteExt;
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -713,9 +724,7 @@ async fn emits_client_error_for_malformed_requests() {
 async fn close_waits_for_listener_shutdown() {
     test_async_with(|ctx| {
         Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http")
-                .await
-                .unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(
                 ctx.clone(),
                 "test",
@@ -744,7 +753,7 @@ async fn close_waits_for_active_connections() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -771,7 +780,7 @@ async fn upgrades_a_connection_to_a_net_socket() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -796,7 +805,7 @@ async fn upgraded_socket_exposes_incoming_bytes_to_read() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -826,7 +835,7 @@ async fn upgraded_socket_emits_data_events() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -857,7 +866,7 @@ async fn routes_connect_to_connect_event() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -882,7 +891,7 @@ async fn exposes_request_trailers_before_end() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     test_async_with(|ctx| Box::pin(async move {
-            ModuleEvaluator::eval_rust::<HttpModule>(ctx.clone(), "http").await.unwrap();
+            eval_http_module(ctx.clone()).await;
             let module = ModuleEvaluator::eval_js(ctx.clone(), "test", r#"
                 import { createServer } from 'http';
                 export function test() {
@@ -899,4 +908,42 @@ async fn exposes_request_trailers_before_end() {
             let mut response = Vec::new(); socket.read_to_end(&mut response).await.unwrap();
             assert!(String::from_utf8(response).unwrap().contains("present"));
         })).await;
+}
+
+#[tokio::test]
+async fn http_get_fetches_local_server() {
+    test_async_with(|ctx| {
+        Box::pin(async move {
+            eval_http_module(ctx.clone()).await;
+            let module = ModuleEvaluator::eval_js(
+                ctx.clone(),
+                "test",
+                r#"
+                import { createServer, get } from 'http';
+                export async function test() {
+                  const server = createServer((_req, res) => {
+                    res.statusCode = 200;
+                    res.end('pong');
+                  });
+                  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+                  const port = server.address().port;
+                  const body = await new Promise((resolve, reject) => {
+                    get(`http://127.0.0.1:${port}/`, (res) => {
+                      const chunks = [];
+                      res.on('data', (c) => chunks.push(c));
+                      res.on('end', () => resolve(Buffer.concat(chunks).toString()));
+                    }).on('error', reject);
+                  });
+                  server.close();
+                  return body === 'pong';
+                }
+            "#,
+            )
+            .await
+            .unwrap();
+            let ok: bool = call_test(&ctx, &module, ()).await;
+            assert!(ok);
+        })
+    })
+    .await;
 }
