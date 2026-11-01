@@ -936,9 +936,13 @@ pub fn has_pending_timer_callbacks(rt: *mut qjs::JSRuntime) -> bool {
         .is_some_and(|state| state.timers.iter().any(|t| t.callback.is_some()))
 }
 
-/// Drop pending unref timer callbacks before natural process exit (Node does not
-/// run them). Avoids QuickJS `gc_obj_list` assertions when the VM is torn down.
-pub fn discard_unrefed_timers_on_process_exit<'js>(
+/// Drop every pending timer callback for this runtime before a natural exit.
+///
+/// Node does not run timers left over at shutdown, and holding their
+/// `Persistent<Function>` values past runtime teardown trips QuickJS's
+/// `list_empty(&rt->gc_obj_list)` assertion. Referenced callbacks normally keep
+/// the loop alive, so reaching this point means we are exiting regardless.
+pub fn discard_all_timers_on_process_exit<'js>(
     ctx: &Ctx<'js>,
     rt: *mut qjs::JSRuntime,
 ) -> Result<()> {
@@ -948,16 +952,16 @@ pub fn discard_unrefed_timers_on_process_exit<'js>(
         let ids: Vec<usize> = state
             .timers
             .iter()
-            .filter(|t| t.callback.is_some() && !t.referenced)
+            .filter(|t| t.callback.is_some())
             .map(|t| t.hook_id)
             .collect();
         for timeout in state.timers.iter_mut() {
-            if timeout.callback.is_some() && !timeout.referenced {
-                timeout.callback.take();
-                timeout.repeating = false;
-            }
+            timeout.callback.take();
+            timeout.repeating = false;
+            timeout.loop_ref.unreference();
         }
-        state.timers.retain(|t| t.callback.is_some());
+        state.timers.clear();
+        state.running = false;
         state.notify.notify_one();
         ids
     };

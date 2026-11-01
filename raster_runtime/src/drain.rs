@@ -82,7 +82,7 @@ pub async fn run_until_process_exit(
         vm.ctx
             .with(|ctx| {
                 let rt = unsafe { qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
-                raster_runtime_timers::discard_unrefed_timers_on_process_exit(&ctx, rt)
+                raster_runtime_timers::discard_all_timers_on_process_exit(&ctx, rt)
             })
             .await
             .map_err(|e: rquickjs::Error| e.to_string())?;
@@ -176,6 +176,10 @@ fn dispatch_signal(ctx: &Ctx<'_>, name: &str) -> rquickjs::Result<()> {
     let code = default_exit_code_for_signal(name);
     EXIT_CODE.store(code, Ordering::Relaxed);
     emit_process_exit(ctx)?;
+    // Pending timer callbacks would outlive runtime teardown; the process is
+    // terminating by signal default, so drop them like Node's exit does.
+    let rt = unsafe { qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+    let _ = raster_runtime_timers::discard_all_timers_on_process_exit(ctx, rt);
     // The runtime lock is held here, so unwinding is the drain loop's job.
     SIGNAL_EXIT_REQUESTED.store(true, Ordering::SeqCst);
     Ok(())
