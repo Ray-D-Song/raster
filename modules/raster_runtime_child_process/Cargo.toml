@@ -18,10 +18,11 @@ raster_runtime_events = { version = "0.1.0", path = "../raster_runtime_events" }
 raster_runtime_stream = { version = "0.1.0", path = "../raster_runtime_stream" }
 raster_runtime_utils = { version = "0.1.0", path = "../../libs/raster_runtime_utils", default-features = false }
 rquickjs = { version = "=0.12.1", default-features = false }
-tokio = { version = "1", features = ["process"], default-features = false }
+tokio = { version = "1", features = ["process", "net", "io-util", "sync"], default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 libc = { version = "0.2", default-features = false }
 
 [dev-dependencies]
 raster_runtime_test = { path = "../../libs/raster_runtime_test" }
+tokio = { version = "1", features = ["rt", "macros"], default-features = false }

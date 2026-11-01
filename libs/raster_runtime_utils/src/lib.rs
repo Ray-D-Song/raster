@@ -25,6 +25,7 @@ pub mod primordials;
 pub mod provider;
 pub mod result;
 pub mod reuse_list;
+pub mod fork_ipc;
 pub mod shared_array_buffer;
 pub mod string;
 pub mod sysinfo;

@@ -2,6 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 #![allow(clippy::uninlined_format_args)]
 
+mod fork;
+mod ipc_channel;
+
+#[cfg(unix)]
+pub use fork::fork;
+pub use ipc_channel::install_child_process_ipc;
+
 #[cfg(windows)]
 use std::os::windows::{
     io::{FromRawHandle, RawHandle},
@@ -26,11 +33,13 @@ use raster_runtime_stream::{
     writable::{DefaultWritableStream, WritableStream},
 };
 use raster_runtime_utils::{
+    clone_wire::CloneWirePayload,
     event_loop::EventLoopRef,
     module::{export_default, ModuleInfo},
     object::ObjectExt,
     result::ResultExt,
 };
+use tokio::sync::mpsc::UnboundedSender;
 use rquickjs::{
     class::{Trace, Tracer},
     convert::Coerced,
@@ -113,6 +122,7 @@ pub struct ChildProcess<'js> {
     kill_tx: Option<Sender<()>>,
     pid: Option<u32>,
     loop_ref: Arc<EventLoopRef>,
+    ipc_outbound: Option<UnboundedSender<CloneWirePayload>>,
 }
 
 impl<'js> Trace<'js> for ChildProcess<'js> {
@@ -192,6 +202,15 @@ impl<'js> ChildProcess<'js> {
         this.borrow().loop_ref.unreference();
         this.0
     }
+
+    fn send(
+        this: This<Class<'js, Self>>,
+        ctx: Ctx<'js>,
+        message: Value<'js>,
+        transfer: Opt<Value<'js>>,
+    ) -> Result<bool> {
+        ipc_channel::child_send(this, ctx, message, transfer)
+    }
 }
 
 impl<'js> ChildProcess<'js> {
@@ -215,6 +234,7 @@ impl<'js> ChildProcess<'js> {
             pid: None,
             kill_tx: Some(kill_tx),
             loop_ref,
+            ipc_outbound: None,
         };
 
         let stdout_instance = DefaultReadableStream::new(ctx.clone())?;
@@ -620,6 +640,7 @@ pub struct ChildProcessModule;
 impl ModuleDef for ChildProcessModule {
     fn declare(declare: &Declarations) -> Result<()> {
         declare.declare("spawn")?;
+        declare.declare("fork")?;
         declare.declare("exec")?;
         declare.declare("execFile")?;
         declare.declare("execSync")?;
@@ -637,6 +658,8 @@ impl ModuleDef for ChildProcessModule {
 
         export_default(ctx, exports, |default| {
             default.set("spawn", Func::from(spawn))?;
+            #[cfg(unix)]
+            default.set("fork", Func::from(fork))?;
             // Lazy JS helpers that call require("child_process").spawn after the
             // module is fully registered (avoids mid-evaluate require cycles).
             let exec: rquickjs::Function = ctx.eval(
