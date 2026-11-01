@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Node-compatible `worker_threads` (Worker spawn via isolated raster_runtime child).
+// Node-compatible `worker_threads` (Worker spawn via OS-thread QuickJS isolate).
 
 import { EventEmitter } from "node:events";
 

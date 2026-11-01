@@ -857,22 +857,15 @@ Startup probe only — Raster does **not** implement the Node Inspector debuggin
 
 ## worker_threads
 
-Main-thread and worker-child compatibility (Workers run in **separate `raster_runtime` processes**, not OS threads):
+Workers run on **OS threads** with a **separate QuickJS `AsyncRuntime` isolate** per worker (same process). Cross-thread `postMessage` uses **structured-clone** encoding (`clone_wire` + in-memory channels), not child-process IPC.
 
-- `isMainThread`, `parentPort`, `workerData`, and `threadId`
-- `Worker` spawn with `workerData`, optional `env` / `argv` / `name`, and events `online`, `message`, `error`, and `exit` (code + signal)
-- Cross-process `postMessage` uses **structured-clone binary IPC** (not JSON); `transferList` copies detached `ArrayBuffer` bytes (same semantics as in-process clone, not shared memory)
-- Nested `Worker` from inside a worker child (each nested worker is another process)
-- `MessageChannel` and `MessagePort` with asynchronous structured-clone delivery (in-process)
-- `getEnvironmentData()` and `setEnvironmentData()` with clone isolation; main-thread updates broadcast to existing workers via env patches
-- `markAsUntransferable()`, `isMarkedAsUntransferable()`, and `receiveMessageOnPort()` compatibility stubs
+- `isMainThread`, `parentPort`, `workerData`, `threadId`, nested `Worker`
+- `Worker` options/events: `workerData`, `env` / `argv` / `name`, `online` / `message` / `error` / `exit`
+- `transferList` for detached `ArrayBuffer` (structured clone); **`SharedArrayBuffer`** via process-wide QuickJS SAB hooks (shared backing store; Atomics when views share memory)
+- In-process `MessageChannel` / `MessagePort` (structured clone + microtasks)
+- `getEnvironmentData` / `setEnvironmentData` with worker sync
 
-**Not supported (process model):**
-
-- `SharedArrayBuffer` and `Atomics` shared memory across workers — cloning or transferring a `SharedArrayBuffer` in worker IPC throws `DataCloneError`; there is no cross-process shared heap (unlike Node’s thread model).
-- `moveMessagePortToContext()` throws.
-
-`MessagePort.ref()` / `unref()` control event-loop lifetime like Node.
+`moveMessagePortToContext()` still throws. `MessagePort.ref()` / `unref()` tie into the event-loop ref model.
 
 ## zlib
 
