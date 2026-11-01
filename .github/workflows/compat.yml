@@ -141,8 +141,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: sanitizer-${{ matrix.sanitizer }}
-          # run_sanitizer_ci.sh redirects CARGO_TARGET_DIR to this path.
-          workspaces: ". -> target-sanitizer-${{ matrix.sanitizer }}"
+          # Both sanitizer gates rebuild almost everything (the sanitizer rustflags
+          # change every crate's fingerprint), so a restored target dir saves little
+          # and costs ~400 MB per sanitizer against the repo's 10 GB cache budget.
+          # Keep the registry only.
+          cache-targets: "false"
       - name: Run sanitizer gate
         run: bash v8_compat/tools/run_sanitizer_ci.sh ${{ matrix.sanitizer }}
 
@@ -225,8 +228,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: sqlite-asan
-          # run-asan.sh redirects CARGO_TARGET_DIR to this path.
-          workspaces: ". -> target-sqlite-asan"
+          # Nightly changes daily, which rotates the cache key, so the target dir
+          # rarely gets reused; only the registry is worth storing.
+          cache-targets: "false"
       - run: yarn install --frozen-lockfile
       - run: bash compat/node-sqlite/run-asan.sh
 
@@ -245,7 +249,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: mysql-compat
+          # Registry only: with `cargo build -p raster_runtime` the time goes to the
+          # workspace crates, which rust-cache does not store by default, so a 365 MB
+          # target cache bought ~2 s here. Share the small registry cache instead.
+          shared-key: cargo-registry
+          cache-targets: "false"
       - name: Build raster_runtime
         run: cargo build -p raster_runtime
       - run: make compat-mysql
@@ -271,7 +279,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: node-postgres-compat
+          # Registry only; see mysql-compat.
+          shared-key: cargo-registry
+          cache-targets: "false"
       - name: Build raster_runtime
         run: cargo build -p raster_runtime
       - run: make compat-node-postgres
