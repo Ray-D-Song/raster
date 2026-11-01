@@ -79,6 +79,9 @@ pub struct Timeout {
     /// fires destroy after After once this flag is set.
     pending_destroy: bool,
     referenced: bool,
+    /// The same handle the JS `TimerHandle` holds, so clearing the timer can
+    /// release its hold on the event loop.
+    loop_ref: Arc<EventLoopRef>,
 }
 
 impl Default for Timeout {
@@ -93,6 +96,7 @@ impl Default for Timeout {
             interval: 0,
             pending_destroy: false,
             referenced: true,
+            loop_ref: EventLoopRef::new_unreferenced(0),
         }
     }
 }
@@ -277,6 +281,7 @@ pub fn set_timeout_interval<'js>(
         interval: delay,
         pending_destroy: false,
         referenced,
+        loop_ref: loop_ref.clone(),
     };
 
     let mut rt_timer = RT_TIMER_STATE.lock().unwrap();
@@ -348,6 +353,10 @@ fn clear_timeout_interval<'js>(ctx: Ctx<'js>, id: Opt<Value<'js>>) -> Result<()>
             let _ = timeout.callback.take();
             timeout.repeating = false;
             timeout.deadline = Instant::now() - Duration::from_secs(1);
+            // A cleared timer owns no further work: release its hold on the
+            // event loop and drop the entry so the process can drain.
+            timeout.referenced = false;
+            timeout.loop_ref.clone().unreference();
             let hook_id = timeout.hook_id;
             // If this timer's own callback is currently executing, defer the
             // destroy until After has run and popped the async context
@@ -768,6 +777,10 @@ pub fn poll_timers(
             let ctx = timeout.raw_ctx;
             if let Some(cb) = timeout.callback.take() {
                 if !timeout.repeating {
+                    // A one-shot timer is finished once it has fired: release
+                    // its hold on the loop so the process can drain.
+                    timeout.referenced = false;
+                    timeout.loop_ref.unreference();
                     call_vec.push(Some(ExecutingTimer(
                         timeout.deadline,
                         ctx,
