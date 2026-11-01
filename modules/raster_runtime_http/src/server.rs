@@ -2,11 +2,12 @@
 //! This mirrors Bun's architecture: `node:http` is an HTTP server, not a
 //! parser bolted onto the public `node:net` server.
 use std::{
+    cell::Cell,
     collections::HashMap,
     convert::Infallible,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc,
+        Arc, LazyLock,
     },
     time::Duration,
 };
@@ -21,12 +22,15 @@ use hyper::{
     HeaderMap, Request as HyperRequest, Response as HyperResponse, StatusCode,
 };
 use hyper_util::rt::{TokioIo, TokioTimer};
+use raster_runtime_async_hooks::begin_http_incoming_message_scope;
 use raster_runtime_buffer::Buffer;
 use raster_runtime_context::CtxExtension;
 use raster_runtime_events::{Emitter, EventEmitter, EventList};
 use raster_runtime_net::Socket;
+use raster_runtime_timers::{poll_timers, resume_timer_loop_if_idle, ExecutingTimer};
 use raster_runtime_utils::{
     bytes::ObjectBytes,
+    event_loop::{self, EventLoopRef},
     module::{export_default, ModuleInfo},
     object::ObjectExt,
 };
@@ -34,7 +38,8 @@ use rquickjs::{
     class::{Trace, Tracer},
     module::{Declarations, Exports, ModuleDef},
     prelude::{Func, Opt, Rest, This},
-    Array, Class, Ctx, Exception, Function, IntoJs, JsLifetime, Object, Result, Undefined, Value,
+    qjs, Array, Class, Ctx, Exception, Function, IntoJs, JsLifetime, Object, Result, Undefined,
+    Value,
 };
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
@@ -44,6 +49,39 @@ use tokio::{
     sync::{broadcast, mpsc, oneshot},
 };
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
+
+/// QuickJS `Ctx` is not re-entrant across concurrent Hyper handlers.
+static HTTP_JS_ROOT: LazyLock<tokio::sync::Mutex<()>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+tokio::task_local! {
+    static HTTP_DISPATCH_NEST: Cell<usize>;
+}
+
+struct HttpJsSerialGuard {
+    _root: Option<tokio::sync::MutexGuard<'static, ()>>,
+}
+
+impl HttpJsSerialGuard {
+    async fn acquire() -> Self {
+        let nested = HTTP_DISPATCH_NEST.with(|cell| cell.get());
+        let root = if nested == 0 {
+            Some(HTTP_JS_ROOT.lock().await)
+        } else {
+            None
+        };
+        HTTP_DISPATCH_NEST.with(|cell| cell.set(nested + 1));
+        Self { _root: root }
+    }
+}
+
+impl Drop for HttpJsSerialGuard {
+    fn drop(&mut self) {
+        let _ = HTTP_DISPATCH_NEST.try_with(|cell| {
+            cell.set(cell.get().saturating_sub(1));
+        });
+    }
+}
 
 fn validate_header_name(ctx: Ctx<'_>, name: String) -> Result<()> {
     if name.is_empty()
@@ -615,6 +653,7 @@ pub struct Server<'js> {
     headers_timeout: u64,
     request_timeout: u64,
     keep_alive_timeout: u64,
+    loop_ref: Arc<EventLoopRef>,
 }
 unsafe impl<'js> JsLifetime<'js> for Server<'js> {
     type Changed<'to> = Server<'to>;
@@ -637,6 +676,10 @@ impl<'js> Server<'js> {
         let (close_tx, _) = broadcast::channel(1);
         let (connection_close_tx, _) = broadcast::channel(1);
         let (idle_close_tx, _) = broadcast::channel(1);
+        let rt_ptr = unsafe { rquickjs::qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+        let rt_key =
+            raster_runtime_utils::event_loop::rt_key_from_ptr(rt_ptr as *mut std::ffi::c_void);
+        let loop_ref = EventLoopRef::new_referenced(rt_key);
         let instance = Class::instance(
             ctx.clone(),
             Self {
@@ -655,6 +698,7 @@ impl<'js> Server<'js> {
                 headers_timeout: 60_000,
                 request_timeout: 300_000,
                 keep_alive_timeout: 65_000,
+                loop_ref,
             },
         )?;
         if let Some(listener) = listener.0 {
@@ -735,6 +779,16 @@ impl<'js> Server<'js> {
     pub fn close_idle_connections(&self) {
         let _ = self.idle_close_tx.send(());
     }
+    #[qjs(rename = "ref")]
+    pub fn js_ref(this: This<Class<'js, Self>>) -> Class<'js, Self> {
+        this.borrow().loop_ref.reference();
+        this.0
+    }
+    #[qjs(rename = "unref")]
+    pub fn js_unref(this: This<Class<'js, Self>>) -> Class<'js, Self> {
+        this.borrow().loop_ref.unreference();
+        this.0
+    }
     pub fn listen(
         this: This<Class<'js, Self>>,
         ctx: Ctx<'js>,
@@ -775,6 +829,7 @@ impl<'js> Server<'js> {
         let server = this.0;
         let ctx2 = ctx.clone();
         let mut close = server.borrow().close_tx.subscribe();
+        let listen_loop_ref = server.borrow().loop_ref.clone();
         ctx.spawn_exit_simple(async move {
             let (listener, address) = if let Some(path) = path {
                 #[cfg(unix)]
@@ -787,7 +842,27 @@ impl<'js> Server<'js> {
                 let address = Object::new(ctx2.clone())?; address.set("address", addr.ip().to_string())?; address.set("port", addr.port())?; address.set("family", if addr.is_ipv4() { "IPv4" } else { "IPv6" })?; (Listener::Tcp(listener), address.into_value())
             };
             server.borrow_mut().address = address; server.borrow().listening.store(true, Ordering::Relaxed); Self::emit_str(server.clone(), &ctx2, "listening", vec![], false)?;
-            loop { tokio::select! { _ = close.recv() => break, accepted = listener.accept() => { let stream = accepted.map_err(|e| Exception::throw_message(&ctx2, &e.to_string()))?; let ctx3 = ctx2.clone(); let srv = server.clone(); match stream { AcceptedStream::Tcp(stream) => spawn_tcp_connection(ctx3, srv, stream)?, #[cfg(unix)] AcceptedStream::Unix(stream) => spawn_unix_connection(ctx3, srv, stream)?, } } } }
+            loop {
+                if !raster_runtime_utils::event_loop::keeps_event_loop_alive(&listen_loop_ref) {
+                    break;
+                }
+                tokio::select! {
+                    _ = raster_runtime_utils::event_loop::wait_until_io_unref(listen_loop_ref.clone()) => {
+                        break;
+                    }
+                    _ = close.recv() => break,
+                    accepted = listener.accept() => {
+                        let stream = accepted.map_err(|e| Exception::throw_message(&ctx2, &e.to_string()))?;
+                        let ctx3 = ctx2.clone();
+                        let srv = server.clone();
+                        match stream {
+                            AcceptedStream::Tcp(stream) => spawn_tcp_connection(ctx3, srv, stream)?,
+                            #[cfg(unix)]
+                            AcceptedStream::Unix(stream) => spawn_unix_connection(ctx3, srv, stream)?,
+                        }
+                    }
+                }
+            }
             server.borrow().listening.store(false, Ordering::Relaxed);
             emit_close_if_ready(&ctx2, server)?;
             Ok(())
@@ -911,6 +986,8 @@ where
     drop(server_ref);
     count.fetch_add(1, Ordering::Relaxed);
     let request_ctx = ctx.clone();
+    let rt_ptr = unsafe { rquickjs::qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+    let http_rt_key = event_loop::rt_key_from_ptr(rt_ptr as *mut std::ffi::c_void);
     let service_server = server.clone();
     let active_requests = Arc::new(AtomicUsize::new(0));
     let service_active_requests = active_requests.clone();
@@ -932,19 +1009,25 @@ where
             let socket = service_socket.clone();
             let activity_tx = service_activity_tx.clone();
             async move {
-                active_requests.fetch_add(1, Ordering::Relaxed);
-                let response = dispatch(
-                    request_ctx,
-                    server,
-                    socket,
-                    request,
-                    request_timeout,
-                    max_request_body_size,
-                )
-                .await;
-                active_requests.fetch_sub(1, Ordering::Relaxed);
-                let _ = activity_tx.send(());
-                response
+                HTTP_DISPATCH_NEST
+                    .scope(Cell::new(0), async {
+                        active_requests.fetch_add(1, Ordering::Relaxed);
+                        event_loop::adjust_http_inflight(http_rt_key, 1);
+                        let response = dispatch(
+                            request_ctx,
+                            server,
+                            socket,
+                            request,
+                            request_timeout,
+                            max_request_body_size,
+                        )
+                        .await;
+                        event_loop::adjust_http_inflight(http_rt_key, -1);
+                        active_requests.fetch_sub(1, Ordering::Relaxed);
+                        let _ = activity_tx.send(());
+                        response
+                    })
+                    .await
             }
         });
         let mut builder = http1::Builder::new();
@@ -1018,6 +1101,47 @@ where
     Ok(())
 }
 
+/// Drive microtasks while Hyper awaits async HTTP handlers.
+struct JsEventLoopPump {
+    rt: *mut qjs::JSRuntime,
+    executing_timers: Vec<Option<ExecutingTimer>>,
+}
+
+impl JsEventLoopPump {
+    fn new(ctx: &Ctx<'_>) -> Self {
+        let rt = unsafe { qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+        Self {
+            rt,
+            executing_timers: Vec::new(),
+        }
+    }
+
+    fn tick(&mut self, ctx: &Ctx<'_>) {
+        while ctx.execute_pending_job() {}
+        let _ = poll_timers(self.rt, &mut self.executing_timers, None, None);
+    }
+}
+
+/// Drive microtasks while waiting for the response oneshot.
+async fn await_response_pumping(
+    ctx: &Ctx<'_>,
+    pump: &mut JsEventLoopPump,
+    rx: oneshot::Receiver<HyperResponse<BoxBody<Bytes, Infallible>>>,
+    empty: impl Fn() -> HyperResponse<BoxBody<Bytes, Infallible>>,
+) -> HyperResponse<BoxBody<Bytes, Infallible>> {
+    use tokio::time::{interval, MissedTickBehavior};
+    let mut tick = interval(Duration::from_millis(1));
+    tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    tokio::pin!(rx);
+    loop {
+        tokio::select! {
+            biased;
+            response = &mut rx => return response.unwrap_or_else(|_| empty()),
+            _ = tick.tick() => pump.tick(ctx),
+        }
+    }
+}
+
 async fn dispatch<'js>(
     ctx: Ctx<'js>,
     server: Class<'js, Server<'js>>,
@@ -1026,6 +1150,7 @@ async fn dispatch<'js>(
     request_timeout: u64,
     max_request_body_size: usize,
 ) -> std::result::Result<HyperResponse<BoxBody<Bytes, Infallible>>, Infallible> {
+    let _js_serial = HttpJsSerialGuard::acquire().await;
     let mut request = request;
     let is_connect = request.method() == hyper::Method::CONNECT;
     let is_upgrade = request.headers().contains_key(hyper::header::UPGRADE);
@@ -1045,6 +1170,8 @@ async fn dispatch<'js>(
             .body(Full::new(Bytes::new()).boxed())
             .unwrap()
     };
+    let mut js_pump = JsEventLoopPump::new(&ctx);
+    let _ = resume_timer_loop_if_idle(&ctx);
     let headers = match Object::new(ctx.clone()) {
         Ok(v) => v,
         Err(_) => return Ok(empty()),
@@ -1100,6 +1227,14 @@ async fn dispatch<'js>(
         },
     ) {
         Ok(v) => v,
+        Err(_) => return Ok(empty()),
+    };
+    let req_object = match req.clone().into_value().as_object() {
+        Some(object) => object.clone(),
+        None => return Ok(empty()),
+    };
+    let _http_scope = match begin_http_incoming_message_scope(ctx.clone(), req_object) {
+        Ok(scope) => scope,
         Err(_) => return Ok(empty()),
     };
     if let Some(on_upgrade) = on_upgrade {
@@ -1203,11 +1338,17 @@ async fn dispatch<'js>(
         vec![req_value, res_value],
         false,
     );
+    for _ in 0..512 {
+        if res.borrow().headers_sent {
+            break;
+        }
+        js_pump.tick(&ctx);
+    }
 
     // A synchronous handler may have already committed a final response.
     // Return it now instead of waiting for an abandoned or slow request body.
     if res.borrow().headers_sent {
-        return Ok(rx.await.unwrap_or_else(|_| empty()));
+        return Ok(await_response_pumping(&ctx, &mut js_pump, rx, empty).await);
     }
 
     // Hyper owns the HTTP/1 encoder and deliberately sends `100 Continue`
@@ -1216,9 +1357,15 @@ async fn dispatch<'js>(
     // poll after `writeContinue()` so a final response is sent without 100.
     let consume_body = !check_continue || res.borrow().continue_requested;
     if consume_body {
+        use tokio::time::{interval, MissedTickBehavior};
+        let mut pump_tick = interval(Duration::from_millis(1));
+        pump_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
             while req.borrow().paused && !req.borrow().destroyed {
-                tokio::time::sleep(Duration::from_millis(1)).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_millis(1)) => js_pump.tick(&ctx),
+                    _ = pump_tick.tick() => js_pump.tick(&ctx),
+                }
             }
             if req.borrow().destroyed {
                 break;
@@ -1230,6 +1377,10 @@ async fn dispatch<'js>(
                 tokio::select! {
                     response = &mut rx => return Ok(response.unwrap_or_else(|_| empty())),
                     frame = body.frame() => frame,
+                    _ = pump_tick.tick() => {
+                        js_pump.tick(&ctx);
+                        continue;
+                    }
                 }
             } else {
                 tokio::select! {
@@ -1241,6 +1392,10 @@ async fn dispatch<'js>(
                             .body(Full::new(Bytes::new()).boxed())
                             .unwrap_or_else(|_| empty())),
                     },
+                    _ = pump_tick.tick() => {
+                        js_pump.tick(&ctx);
+                        continue;
+                    }
                 }
             };
             let Some(frame) = next_frame else {
@@ -1283,7 +1438,7 @@ async fn dispatch<'js>(
         req.borrow_mut().complete = true;
         let _ = IncomingMessage::emit_str(req, &ctx, "end", vec![], false);
     }
-    Ok(rx.await.unwrap_or_else(|_| empty()))
+    Ok(await_response_pumping(&ctx, &mut js_pump, rx, empty).await)
 }
 
 /// Minimal `http.Agent` so Next can run `new http.Agent(httpAgentOptions)`.

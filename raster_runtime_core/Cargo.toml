@@ -11,7 +11,7 @@ macro = ["rquickjs/macro"]
 bindgen = ["rquickjs/bindgen"]
 
 # Node.js-compatible module feature forwards
-base = ["raster_runtime_modules/base", "console"]
+base = ["raster_runtime_modules/base", "console", "path", "process", "timers"]
 abort = ["raster_runtime_modules/abort"]
 assert = ["raster_runtime_modules/assert"]
 async-hooks = ["raster_runtime_modules/async-hooks"]
@@ -55,7 +55,7 @@ compression-c = ["raster_runtime_modules/compression-c"]
 compression-rust = ["raster_runtime_modules/compression-rust"]
 
 # TLS crypto backend features
-tls-ring = ["rustls/ring", "raster_runtime_modules/tls-ring"]
+tls-ring = ["rustls/ring", "raster_runtime_modules/tls-ring", "tls"]
 tls-aws-lc = ["rustls/aws_lc_rs", "raster_runtime_modules/tls-aws-lc"]
 tls-graviola = ["raster_runtime_modules/tls-graviola"]
 tls-openssl = ["raster_runtime_modules/tls-openssl", "dep:openssl"]

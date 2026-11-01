@@ -214,6 +214,7 @@ impl<'js> AbortSignal<'js> {
                 cb,
                 milliseconds,
                 raster_runtime_utils::provider::ProviderType::Timeout,
+                true,
             )?;
         }
         #[cfg(all(not(feature = "sleep-timers"), feature = "sleep-tokio"))]

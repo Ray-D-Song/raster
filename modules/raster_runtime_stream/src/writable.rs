@@ -10,7 +10,12 @@ use std::{
 
 use raster_runtime_context::CtxExtension;
 use raster_runtime_events::{EmitError, Emitter, EventEmitter, EventList};
-use raster_runtime_utils::{bytes::ObjectBytes, error::ErrorExtensions, result::ResultExt};
+use raster_runtime_utils::{
+    bytes::ObjectBytes,
+    error::ErrorExtensions,
+    event_loop::{self, EventLoopRef},
+    result::ResultExt,
+};
 use rquickjs::{
     class::{Trace, Tracer},
     prelude::{Func, Opt, This},
@@ -260,6 +265,15 @@ where
         ctx: &Ctx<'js>,
         writable: T,
     ) -> Result<Receiver<bool>> {
+        Self::process_loop(this, ctx, writable, None)
+    }
+
+    fn process_loop<T: AsyncWrite + Send + 'static + 'js + Unpin>(
+        this: Class<'js, Self>,
+        ctx: &Ctx<'js>,
+        writable: T,
+        io_loop_ref: Option<Arc<EventLoopRef>>,
+    ) -> Result<Receiver<bool>> {
         let mut borrow = this.borrow_mut();
         let inner = borrow.inner_mut();
         let mut is_destroyed = inner.is_destroyed;
@@ -276,6 +290,7 @@ where
         let ctx2 = ctx.clone();
         let handoff_completed = Arc::new(AtomicBool::new(false));
         let handoff_completed2 = handoff_completed.clone();
+        let io_loop_ref = io_loop_ref;
 
         ctx.spawn_exit(async move {
             let ctx3 = ctx2.clone();
@@ -283,6 +298,7 @@ where
             let this2 = this.clone();
             let write_function = async move {
                 let mut writer = BufWriter::new(writable);
+                let io_loop_ref = io_loop_ref;
 
                 // `end()` may be called before a transport is attached (for
                 // example immediately from a HTTP upgrade handler).  In that
@@ -290,7 +306,20 @@ where
                 // command shuts the transport down.
                 if !is_destroyed {
                     loop {
+                        if let Some(ref lr) = io_loop_ref {
+                            if !event_loop::keeps_event_loop_alive(lr) {
+                                break;
+                            }
+                        }
+
                         tokio::select! {
+                            _ = async {
+                                if let Some(lr) = io_loop_ref.clone() {
+                                    event_loop::wait_until_io_unref(lr).await;
+                                }
+                            }, if io_loop_ref.is_some() => {
+                                break;
+                            }
                             command = command_rx.recv() => {
                                  match command {
                                     Some(WriteCommand::Write(value, cb, flush)) => {

@@ -186,6 +186,8 @@ Everything else inherited from [Uint8Array](https://developer.mozilla.org/en-US/
 
 [spawn](https://nodejs.org/api/child_process.html#child_processspawncommand-args-options)
 
+> `ChildProcess.ref()` / `unref()` control whether the parent waits on the child for event-loop lifetime. After `unref()`, the child keeps running but the parent may exit without receiving `exit`/`close` from the detached wait handle.
+
 ## console
 
 [Console](https://nodejs.org/api/console.html#class-console)
@@ -408,6 +410,10 @@ Lightweight and fast hash classes for raster_runtime.
 
 [realpath](https://nodejs.org/api/fs.html#fspromisesrealpathpath-options)
 
+## http
+
+> `http.Server` supports Node-compatible `ref()` / `unref()` on the listen handle (same event-loop semantics as `net.Server`). `https.createServer` remains a stub.
+
 ## https
 
 [Agent](https://nodejs.org/api/https.html#class-httpsagent)
@@ -454,6 +460,8 @@ CommonJS loader facade (also on the default `Module` export):
 [createConnection](https://nodejs.org/api/net.html#netcreateconnection)
 
 [createServer](https://nodejs.org/api/net.html#netcreateserveroptions-connectionlistener)
+
+> `net.Server` (and sockets) expose Node-compatible `ref()` / `unref()`. An unref'd listening server stops blocking `process` exit while still accepting until the listen task is torn down.
 
 ## os
 
@@ -725,7 +733,7 @@ _Also available globally_
 
 [setTimeout](https://nodejs.org/api/timers.html#settimeoutcallback-delay-args)
 
-> Timer handles are numeric ids. `ref()` / `unref()` / event-loop lifetime control are not implemented.
+> Timer handles are `Timeout` objects with Node-compatible `ref()` / `unref()`. Unref'd timers do not keep the process alive when they are the only remaining handle.
 
 ## timers/promises
 
@@ -733,7 +741,7 @@ _Also available globally_
 
 [setImmediate](https://nodejs.org/api/timers.html#timerspromisessetimmediatevalue-options)
 
-> `setInterval` (async iterator) and `scheduler` are not implemented. `{ ref: false }` is accepted for API compatibility but does not change event-loop lifetime.
+> `setInterval` (async iterator) and `scheduler` are not implemented. `{ ref: false }` schedules an unref'd timer (same as calling `.unref()` on the underlying handle).
 
 ## tls
 
@@ -757,6 +765,8 @@ Startup probe only — Raster does **not** implement the Node Inspector debuggin
 ## tty
 
 [isatty](https://nodejs.org/api/tty.html#ttyisattyfd)
+
+> `ReadStream` / `WriteStream` (including `process.stdin` / `stdout` / `stderr`) support `ref()` / `unref()`. Stdin reader tasks stop blocking exit when unref'd; readline follows `process.stdin`.
 
 ## url
 
@@ -854,7 +864,7 @@ Partial main-thread compatibility surface:
 - `getEnvironmentData()` and `setEnvironmentData()` with clone isolation
 - `markAsUntransferable()`, `isMarkedAsUntransferable()`, and `receiveMessageOnPort()` compatibility stubs
 
-Constructing `Worker` and calling `moveMessagePortToContext()` throw. Raster does not currently spawn JavaScript worker threads, and `MessagePort.ref()` / `unref()` do not control event-loop lifetime.
+Constructing `Worker` and calling `moveMessagePortToContext()` throw. Raster does not spawn JavaScript worker threads; `MessagePort.ref()` / `unref()` control event-loop lifetime like Node.
 
 ## zlib
 

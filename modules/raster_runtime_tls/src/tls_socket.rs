@@ -9,7 +9,7 @@ use raster_runtime_stream::{
     writable::{WritableStream, WritableStreamInner},
     SteamEvents,
 };
-use raster_runtime_utils::{error::ErrorExtensions, result::ResultExt};
+use raster_runtime_utils::{error::ErrorExtensions, event_loop::EventLoopRef, result::ResultExt};
 use rquickjs::{
     class::{Trace, Tracer},
     prelude::{Opt, Rest, This},
@@ -82,6 +82,7 @@ pub struct TlsSocket<'js> {
     peer_certs: Vec<CertObject>,
     local_cert_der: Option<Vec<u8>>,
     pub(crate) check_server_identity_cb: Option<Function<'js>>,
+    loop_ref: Arc<EventLoopRef>,
 }
 
 unsafe impl<'js> JsLifetime<'js> for TlsSocket<'js> {
@@ -236,15 +237,17 @@ impl<'js> TlsSocket<'js> {
         self.ready_state.to_string()
     }
 
-    /// Same as `net.Socket.ref` — currently a successful no-op.
+    /// Same as `net.Socket.ref`.
     #[qjs(rename = "ref")]
     pub fn js_ref(this: This<Class<'js, Self>>) -> Class<'js, Self> {
+        this.borrow().loop_ref.reference();
         this.0
     }
 
-    /// Same as `net.Socket.unref` — currently a successful no-op.
+    /// Same as `net.Socket.unref`.
     #[qjs(rename = "unref")]
     pub fn js_unref(this: This<Class<'js, Self>>) -> Class<'js, Self> {
+        this.borrow().loop_ref.unreference();
         this.0
     }
 
@@ -367,6 +370,10 @@ impl<'js> TlsSocket<'js> {
         let readable_stream_inner = ReadableStreamInner::new(emitter.clone(), false);
         let writable_stream_inner = WritableStreamInner::new(emitter.clone(), false);
 
+        let rt_ptr = unsafe { rquickjs::qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+        let rt_key =
+            raster_runtime_utils::event_loop::rt_key_from_ptr(rt_ptr as *mut std::ffi::c_void);
+
         Class::instance(
             ctx,
             Self {
@@ -395,6 +402,7 @@ impl<'js> TlsSocket<'js> {
                 peer_certs: Vec::new(),
                 local_cert_der: None,
                 check_server_identity_cb: None,
+                loop_ref: EventLoopRef::new_referenced(rt_key),
             },
         )
     }
@@ -587,13 +595,19 @@ impl<'js> TlsSocket<'js> {
     {
         let this2 = this.clone();
         let this3 = this.clone();
-        let readable_done =
-            ReadableStream::process_callback(this.clone(), ctx, reader, move || {
+        let loop_ref = this.borrow().loop_ref.clone();
+        let readable_done = ReadableStream::process_callback_loop(
+            this.clone(),
+            ctx,
+            reader,
+            move || {
                 if !allow_half_open {
                     WritableStream::end(This(this3));
                 }
-            })?;
-        let writable_done = WritableStream::process(this2, ctx, writer)?;
+            },
+            loop_ref.clone(),
+        )?;
+        let writable_done = WritableStream::process_loop(this2, ctx, writer, Some(loop_ref))?;
         Ok((readable_done, writable_done))
     }
 

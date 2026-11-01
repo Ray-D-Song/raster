@@ -27,7 +27,15 @@ export class Worker {
   }
 }
 
-type MessageListener = (value: unknown) => void;
+declare global {
+  // Installed by raster_runtime timers init (ref/unref for MessagePort).
+  var __rasterCreateLoopRefController: () => {
+    ref(): void;
+    unref(): void;
+  };
+}
+
+type LoopRefController = ReturnType<typeof __rasterCreateLoopRefController>;
 
 /** Module-level environment data shared across the main thread (Node semantics). */
 const environmentData = new Map<unknown, unknown>();
@@ -58,6 +66,14 @@ export class MessagePort {
   #peer: MessagePort | null = null;
   #listeners = new Map<string, Set<MessageListener>>();
   #closed = false;
+  readonly #loopRef: LoopRefController;
+
+  constructor() {
+    this.#loopRef =
+      typeof globalThis.__rasterCreateLoopRefController === "function"
+        ? globalThis.__rasterCreateLoopRefController()
+        : { ref() {}, unref() {} };
+  }
 
   /** Internal: wire peer after both ports are constructed. */
   _setPeer(peer: MessagePort) {
@@ -69,6 +85,7 @@ export class MessagePort {
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
+    this.#loopRef.unref();
     this.#dispatch("close", undefined);
   }
 
@@ -120,18 +137,17 @@ export class MessagePort {
 
   /**
    * Node `port.ref()` — keep the event loop alive while the port is active.
-   * Raster has no process-handle keepalive yet; retained for API compatibility
-   * (returns `this`, does not pretend via unused internal flags).
    */
   ref(): this {
+    this.#loopRef.ref();
     return this;
   }
 
   /**
    * Node `port.unref()` — allow exit if this is the only remaining handle.
-   * See `ref()`; no-op until a real keepalive exists.
    */
   unref(): this {
+    this.#loopRef.unref();
     return this;
   }
 

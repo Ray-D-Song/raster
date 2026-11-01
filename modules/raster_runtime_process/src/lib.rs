@@ -430,9 +430,7 @@ pub fn init(ctx: &Ctx<'_>) -> Result<()> {
     // Node-standard pid: enumerable, non-writable, configurable.
     process.prop(
         "pid",
-        Property::from(process_id())
-            .enumerable()
-            .configurable(),
+        Property::from(process_id()).enumerable().configurable(),
     )?;
     process.set("argv", args)?;
     process.set("platform", PLATFORM)?;

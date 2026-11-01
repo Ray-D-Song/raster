@@ -62,6 +62,8 @@ declare module "http" {
     getConnections(callback: (error: Error | undefined, count: number) => void): void;
     closeAllConnections(): void;
     closeIdleConnections(): void;
+    ref(): this;
+    unref(): this;
     on(event: "request" | "checkContinue", listener: (request: IncomingMessage, response: ServerResponse) => void): this;
     on(event: "upgrade" | "connect", listener: (request: IncomingMessage, socket: import("net").Socket, head: Buffer) => void): this;
     on(event: "clientError", listener: (error: Error) => void): this;

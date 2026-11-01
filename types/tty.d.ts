@@ -19,6 +19,8 @@ declare module "tty" {
     setRawMode(mode: boolean): this;
     resume(): this;
     pause(): this;
+    ref(): this;
+    unref(): this;
   }
 
   class WriteStream extends EventEmitter {
@@ -39,6 +41,8 @@ declare module "tty" {
     clearScreenDown(callback?: () => void): boolean;
     hasColors(count?: number): boolean;
     getColorDepth(env?: object): number;
+    ref(): this;
+    unref(): this;
   }
 
   export { isatty, ReadStream, WriteStream };

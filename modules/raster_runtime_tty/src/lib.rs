@@ -29,6 +29,7 @@ use raster_runtime_buffer::Buffer;
 use raster_runtime_context::CtxExtension;
 use raster_runtime_events::{Emitter, EventEmitter};
 use raster_runtime_utils::bytes::ObjectBytes;
+use raster_runtime_utils::event_loop::EventLoopRef;
 use raster_runtime_utils::module::{export_default, ModuleInfo};
 use rquickjs::{
     class::{Trace, Tracer},
@@ -497,6 +498,7 @@ pub struct ReadStream<'js> {
     reader_state: ReaderState,
     next_generation: u64,
     destroyed: bool,
+    loop_ref: Arc<EventLoopRef>,
 }
 
 // ReaderState is not Clone; live cancel ownership stays on the Class cell.
@@ -511,6 +513,7 @@ impl<'js> Clone for ReadStream<'js> {
             reader_state: ReaderState::Paused,
             next_generation: self.next_generation,
             destroyed: self.destroyed,
+            loop_ref: self.loop_ref.clone(),
         }
     }
 }
@@ -673,12 +676,28 @@ impl<'js> ReadStream<'js> {
         let _ = ReadStream::emit_str(this.0.clone(), &ctx, "close", vec![], false);
         Ok(this.0)
     }
+
+    #[qjs(rename = "ref")]
+    pub fn js_ref(this: This<Class<'js, Self>>) -> Class<'js, Self> {
+        this.borrow().loop_ref.reference();
+        this.0
+    }
+
+    #[qjs(rename = "unref")]
+    pub fn js_unref(this: This<Class<'js, Self>>) -> Class<'js, Self> {
+        this.borrow().loop_ref.unreference();
+        this.0
+    }
 }
 
 impl<'js> ReadStream<'js> {
     pub fn new(ctx: Ctx<'js>, fd: i32) -> Result<Class<'js, Self>> {
         let emitter = EventEmitter::new();
         let is_tty = isatty(fd);
+        let rt_ptr = unsafe { rquickjs::qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+        let rt_key =
+            raster_runtime_utils::event_loop::rt_key_from_ptr(rt_ptr as *mut std::ffi::c_void);
+        let loop_ref = EventLoopRef::new_unreferenced(rt_key);
         let instance = Class::instance(
             ctx.clone(),
             Self {
@@ -689,6 +708,7 @@ impl<'js> ReadStream<'js> {
                 reader_state: ReaderState::Paused,
                 next_generation: 1,
                 destroyed: false,
+                loop_ref,
             },
         )?;
         ReadStream::add_event_emitter_prototype(&ctx)?;
@@ -796,6 +816,7 @@ impl<'js> ReadStream<'js> {
             }
         }
 
+        this.borrow().loop_ref.reference();
         Self::spawn_reader_worker(this, ctx, fd, generation, worker_cancel)?;
         Ok(())
     }
@@ -818,8 +839,23 @@ impl<'js> ReadStream<'js> {
 
         let this2 = this.clone();
         let ctx2 = ctx.clone();
+        let reader_loop_ref = this.borrow().loop_ref.clone();
         ctx.clone().spawn_exit(async move {
-            while let Some(msg) = rx.recv().await {
+            let mut broke_unref = false;
+            loop {
+                if !raster_runtime_utils::event_loop::keeps_event_loop_alive(&reader_loop_ref) {
+                    broke_unref = true;
+                    break;
+                }
+                tokio::select! {
+                    _ = raster_runtime_utils::event_loop::wait_until_io_unref(reader_loop_ref.clone()) => {
+                        broke_unref = true;
+                        break;
+                    }
+                    msg = rx.recv() => {
+                        let Some(msg) = msg else {
+                            break;
+                        };
                 // Drop messages from stale generations (should not happen for
                 // a single worker channel, but guard emit against Destroyed).
                 let still_live = {
@@ -880,6 +916,24 @@ impl<'js> ReadStream<'js> {
                         // No event; worker finishing will drive state.
                     },
                 }
+                    }
+                }
+            }
+
+            if broke_unref {
+                {
+                    let mut s = this2.borrow_mut();
+                    if let ReaderState::Running { cancel, generation: g } =
+                        std::mem::replace(&mut s.reader_state, ReaderState::Paused)
+                    {
+                        if g == generation {
+                            cancel.cancel();
+                        }
+                    }
+                    s.loop_ref.unreference();
+                }
+                while rx.recv().await.is_some() {}
+                return Ok(());
             }
 
             // Worker fully completed: state transition on JS executor.
@@ -892,13 +946,15 @@ impl<'js> ReadStream<'js> {
     fn on_worker_finished(this: Class<'js, Self>, ctx: Ctx<'js>, generation: u64) -> Result<()> {
         let resume_again = {
             let mut s = this.borrow_mut();
-            match &s.reader_state {
+            match &mut s.reader_state {
                 ReaderState::Running { generation: g, .. } if *g == generation => {
                     s.reader_state = ReaderState::Paused;
+                    s.loop_ref.unreference();
                     false
                 },
                 ReaderState::Starting { generation: g } if *g == generation => {
                     s.reader_state = ReaderState::Paused;
+                    s.loop_ref.unreference();
                     false
                 },
                 ReaderState::Stopping {
@@ -907,6 +963,7 @@ impl<'js> ReadStream<'js> {
                 } if *g == generation => {
                     let pending = *resume_pending;
                     s.reader_state = ReaderState::Paused;
+                    s.loop_ref.unreference();
                     pending && !s.destroyed
                 },
                 // Old generation completion must not overwrite newer state.
@@ -1075,6 +1132,7 @@ pub struct WriteStream<'js> {
     columns: u16,
     rows: u16,
     ended: bool,
+    loop_ref: Arc<EventLoopRef>,
 }
 
 unsafe impl<'js> JsLifetime<'js> for WriteStream<'js> {
@@ -1390,6 +1448,18 @@ impl<'js> WriteStream<'js> {
         }
         Ok(())
     }
+
+    #[qjs(rename = "ref")]
+    pub fn js_ref(this: This<Class<'js, Self>>) -> Class<'js, Self> {
+        this.borrow().loop_ref.reference();
+        this.0
+    }
+
+    #[qjs(rename = "unref")]
+    pub fn js_unref(this: This<Class<'js, Self>>) -> Class<'js, Self> {
+        this.borrow().loop_ref.unreference();
+        this.0
+    }
 }
 
 impl<'js> WriteStream<'js> {
@@ -1401,6 +1471,10 @@ impl<'js> WriteStream<'js> {
         } else {
             (0, 0)
         };
+        let rt_ptr = unsafe { rquickjs::qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+        let rt_key =
+            raster_runtime_utils::event_loop::rt_key_from_ptr(rt_ptr as *mut std::ffi::c_void);
+        let loop_ref = EventLoopRef::new_unreferenced(rt_key);
         let instance = Class::instance(
             ctx.clone(),
             Self {
@@ -1410,6 +1484,7 @@ impl<'js> WriteStream<'js> {
                 columns,
                 rows,
                 ended: false,
+                loop_ref,
             },
         )?;
         WriteStream::add_event_emitter_prototype(&ctx)?;

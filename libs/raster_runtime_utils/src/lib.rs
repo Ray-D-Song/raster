@@ -10,6 +10,7 @@ pub mod ctx;
 pub mod driver_poll;
 pub mod error;
 pub mod error_messages;
+pub mod event_loop;
 pub mod fs;
 pub mod hash;
 pub mod io;
