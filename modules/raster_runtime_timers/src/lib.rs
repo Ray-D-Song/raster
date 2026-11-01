@@ -195,7 +195,7 @@ fn create_loop_ref_controller(ctx: Ctx<'_>) -> Result<Class<'_, LoopRefControlle
     Class::instance(
         ctx,
         LoopRefController {
-            inner: EventLoopRef::new_referenced(rt_key),
+            inner: EventLoopRef::new_unreferenced(rt_key),
         },
     )
 }
