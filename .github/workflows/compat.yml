@@ -29,8 +29,12 @@ jobs:
     outputs:
       core: ${{ steps.scope.outputs.core }}
     steps:
+      - uses: actions/checkout@v4
+      # paths-filter needs a git checkout for non-PR events (it diffs against a
+      # base ref); skipping it made workflow_dispatch runs die here.
       - uses: dorny/paths-filter@v3
         id: filter
+        if: github.event_name == 'pull_request'
         with:
           filters: |
             core:
