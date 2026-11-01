@@ -173,3 +173,22 @@ describe("worker_threads MessageChannel", () => {
     port1.close();
   });
 });
+
+describe("worker_threads Worker spawn", () => {
+  it("exchanges messages with workerData", async () => {
+    const { Worker } = await import("node:worker_threads");
+    const { join } = await import("node:path");
+    const workerPath = join(
+      process.cwd(),
+      "tests/unit/worker_threads_worker.fixture.mjs"
+    );
+    const worker = new Worker(workerPath, { workerData: { tag: "hello" } });
+    await new Promise<void>((resolve) => worker.once("online", resolve));
+    const reply = new Promise<unknown>((resolve) => {
+      worker.once("message", resolve);
+    });
+    worker.postMessage({ ping: 1 });
+    expect(await reply).toEqual({ pong: 1, workerData: { tag: "hello" } });
+    worker.terminate();
+  });
+});

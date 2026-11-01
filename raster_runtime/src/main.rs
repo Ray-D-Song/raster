@@ -118,6 +118,39 @@ async fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
     MinimalTracer::register().map_err(|err| err.to_string())?;
     trace!("Started runtime");
 
+    if env::var(raster_runtime_worker_threads::ENV_WORKER_INTERNAL).is_ok() {
+        let script = env::var(raster_runtime_worker_threads::ENV_WORKER_SCRIPT)
+            .map_err(|_| "missing RASTER_WORKER_SCRIPT")?;
+        let worker_data = env::var(raster_runtime_worker_threads::ENV_WORKER_DATA)
+            .unwrap_or_else(|_| "null".into());
+        let cli = parse_node_cli_flags(env::args().collect());
+        set_argv(cli.argv);
+        let vm = Vm::from_options(VmOptions {
+            sqlite_enabled: cli.sqlite_enabled,
+            module_builder: ModuleBuilder::with_config(ModuleBuilderConfig {
+                sqlite_enabled: cli.sqlite_enabled,
+            })
+            .with_global(raster_runtime_core::modules::embedded::init)
+            .with_global(raster_runtime_core::builtins_inspect::init)
+            .with_module(raster_runtime_core::modules::raster_runtime::hex::RasterRuntimeHexModule)
+            .with_module(raster_runtime_core::modules::raster_runtime::qjs::RasterRuntimeQjsModule)
+            .with_module(
+                raster_runtime_core::modules::raster_runtime::util::RasterRuntimeUtilModule,
+            )
+            .with_module(raster_runtime_core::modules::raster_runtime::xml::RasterRuntimeXmlModule),
+            ..VmOptions::default()
+        })
+        .await?;
+        vm.ctx
+            .async_with(async move |ctx| {
+                raster_runtime_worker_threads::run_worker_entry(&ctx, &script, &worker_data).await
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        vm.idle().await?;
+        return Ok(ExitCode::from(EXIT_CODE.load(Ordering::Relaxed)));
+    }
+
     let cli = parse_node_cli_flags(env::args().collect());
     set_argv(cli.argv);
     NO_WARNINGS.store(cli.no_warnings, Ordering::Relaxed);

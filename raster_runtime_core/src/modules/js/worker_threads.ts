@@ -1,43 +1,57 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Minimal Node-compatible `worker_threads` surface for packages that probe
-// `isMainThread` / MessageChannel. Full Worker spawning is fail-fast.
+// Node-compatible `worker_threads` (Worker spawn via isolated raster_runtime child).
 
-/** Always true: Raster runs as a single main thread. */
-export const isMainThread = true;
-
-/** No parent port in the main thread. */
-export const parentPort = null;
-
-/** No worker data in the main thread. */
-export const workerData = undefined;
-
-/** Thread id of the main thread. */
-export const threadId = 0;
-
-/**
- * Stub Worker — constructing throws (do not claim Worker compatibility).
- */
-export class Worker {
-  constructor(_filename?: string | URL, _options?: object) {
-    throw new Error(
-      "worker_threads.Worker is not implemented in raster_runtime yet"
-    );
-  }
-}
+import { EventEmitter } from "node:events";
 
 declare global {
-  // Installed by raster_runtime timers init (ref/unref for MessagePort).
+  var __rasterWorkerIsMainThread: (() => boolean) | undefined;
+  var __rasterWorkerThreadId: (() => number) | undefined;
+  var __rasterWorkerSpawn:
+    | ((
+        filename: string,
+        workerDataJson: string,
+        onEvent: (event: string, arg?: unknown) => void
+      ) => {
+        threadId: number;
+        postMessage: (data: unknown) => void;
+        terminate: () => void;
+        ref: () => void;
+        unref: () => void;
+      })
+    | undefined;
+  var __rasterWorkerParentPostMessage: ((json: string) => void) | undefined;
   var __rasterCreateLoopRefController: () => {
     ref(): void;
     unref(): void;
   };
 }
 
+function readIsMainThread(): boolean {
+  if (typeof globalThis.__rasterWorkerIsMainThread === "function") {
+    return globalThis.__rasterWorkerIsMainThread();
+  }
+  return true;
+}
+
+function readThreadId(): number {
+  if (typeof globalThis.__rasterWorkerThreadId === "function") {
+    return globalThis.__rasterWorkerThreadId();
+  }
+  return 0;
+}
+
+export const isMainThread = readIsMainThread();
+export const threadId = readThreadId();
+
+/** Populated in worker child before the worker script is imported. */
+export const workerData: unknown = isMainThread
+  ? undefined
+  : (globalThis as { workerData?: unknown }).workerData;
+
 type LoopRefController = ReturnType<typeof __rasterCreateLoopRefController>;
 
-/** Module-level environment data shared across the main thread (Node semantics). */
 const environmentData = new Map<unknown, unknown>();
 
 function toDataCloneError(err: unknown): DOMException {
@@ -56,10 +70,8 @@ function toDataCloneError(err: unknown): DOMException {
   return new DOMException(message, "DataCloneError");
 }
 
-/**
- * Interconnected MessagePort pair (Node-compatible messaging).
- * `postMessage` always structured-clones; values are never passed by reference.
- */
+type MessageListener = (data: unknown) => void;
+
 export class MessagePort {
   onmessage: ((ev: { data: unknown }) => void) | null = null;
   onmessageerror: ((ev: unknown) => void) | null = null;
@@ -75,7 +87,6 @@ export class MessagePort {
         : { ref() {}, unref() {} };
   }
 
-  /** Internal: wire peer after both ports are constructed. */
   _setPeer(peer: MessagePort) {
     this.#peer = peer;
   }
@@ -89,10 +100,6 @@ export class MessagePort {
     this.#dispatch("close", undefined);
   }
 
-  /**
-   * Structured-clone `message` and deliver asynchronously to the peer.
-   * Uncloneable values throw `DataCloneError`. Closed ports drop delivery.
-   */
   postMessage(message: unknown, transfer?: unknown[]): void {
     if (this.#closed) return;
 
@@ -121,13 +128,11 @@ export class MessagePort {
     if (!peer || peer.#closed) return;
 
     queueMicrotask(() => {
-      // Closed port: stop delivery.
       if (peer.#closed) return;
       peer.dispatchMessage(cloned);
     });
   }
 
-  /** Deliver a previously cloned message (listener exceptions are not swallowed). */
   dispatchMessage(data: unknown): void {
     this.#dispatch("message", data);
     if (typeof this.onmessage === "function") {
@@ -135,17 +140,11 @@ export class MessagePort {
     }
   }
 
-  /**
-   * Node `port.ref()` — keep the event loop alive while the port is active.
-   */
   ref(): this {
     this.#loopRef.ref();
     return this;
   }
 
-  /**
-   * Node `port.unref()` — allow exit if this is the only remaining handle.
-   */
   unref(): this {
     this.#loopRef.unref();
     return this;
@@ -177,16 +176,122 @@ export class MessagePort {
   #dispatch(type: string, data: unknown) {
     const set = this.#listeners.get(type);
     if (!set) return;
-    // Do not swallow listener exceptions — they must surface to the host.
     for (const fn of [...set]) {
       fn(data);
     }
   }
 }
 
-/**
- * Pair of connected MessagePorts.
- */
+const workerParentListeners = new Set<MessageListener>();
+
+/** Worker-side port talking to the parent over process IPC. */
+class WorkerParentPort extends MessagePort {
+  postMessage(message: unknown, transfer?: unknown[]): void {
+    if (typeof globalThis.__rasterWorkerParentPostMessage !== "function") {
+      throw new Error("worker parent IPC is unavailable");
+    }
+    let transferOptions: { transfer: unknown[] } | undefined;
+    if (transfer != null) {
+      if (!Array.isArray(transfer)) {
+        throw new TypeError(
+          'The "transferList" argument must be an instance of Array.'
+        );
+      }
+      if (transfer.length > 0) {
+        transferOptions = { transfer };
+      }
+    }
+    let cloned: unknown;
+    try {
+      cloned = transferOptions
+        ? structuredClone(message, transferOptions as object)
+        : structuredClone(message);
+    } catch (err) {
+      throw toDataCloneError(err);
+    }
+    globalThis.__rasterWorkerParentPostMessage(JSON.stringify(cloned));
+  }
+}
+
+let workerParentPort: WorkerParentPort | null = null;
+
+globalThis.__rasterWorkerDispatchParentMessage = (data: unknown) => {
+  workerParentPort?.dispatchMessage(data);
+};
+
+export const parentPort: WorkerParentPort | null = isMainThread
+  ? null
+  : (workerParentPort = new WorkerParentPort());
+
+export class Worker extends EventEmitter {
+  readonly threadId: number;
+  #handle: {
+    postMessage: (json: string) => void;
+    terminate: () => void;
+    ref: () => void;
+    unref: () => void;
+  };
+
+  constructor(filename: string | URL, options: { workerData?: unknown } = {}) {
+    super();
+    if (!isMainThread) {
+      throw new Error("Worker is not supported inside a worker");
+    }
+    if (typeof globalThis.__rasterWorkerSpawn !== "function") {
+      throw new Error("worker_threads.Worker is unavailable in this build");
+    }
+    const path =
+      filename instanceof URL ? filename.href : String(filename);
+    const workerDataOpt = options.workerData ?? null;
+    const handle = globalThis.__rasterWorkerSpawn(
+      path,
+      JSON.stringify(workerDataOpt),
+      (event, arg) => {
+        this.emit(event, arg);
+      }
+    );
+    this.threadId = handle.threadId;
+    this.#handle = handle;
+  }
+
+  postMessage(value: unknown, transfer?: unknown[]): void {
+    let transferOptions: { transfer: unknown[] } | undefined;
+    if (transfer != null) {
+      if (!Array.isArray(transfer)) {
+        throw new TypeError(
+          'The "transferList" argument must be an instance of Array.'
+        );
+      }
+      if (transfer.length > 0) {
+        transferOptions = { transfer };
+      }
+    }
+    let cloned: unknown;
+    try {
+      cloned = transferOptions
+        ? structuredClone(value, transferOptions as object)
+        : structuredClone(value);
+    } catch (err) {
+      throw toDataCloneError(err);
+    }
+    this.#handle.postMessage(JSON.stringify(cloned));
+  }
+
+  terminate(): void {
+    this.#handle.terminate();
+  }
+
+  ref(): this {
+    this.#handle.ref();
+    return this;
+  }
+
+  unref(): this {
+    this.#handle.unref();
+    return this;
+  }
+}
+
 export class MessageChannel {
   port1: MessagePort;
   port2: MessagePort;
@@ -198,7 +303,6 @@ export class MessageChannel {
   }
 }
 
-/** Clone-on-get environment data (Node `worker_threads` API). */
 export function getEnvironmentData(key: unknown): unknown {
   if (!environmentData.has(key)) {
     return undefined;
@@ -207,13 +311,10 @@ export function getEnvironmentData(key: unknown): unknown {
 }
 
 export function setEnvironmentData(key: unknown, value: unknown): void {
-  // Store a clone so later mutations of `value` do not affect the map entry.
   environmentData.set(key, structuredClone(value));
 }
 
-export function markAsUntransferable(_object: unknown): void {
-  // no-op until transfer list integration is complete
-}
+export function markAsUntransferable(_object: unknown): void {}
 
 export function isMarkedAsUntransferable(_object: unknown): boolean {
   return false;
