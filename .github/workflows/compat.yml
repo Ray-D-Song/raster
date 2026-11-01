@@ -73,6 +73,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: windows-sqlite
+          cache-workspace-crates: "true"
       - run: yarn install --frozen-lockfile
       - run: make js JS_MINIFY=0
       - name: Build raster_runtime and sqlite extension
@@ -103,6 +104,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: windows-tty-napi
+          cache-workspace-crates: "true"
       - name: Build and test TTY + N-API + FS (Windows)
         run: |
           cargo test -p raster_runtime_tty --lib
@@ -352,6 +354,7 @@ jobs:
           # features, and per-case keys would multiply caches past the repo's
           # 10 GB cache budget.
           key: ${{ matrix.os }}-${{ (matrix.case == 'napi-hello' || matrix.case == 'vite-plus') && 'napi' || (matrix.case == 'better-sqlite3' || matrix.case == 'v8-hello') && 'v8-compat' || 'default' }}
+          cache-workspace-crates: "true"
       - name: Build raster_runtime
         run: |
           FEATURES=""
