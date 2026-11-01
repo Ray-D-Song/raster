@@ -701,7 +701,9 @@ pub fn resume_timer_loop_if_idle(ctx: &Ctx<'_>) -> Result<()> {
     let rt_key = event_loop::rt_key_from_ptr(rt_ptr as *mut std::ffi::c_void);
     let (should_run, deadline, notify) = {
         let mut rt_timer = RT_TIMER_STATE.lock().unwrap();
-        let state = get_timer_state(&mut rt_timer, rt_ptr);
+        let Some(state) = rt_timer.iter_mut().find(|state| state.rt == rt_ptr) else {
+            return Ok(());
+        };
         if state.running {
             return Ok(());
         }
@@ -752,6 +754,9 @@ pub fn poll_timers(
     static FAR_FUTURE: Duration = Duration::from_secs(84200 * 365 * 30);
 
     let mut rt_timers = RT_TIMER_STATE.lock().unwrap();
+    if !rt_timers.iter().any(|state| state.rt == rt) {
+        return Ok(false);
+    }
     let state = get_timer_state(&mut rt_timers, rt);
     let now = Instant::now();
 
