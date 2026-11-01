@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #![allow(clippy::uninlined_format_args)]
 
+#[cfg(unix)]
 mod fork;
 mod ipc_channel;
 
