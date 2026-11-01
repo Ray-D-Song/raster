@@ -27,6 +27,7 @@ members = [
   "modules/raster_runtime_fetch",
   "modules/raster_runtime_fs",
   "modules/raster_runtime_http",
+  "modules/raster_runtime_http2",
   "modules/raster_runtime_inspector",
   "modules/raster_runtime_intl",
   "modules/raster_runtime_napi",

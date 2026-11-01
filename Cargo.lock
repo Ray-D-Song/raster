@@ -2773,6 +2773,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "raster_runtime_http2"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "h2",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "once_cell",
+ "raster_runtime_async_hooks",
+ "raster_runtime_buffer",
+ "raster_runtime_context",
+ "raster_runtime_events",
+ "raster_runtime_test",
+ "raster_runtime_test_tls",
+ "raster_runtime_timers",
+ "raster_runtime_tls",
+ "raster_runtime_utils",
+ "rquickjs",
+ "rustls",
+ "rustls-pemfile",
+ "tokio",
+ "tokio-rustls",
+]
+
+[[package]]
 name = "raster_runtime_inspector"
 version = "0.1.0"
 dependencies = [
@@ -2845,6 +2872,7 @@ dependencies = [
  "raster_runtime_fs",
  "raster_runtime_hooking",
  "raster_runtime_http",
+ "raster_runtime_http2",
  "raster_runtime_inspector",
  "raster_runtime_intl",
  "raster_runtime_json",
