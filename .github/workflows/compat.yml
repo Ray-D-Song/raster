@@ -99,6 +99,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
+          # Only main writes caches. PR refs restoring-and-resaving their own copy
+          # is what pushed the repo past the 10 GB limit and evicted main's
+          # rust-unit entry, which is the single most valuable cache here.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           shared-key: rust-unit
           # The workspace crates dominate this job (raster_runtime_modules alone is
           # ~5 min), and rust-cache drops non-dependency artifacts by default.
@@ -139,6 +143,10 @@ jobs:
           cache: yarn
       - uses: Swatinem/rust-cache@v2
         with:
+          # Only main writes caches. PR refs restoring-and-resaving their own copy
+          # is what pushed the repo past the 10 GB limit and evicted main's
+          # rust-unit entry, which is the single most valuable cache here.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           shared-key: windows-sqlite
       - run: yarn install --frozen-lockfile
       - run: make js JS_MINIFY=0
@@ -170,6 +178,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
+          # Only main writes caches. PR refs restoring-and-resaving their own copy
+          # is what pushed the repo past the 10 GB limit and evicted main's
+          # rust-unit entry, which is the single most valuable cache here.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           shared-key: windows-tty-napi
       - name: Build and test TTY + N-API + FS (Windows)
         run: |
@@ -209,6 +221,10 @@ jobs:
           targets: x86_64-unknown-linux-gnu
       - uses: Swatinem/rust-cache@v2
         with:
+          # Only main writes caches. PR refs restoring-and-resaving their own copy
+          # is what pushed the repo past the 10 GB limit and evicted main's
+          # rust-unit entry, which is the single most valuable cache here.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           shared-key: sanitizer-${{ matrix.sanitizer }}
           # Both sanitizer gates rebuild almost everything (the sanitizer rustflags
           # change every crate's fingerprint), so a restored target dir saves little
@@ -256,6 +272,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
+          # Only main writes caches. PR refs restoring-and-resaving their own copy
+          # is what pushed the repo past the 10 GB limit and evicted main's
+          # rust-unit entry, which is the single most valuable cache here.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           # Registry only: this gate is short, and the repo's 10 GB cache budget is
           # better spent on the target dirs of the long jobs.
           shared-key: cargo-registry
@@ -272,6 +292,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
+          # Only main writes caches. PR refs restoring-and-resaving their own copy
+          # is what pushed the repo past the 10 GB limit and evicted main's
+          # rust-unit entry, which is the single most valuable cache here.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           # Registry only: short gate, see v8-clippy.
           shared-key: cargo-registry
           cache-targets: "false"
@@ -300,6 +324,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
         with:
+          # Only main writes caches. PR refs restoring-and-resaving their own copy
+          # is what pushed the repo past the 10 GB limit and evicted main's
+          # rust-unit entry, which is the single most valuable cache here.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           shared-key: sqlite-asan
           # Nightly changes daily, which rotates the cache key, so the target dir
           # rarely gets reused; only the registry is worth storing.
@@ -323,6 +351,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
+          # Only main writes caches. PR refs restoring-and-resaving their own copy
+          # is what pushed the repo past the 10 GB limit and evicted main's
+          # rust-unit entry, which is the single most valuable cache here.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           # Registry only: with `cargo build -p raster_runtime` the time goes to the
           # workspace crates, which rust-cache does not store by default, so a 365 MB
           # target cache bought ~2 s here. Share the small registry cache instead.
@@ -354,6 +386,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
+          # Only main writes caches. PR refs restoring-and-resaving their own copy
+          # is what pushed the repo past the 10 GB limit and evicted main's
+          # rust-unit entry, which is the single most valuable cache here.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           # Registry only; see mysql-compat.
           shared-key: cargo-registry
           cache-targets: "false"
@@ -423,6 +459,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
+          # Only main writes caches. PR refs restoring-and-resaving their own copy
+          # is what pushed the repo past the 10 GB limit and evicted main's
+          # rust-unit entry, which is the single most valuable cache here.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           shared-key: compatibility
           # Keyed by feature set, not matrix case: entries differ only in enabled
           # features, and per-case keys would multiply caches past the repo's
