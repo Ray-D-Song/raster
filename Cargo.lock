@@ -2754,6 +2754,7 @@ dependencies = [
  "raster_runtime_events",
  "raster_runtime_net",
  "raster_runtime_test",
+ "raster_runtime_timers",
  "raster_runtime_tls",
  "raster_runtime_utils",
  "rquickjs",

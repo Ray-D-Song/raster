@@ -323,6 +323,9 @@ fn should_keep_timer_loop(state: &RuntimeTimerState, rt_key: RtKey) -> bool {
     if !pending {
         return false;
     }
+    if event_loop::has_http_inflight(rt_key) {
+        return true;
+    }
     if event_loop::has_refed_handles(rt_key) {
         return true;
     }
@@ -851,31 +854,9 @@ pub fn poll_timers(
     let state = get_timer_state(&mut rt_timers, rt);
 
     if !should_keep_timer_loop(state, rt_key) {
-        let destroy_ctx = state.timers.first().map(|t| t.raw_ctx);
-        let hook_ids: Vec<usize> = state
-            .timers
-            .iter()
-            .filter(|t| !t.referenced && t.callback.is_some())
-            .map(|t| t.hook_id)
-            .collect();
-        state
-            .timers
-            .retain(|t| t.referenced && t.callback.is_some());
-        let still_running = should_keep_timer_loop(state, rt_key);
-        state.running = still_running;
+        state.running = false;
         drop(rt_timers);
-        if let Some(raw) = destroy_ctx {
-            let ctx2 = unsafe { Ctx::from_raw(raw) };
-            if let Ok(Some(func)) = ctx2
-                .globals()
-                .get_optional::<_, Function>("invokeAsyncHook")
-            {
-                for hook_id in hook_ids {
-                    let _ = func.call::<_, ()>(("destroy", "Timeout", hook_id));
-                }
-            }
-        }
-        return Ok(still_running);
+        return Ok(false);
     }
 
     if !has_items {

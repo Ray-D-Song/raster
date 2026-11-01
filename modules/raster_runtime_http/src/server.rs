@@ -25,9 +25,10 @@ use raster_runtime_buffer::Buffer;
 use raster_runtime_context::CtxExtension;
 use raster_runtime_events::{Emitter, EventEmitter, EventList};
 use raster_runtime_net::Socket;
+use raster_runtime_timers::{poll_timers, ExecutingTimer};
 use raster_runtime_utils::{
     bytes::ObjectBytes,
-    event_loop::EventLoopRef,
+    event_loop::{self, EventLoopRef},
     module::{export_default, ModuleInfo},
     object::ObjectExt,
 };
@@ -35,7 +36,8 @@ use rquickjs::{
     class::{Trace, Tracer},
     module::{Declarations, Exports, ModuleDef},
     prelude::{Func, Opt, Rest, This},
-    Array, Class, Ctx, Exception, Function, IntoJs, JsLifetime, Object, Result, Undefined, Value,
+    qjs, Array, Class, Ctx, Exception, Function, IntoJs, JsLifetime, Object, Result, Undefined,
+    Value,
 };
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
@@ -949,6 +951,9 @@ where
     drop(server_ref);
     count.fetch_add(1, Ordering::Relaxed);
     let request_ctx = ctx.clone();
+    let rt_ptr = unsafe { rquickjs::qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+    let http_rt_key =
+        event_loop::rt_key_from_ptr(rt_ptr as *mut std::ffi::c_void);
     let service_server = server.clone();
     let active_requests = Arc::new(AtomicUsize::new(0));
     let service_active_requests = active_requests.clone();
@@ -971,6 +976,7 @@ where
             let activity_tx = service_activity_tx.clone();
             async move {
                 active_requests.fetch_add(1, Ordering::Relaxed);
+                event_loop::adjust_http_inflight(http_rt_key, 1);
                 let response = dispatch(
                     request_ctx,
                     server,
@@ -980,6 +986,7 @@ where
                     max_request_body_size,
                 )
                 .await;
+                event_loop::adjust_http_inflight(http_rt_key, -1);
                 active_requests.fetch_sub(1, Ordering::Relaxed);
                 let _ = activity_tx.send(());
                 response
@@ -1056,6 +1063,47 @@ where
     Ok(())
 }
 
+/// Drive microtasks while Hyper awaits async HTTP handlers.
+struct JsEventLoopPump {
+    rt: *mut qjs::JSRuntime,
+    executing_timers: Vec<Option<ExecutingTimer>>,
+}
+
+impl JsEventLoopPump {
+    fn new(ctx: &Ctx<'_>) -> Self {
+        let rt = unsafe { qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+        Self {
+            rt,
+            executing_timers: Vec::new(),
+        }
+    }
+
+    fn tick(&mut self, ctx: &Ctx<'_>) {
+        while ctx.execute_pending_job() {}
+        let _ = poll_timers(self.rt, &mut self.executing_timers, None, None);
+    }
+}
+
+/// Drive microtasks while waiting for the response oneshot.
+async fn await_response_pumping(
+    ctx: &Ctx<'_>,
+    pump: &mut JsEventLoopPump,
+    mut rx: oneshot::Receiver<HyperResponse<BoxBody<Bytes, Infallible>>>,
+    empty: impl Fn() -> HyperResponse<BoxBody<Bytes, Infallible>>,
+) -> HyperResponse<BoxBody<Bytes, Infallible>> {
+    use tokio::time::{interval, MissedTickBehavior};
+    let mut tick = interval(Duration::from_millis(1));
+    tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    tokio::pin!(rx);
+    loop {
+        tokio::select! {
+            biased;
+            response = &mut rx => return response.unwrap_or_else(|_| empty()),
+            _ = tick.tick() => pump.tick(ctx),
+        }
+    }
+}
+
 async fn dispatch<'js>(
     ctx: Ctx<'js>,
     server: Class<'js, Server<'js>>,
@@ -1083,6 +1131,7 @@ async fn dispatch<'js>(
             .body(Full::new(Bytes::new()).boxed())
             .unwrap()
     };
+    let mut js_pump = JsEventLoopPump::new(&ctx);
     let headers = match Object::new(ctx.clone()) {
         Ok(v) => v,
         Err(_) => return Ok(empty()),
@@ -1245,7 +1294,7 @@ async fn dispatch<'js>(
     // A synchronous handler may have already committed a final response.
     // Return it now instead of waiting for an abandoned or slow request body.
     if res.borrow().headers_sent {
-        return Ok(rx.await.unwrap_or_else(|_| empty()));
+        return Ok(await_response_pumping(&ctx, &mut js_pump, rx, empty).await);
     }
 
     // Hyper owns the HTTP/1 encoder and deliberately sends `100 Continue`
@@ -1254,9 +1303,15 @@ async fn dispatch<'js>(
     // poll after `writeContinue()` so a final response is sent without 100.
     let consume_body = !check_continue || res.borrow().continue_requested;
     if consume_body {
+        use tokio::time::{interval, MissedTickBehavior};
+        let mut pump_tick = interval(Duration::from_millis(1));
+        pump_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
             while req.borrow().paused && !req.borrow().destroyed {
-                tokio::time::sleep(Duration::from_millis(1)).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_millis(1)) => js_pump.tick(&ctx),
+                    _ = pump_tick.tick() => js_pump.tick(&ctx),
+                }
             }
             if req.borrow().destroyed {
                 break;
@@ -1268,6 +1323,10 @@ async fn dispatch<'js>(
                 tokio::select! {
                     response = &mut rx => return Ok(response.unwrap_or_else(|_| empty())),
                     frame = body.frame() => frame,
+                    _ = pump_tick.tick() => {
+                        js_pump.tick(&ctx);
+                        continue;
+                    }
                 }
             } else {
                 tokio::select! {
@@ -1279,6 +1338,10 @@ async fn dispatch<'js>(
                             .body(Full::new(Bytes::new()).boxed())
                             .unwrap_or_else(|_| empty())),
                     },
+                    _ = pump_tick.tick() => {
+                        js_pump.tick(&ctx);
+                        continue;
+                    }
                 }
             };
             let Some(frame) = next_frame else {
@@ -1321,7 +1384,7 @@ async fn dispatch<'js>(
         req.borrow_mut().complete = true;
         let _ = IncomingMessage::emit_str(req, &ctx, "end", vec![], false);
     }
-    Ok(rx.await.unwrap_or_else(|_| empty()))
+    Ok(await_response_pumping(&ctx, &mut js_pump, rx, empty).await)
 }
 
 /// Minimal `http.Agent` so Next can run `new http.Agent(httpAgentOptions)`.

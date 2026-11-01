@@ -16,6 +16,8 @@ type RtKey = usize;
 
 struct RuntimeLoopState {
     refs: AtomicUsize,
+    /// In-flight HTTP request handlers (keeps timer loop polling unref timers).
+    http_inflight: AtomicUsize,
     /// Fired whenever `refs` transitions to zero.
     quiescent: Arc<Notify>,
 }
@@ -24,6 +26,7 @@ impl RuntimeLoopState {
     fn new() -> Self {
         Self {
             refs: AtomicUsize::new(0),
+            http_inflight: AtomicUsize::new(0),
             quiescent: Arc::new(Notify::new()),
         }
     }
@@ -50,6 +53,23 @@ pub fn rt_key_from_ptr(rt: *mut std::ffi::c_void) -> RtKey {
 
 pub fn has_refed_handles(rt: RtKey) -> bool {
     state_for(rt).refs.load(Ordering::Acquire) > 0
+}
+
+pub fn has_http_inflight(rt: RtKey) -> bool {
+    state_for(rt).http_inflight.load(Ordering::Acquire) > 0
+}
+
+/// Track active HTTP `request` handlers so unref timers still fire during SSR.
+pub fn adjust_http_inflight(rt: RtKey, delta: i32) {
+    let state = state_for(rt);
+    if delta >= 0 {
+        state
+            .http_inflight
+            .fetch_add(delta as usize, Ordering::AcqRel);
+    } else {
+        state.http_inflight.fetch_sub((-delta) as usize, Ordering::AcqRel);
+    }
+    crate::driver_poll::wake_native_drivers(rt as *mut rquickjs::qjs::JSRuntime);
 }
 
 /// Whether a handle and the runtime as a whole still require background I/O tasks.

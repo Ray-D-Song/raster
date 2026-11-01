@@ -66,6 +66,7 @@ hyper-openssl = { version = "0.10", features = [
 openssl = { version = "0.10", optional = true }
 raster_runtime_dns_cache = { version = "0.1.0", path = "../../libs/raster_runtime_dns_cache" }
 raster_runtime_tls = { version = "0.1.0", default-features = false, path = "../raster_runtime_tls" }
+raster_runtime_timers = { version = "0.1.0", path = "../raster_runtime_timers" }
 raster_runtime_utils = { version = "0.1.0", path = "../../libs/raster_runtime_utils", default-features = false }
 raster_runtime_context = { version = "0.1.0", path = "../../libs/raster_runtime_context" }
 raster_runtime_events = { version = "0.1.0", path = "../raster_runtime_events" }
