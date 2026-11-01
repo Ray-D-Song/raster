@@ -857,14 +857,22 @@ Startup probe only — Raster does **not** implement the Node Inspector debuggin
 
 ## worker_threads
 
-Partial main-thread compatibility surface:
+Main-thread and worker-child compatibility (Workers run in **separate `raster_runtime` processes**, not OS threads):
 
 - `isMainThread`, `parentPort`, `workerData`, and `threadId`
-- `MessageChannel` and `MessagePort` with asynchronous structured-clone delivery
-- `getEnvironmentData()` and `setEnvironmentData()` with clone isolation
+- `Worker` spawn with `workerData`, optional `env` / `argv` / `name`, and events `online`, `message`, `error`, and `exit` (code + signal)
+- Cross-process `postMessage` uses **structured-clone binary IPC** (not JSON); `transferList` copies detached `ArrayBuffer` bytes (same semantics as in-process clone, not shared memory)
+- Nested `Worker` from inside a worker child (each nested worker is another process)
+- `MessageChannel` and `MessagePort` with asynchronous structured-clone delivery (in-process)
+- `getEnvironmentData()` and `setEnvironmentData()` with clone isolation; main-thread updates broadcast to existing workers via env patches
 - `markAsUntransferable()`, `isMarkedAsUntransferable()`, and `receiveMessageOnPort()` compatibility stubs
 
-Constructing `Worker` and calling `moveMessagePortToContext()` throw. Raster does not spawn JavaScript worker threads; `MessagePort.ref()` / `unref()` control event-loop lifetime like Node.
+**Not supported (process model):**
+
+- `SharedArrayBuffer` and `Atomics` shared memory across workers — cloning or transferring a `SharedArrayBuffer` in worker IPC throws `DataCloneError`; there is no cross-process shared heap (unlike Node’s thread model).
+- `moveMessagePortToContext()` throws.
+
+`MessagePort.ref()` / `unref()` control event-loop lifetime like Node.
 
 ## zlib
 
