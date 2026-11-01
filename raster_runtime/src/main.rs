@@ -17,6 +17,8 @@ mod minimal_tracer;
 #[cfg(not(target_family = "wasm"))]
 mod repl;
 mod worker_isolate;
+#[cfg(unix)]
+mod fork_child;
 
 use constcat::concat;
 use minimal_tracer::MinimalTracer;
@@ -120,6 +122,14 @@ async fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
     trace!("Started runtime");
 
     worker_isolate::register();
+
+    #[cfg(unix)]
+    if env::var("RASTER_FORK_CHILD").ok().as_deref() == Some("1") {
+        return fork_child::run()
+            .await
+            .map(|_| ExitCode::from(0))
+            .map_err(|e| e.to_string().into());
+    }
 
     let cli = parse_node_cli_flags(env::args().collect());
     set_argv(cli.argv);

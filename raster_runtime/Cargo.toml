@@ -45,6 +45,7 @@ jiff = { version = "0.2" }
 raster_runtime_core = { path = "../raster_runtime_core", default-features = false }
 raster_runtime_utils = { path = "../libs/raster_runtime_utils", default-features = false }
 raster_runtime_worker_threads = { path = "../modules/raster_runtime_worker_threads" }
+raster_runtime_child_process = { path = "../modules/raster_runtime_child_process" }
 rquickjs = { version = "=0.12.1", features = ["std"], default-features = false }
 url = { version = "2", features = ["std"], default-features = false }
 raster_runtime_sqlite = { path = "../modules/raster_runtime_sqlite", optional = true }

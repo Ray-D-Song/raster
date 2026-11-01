@@ -231,3 +231,43 @@ describe("spawn", () => {
     }
   );
 });
+
+describe("fork (unix IPC)", () => {
+  it("exchanges clone_wire messages over fork IPC", async () => {
+    if (IS_WINDOWS) {
+      return;
+    }
+    const { fork } = await import("node:child_process");
+    const { join } = await import("node:path");
+    const childPath = join(process.cwd(), "tests/unit/child_process_fork.fixture.mjs");
+    const child = fork(childPath);
+    expect(child.connected).toBe(true);
+    const reply = new Promise<unknown>((resolve) => {
+      child.once("message", resolve);
+    });
+    child.send({ ping: 1 });
+    expect(await reply).toEqual({ pong: 1 });
+    child.kill();
+    await new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  });
+});
+
+describe("fork (unix IPC)", () => {
+  it("exchanges clone_wire messages over fork IPC", async () => {
+    if (IS_WINDOWS) {
+      return;
+    }
+    const { fork } = await import("node:child_process");
+    const { join } = await import("node:path");
+    const childPath = join(process.cwd(), "tests/unit/child_process_fork.fixture.mjs");
+    const child = fork(childPath);
+    expect(child.connected).toBe(true);
+    const reply = new Promise<unknown>((resolve) => {
+      child.once("message", resolve);
+    });
+    child.send({ ping: 1 });
+    expect(await reply).toEqual({ pong: 1 });
+    child.kill();
+    await new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  });
+});

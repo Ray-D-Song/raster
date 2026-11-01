@@ -2390,6 +2390,7 @@ dependencies = [
  "crossterm",
  "jiff",
  "libc",
+ "raster_runtime_child_process",
  "raster_runtime_core",
  "raster_runtime_napi",
  "raster_runtime_sqlite",
