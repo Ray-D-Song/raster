@@ -868,6 +868,9 @@ pub fn poll_timers(
                         {
                             let _ = func.call::<_, ()>(("destroy", "Timeout", hook_id));
                         }
+                        let mut rt_timers = RT_TIMER_STATE.lock().unwrap();
+                        let state = get_timer_state(&mut rt_timers, rt);
+                        state.timers.retain(|t| t.hook_id != hook_id);
                     }
                 }
             }
@@ -895,6 +898,65 @@ pub fn poll_timers(
     state.running = true;
     drop(rt_timers);
     Ok(true)
+}
+
+/// Whether referenced timers or HTTP/ref state require the timer loop to stay up.
+pub fn keeps_timers_alive(rt: *mut qjs::JSRuntime) -> bool {
+    let rt_key = event_loop::rt_key_from_ptr(rt as *mut std::ffi::c_void);
+    let Ok(guard) = RT_TIMER_STATE.lock() else {
+        return false;
+    };
+    let Some(state) = guard.iter().find(|s| s.rt == rt) else {
+        return false;
+    };
+    should_keep_timer_loop(state, rt_key)
+}
+
+/// Any scheduled timer callback (including unref) still pending execution.
+pub fn has_pending_timer_callbacks(rt: *mut qjs::JSRuntime) -> bool {
+    let Ok(guard) = RT_TIMER_STATE.lock() else {
+        return false;
+    };
+    guard
+        .iter()
+        .find(|s| s.rt == rt)
+        .is_some_and(|state| state.timers.iter().any(|t| t.callback.is_some()))
+}
+
+/// Drop pending unref timer callbacks before natural process exit (Node does not
+/// run them). Avoids QuickJS `gc_obj_list` assertions when the VM is torn down.
+pub fn discard_unrefed_timers_on_process_exit<'js>(
+    ctx: &Ctx<'js>,
+    rt: *mut qjs::JSRuntime,
+) -> Result<()> {
+    let destroy_ids: Vec<usize> = {
+        let mut rt_timers = RT_TIMER_STATE.lock().unwrap();
+        let state = get_timer_state(&mut rt_timers, rt);
+        let ids: Vec<usize> = state
+            .timers
+            .iter()
+            .filter(|t| t.callback.is_some() && !t.referenced)
+            .map(|t| t.hook_id)
+            .collect();
+        for timeout in state.timers.iter_mut() {
+            if timeout.callback.is_some() && !timeout.referenced {
+                timeout.callback.take();
+                timeout.repeating = false;
+            }
+        }
+        state.timers.retain(|t| t.callback.is_some());
+        state.notify.notify_one();
+        ids
+    };
+
+    if let Ok(Some(func)) = ctx.globals().get_optional::<_, Function>("invokeAsyncHook") {
+        for hook_id in destroy_ids {
+            if hook_id != 0 {
+                let _ = func.call::<_, ()>(("destroy", "Timeout", hook_id));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
