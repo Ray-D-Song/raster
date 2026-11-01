@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Structured-clone wire encoding for cross-process worker IPC (binary, not JSON).
+// Structured-clone wire encoding for cross-isolate worker IPC (binary, not JSON).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -16,6 +16,7 @@ use rquickjs::{
 
 use crate::clone::structured_clone;
 use crate::primordials::{BasePrimordials, Primordial};
+use crate::shared_array_buffer;
 
 pub const MAGIC: &[u8; 4] = b"RSC1";
 
@@ -34,6 +35,13 @@ enum WireNode {
     RegExp { source: String, flags: String },
     Error(String),
     ArrayBufferCopy(Vec<u8>),
+    SharedArrayBuffer { id: u64 },
+    SharedView {
+        id: u64,
+        byte_offset: u32,
+        byte_length: u32,
+        view_name: String,
+    },
     Map(Vec<(u32, u32)>),
     Set(Vec<u32>),
 }
@@ -160,10 +168,8 @@ fn encode_node_inner<'js>(
             }
             if let Some(ab) = ArrayBuffer::from_value(value.clone()) {
                 if is_shared_array_buffer(ctx, &ab)? {
-                    return Err(Exception::throw_type(
-                        ctx,
-                        "SharedArrayBuffer cannot be cloned across worker processes",
-                    ));
+                    let id = sab_id_from_array_buffer(ctx, &ab)?;
+                    return Ok(WireNode::SharedArrayBuffer { id });
                 }
                 let slice: Function = ab.get("slice")?;
                 let sliced: Value = slice.call::<_, Value>((This(ab.clone()),))?;
@@ -207,10 +213,17 @@ fn encode_node_inner<'js>(
                 let ab = ArrayBuffer::from_object(bytes)
                     .ok_or_else(|| Exception::throw_type(ctx, "Invalid typed array"))?;
                 if is_shared_array_buffer(ctx, &ab)? {
-                    return Err(Exception::throw_type(
-                        ctx,
-                        "SharedArrayBuffer cannot be cloned across worker processes",
-                    ));
+                    let id = sab_id_from_array_buffer(ctx, &ab)?;
+                    let byte_offset: u32 = object.get("byteOffset")?;
+                    let byte_length: u32 = object.get("byteLength")?;
+                    let ctor: Object = object.get(PredefinedAtom::Constructor)?;
+                    let view_name: String = ctor.get(PredefinedAtom::Name)?;
+                    return Ok(WireNode::SharedView {
+                        id,
+                        byte_offset,
+                        byte_length,
+                        view_name,
+                    });
                 }
                 let bytes = read_array_buffer_bytes(ctx, &ab)?;
                 transfers.push(bytes.clone());
@@ -292,6 +305,21 @@ fn decode_at<'js>(
             };
             ArrayBuffer::new_copy(ctx.clone(), &buf)?.into_js(ctx)?
         },
+        WireNode::SharedArrayBuffer { id } => {
+            shared_array_buffer::new_shared_array_buffer_value(ctx, *id)?
+        },
+        WireNode::SharedView {
+            id,
+            byte_offset,
+            byte_length,
+            view_name,
+        } => shared_array_buffer::new_shared_typed_array_value(
+            ctx,
+            *id,
+            *byte_offset,
+            *byte_length,
+            view_name,
+        )?,
         WireNode::Array(indices) => {
             let array = Array::new(ctx.clone())?;
             cache[idx] = Some(array.clone().into_js(ctx)?);
@@ -345,7 +373,28 @@ fn read_array_buffer_bytes<'js>(_ctx: &Ctx<'js>, ab: &ArrayBuffer<'js>) -> Resul
     Ok(ab.as_bytes().map(|s| s.to_vec()).unwrap_or_default())
 }
 
-fn is_shared_array_buffer<'js>(ctx: &Ctx<'js>, ab: &ArrayBuffer<'js>) -> Result<bool> {
+fn sab_id_from_array_buffer<'js>(ctx: &Ctx<'js>, ab: &ArrayBuffer<'js>) -> Result<u64> {
+    let ptr = array_buffer_data_ptr(ctx, ab)?;
+    shared_array_buffer::id_for_data_ptr(ptr as *const u8).ok_or_else(|| {
+        Exception::throw_type(
+            ctx,
+            "SharedArrayBuffer is not registered for cross-thread clone",
+        )
+    })
+}
+
+fn array_buffer_data_ptr<'js>(ctx: &Ctx<'js>, ab: &ArrayBuffer<'js>) -> Result<*mut u8> {
+    unsafe {
+        let mut len = 0u64;
+        let ptr = rquickjs::qjs::JS_GetArrayBuffer(ctx.as_raw().as_ptr(), &mut len, ab.as_value().as_raw());
+        if ptr.is_null() {
+            return Err(Exception::throw_type(ctx, "Invalid ArrayBuffer"));
+        }
+        Ok(ptr)
+    }
+}
+
+fn is_shared_array_buffer<'js>(_ctx: &Ctx<'js>, ab: &ArrayBuffer<'js>) -> Result<bool> {
     let ctor: Object = ab.get(PredefinedAtom::Constructor)?;
     let name: String = ctor.get(PredefinedAtom::Name)?;
     Ok(name == "SharedArrayBuffer")
@@ -422,6 +471,22 @@ fn write_node(out: &mut Vec<u8>, node: &WireNode) {
                 write_u32(out, *id);
             }
         },
+        WireNode::SharedArrayBuffer { id } => {
+            out.push(16);
+            write_u64(out, *id);
+        },
+        WireNode::SharedView {
+            id,
+            byte_offset,
+            byte_length,
+            view_name,
+        } => {
+            out.push(17);
+            write_u64(out, *id);
+            write_u32(out, *byte_offset);
+            write_u32(out, *byte_length);
+            write_bytes(out, view_name.as_bytes());
+        },
     }
 }
 
@@ -474,6 +539,15 @@ fn read_node(data: &[u8], pos: &mut usize) -> Result<WireNode> {
             }
             WireNode::Set(items)
         },
+        16 => WireNode::SharedArrayBuffer {
+            id: read_u64(data, pos)?,
+        },
+        17 => WireNode::SharedView {
+            id: read_u64(data, pos)?,
+            byte_offset: read_u32(data, pos)?,
+            byte_length: read_u32(data, pos)?,
+            view_name: read_string(data, pos)?,
+        },
         _ => return Err(rquickjs::Error::new_from_js_message(
             "clone_wire",
             "decode",
@@ -490,6 +564,10 @@ fn read_string(data: &[u8], pos: &mut usize) -> Result<String> {
 }
 
 fn write_u32(out: &mut Vec<u8>, v: u32) {
+    out.extend_from_slice(&v.to_be_bytes());
+}
+
+fn write_u64(out: &mut Vec<u8>, v: u64) {
     out.extend_from_slice(&v.to_be_bytes());
 }
 
@@ -528,6 +606,19 @@ fn read_u32(data: &[u8], pos: &mut usize) -> Result<u32> {
     Ok(v)
 }
 
+fn read_u64(data: &[u8], pos: &mut usize) -> Result<u64> {
+    if *pos + 8 > data.len() {
+        return Err(rquickjs::Error::new_from_js_message(
+            "clone_wire",
+            "decode",
+            "Unexpected end of wire",
+        ));
+    }
+    let v = u64::from_be_bytes(data[*pos..*pos + 8].try_into().unwrap());
+    *pos += 8;
+    Ok(v)
+}
+
 fn read_f64(data: &[u8], pos: &mut usize) -> Result<f64> {
     if *pos + 8 > data.len() {
         return Err(rquickjs::Error::new_from_js_message(
@@ -558,11 +649,36 @@ fn read_vec(data: &[u8], pos: &mut usize) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use raster_runtime_test::test_sync_with;
-    use rquickjs::{function::Opt, Object, Value};
+    use rquickjs::{function::Opt, Ctx, Function, Object, Value};
 
     use crate::primordials::{BasePrimordials, Primordial};
 
     use super::{deserialize, serialize};
+    use crate::shared_array_buffer;
+
+    fn install_sab<'js>(ctx: &Ctx<'js>) {
+        unsafe {
+            let rt = rquickjs::qjs::JS_GetRuntime(ctx.as_raw().as_ptr());
+            shared_array_buffer::install_on_runtime(rt);
+        }
+    }
+
+    #[tokio::test]
+    async fn roundtrip_shared_array_buffer() {
+        test_sync_with(|ctx| {
+            install_sab(&ctx);
+            BasePrimordials::init(&ctx)?;
+            let sab: Value = ctx.eval("new SharedArrayBuffer(4)")?;
+            let wire = serialize(&ctx, sab.clone(), Opt(None))?;
+            let back = deserialize(&ctx, &wire)?;
+            let check: Function = ctx
+                .eval("(a,b) => { new Uint8Array(a)[0] = 7; return new Uint8Array(b)[0]; }")?;
+            let shared: i32 = check.call((sab, back))?;
+            assert_eq!(shared, 7);
+            Ok(())
+        })
+        .await;
+    }
 
     #[tokio::test]
     async fn roundtrip_object() {

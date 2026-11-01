@@ -237,4 +237,28 @@ describe("worker_threads Worker spawn", () => {
     await new Promise<void>((resolve) => worker.once("exit", () => resolve()));
     expect(getEnvironmentData("raster-worker-env-key")).toEqual({ v: 42 });
   });
+
+  it("shares SharedArrayBuffer and Atomics across workers", async () => {
+    const { Worker } = await import("node:worker_threads");
+    const { join } = await import("node:path");
+    const workerPath = join(
+      process.cwd(),
+      "tests/unit/worker_threads_worker.fixture.mjs"
+    );
+    const sab = new SharedArrayBuffer(4);
+    const view = new Int32Array(sab);
+    view[0] = 0;
+    const worker = new Worker(workerPath, { workerData: { sab } });
+    await new Promise<void>((resolve) => worker.once("online", resolve));
+    const reply = new Promise<unknown>((resolve) => {
+      worker.once("message", resolve);
+    });
+    worker.postMessage({ type: "sab-add", delta: 5 });
+    expect(await reply).toEqual({ sabOk: true, value: 5 });
+    expect(view[0]).toBe(5);
+    Atomics.add(view, 0, 2);
+    expect(view[0]).toBe(7);
+    worker.terminate();
+    await new Promise<void>((resolve) => worker.once("exit", () => resolve()));
+  });
 });

@@ -164,9 +164,35 @@ pub fn structured_clone<'js>(
                             .function_array_buffer_is_view
                             .call::<_, bool>((value.clone(),))?
                         {
+                            let buffer: Object = object.get("buffer")?;
+                            if let Some(ab) = ArrayBuffer::from_object(buffer) {
+                                if is_shared_array_buffer(ab.as_value())? {
+                                    tape.push(TapeItem {
+                                        parent,
+                                        object_key,
+                                        array_index,
+                                        value: TapeValue::Value(value),
+                                    });
+                                    index += 1;
+                                    continue;
+                                }
+                            }
                             append_buffer(&mut tape, object, parent, object_key, array_index)?;
                             index += 1;
                             continue;
+                        }
+
+                        if let Some(ab) = ArrayBuffer::from_value(value.clone()) {
+                            if is_shared_array_buffer(ab.as_value())? {
+                                tape.push(TapeItem {
+                                    parent,
+                                    object_key,
+                                    array_index,
+                                    value: TapeValue::Value(value),
+                                });
+                                index += 1;
+                                continue;
+                            }
                         }
 
                         let new: Object<'_> =
@@ -414,6 +440,15 @@ fn append_ctor_value<'js>(
         value: TapeValue::Value(clone),
     });
     Ok(())
+}
+
+fn is_shared_array_buffer(value: &Value<'_>) -> Result<bool> {
+    let ab = ArrayBuffer::from_value(value.clone()).ok_or_else(|| {
+        rquickjs::Error::new_from_js_message("clone", "structured_clone", "Not ArrayBuffer")
+    })?;
+    let ctor: Object = ab.get(PredefinedAtom::Constructor)?;
+    let name: String = ctor.get(PredefinedAtom::Name)?;
+    Ok(name == "SharedArrayBuffer")
 }
 
 #[cfg(test)]
