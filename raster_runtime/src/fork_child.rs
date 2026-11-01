@@ -8,7 +8,6 @@ use std::os::unix::net::UnixStream as StdUnixStream;
 use raster_runtime_child_process::install_child_process_ipc;
 use raster_runtime_core::modules::module_builder::{ModuleBuilder, ModuleBuilderConfig};
 use raster_runtime_core::vm::{Vm, VmOptions};
-use rquickjs::{context::EvalOptions, CatchResultExt, Promise};
 use tokio::net::UnixStream;
 use url::Url;
 
@@ -38,28 +37,22 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     std_stream.set_nonblocking(true)?;
     let stream = UnixStream::from_std(std_stream)?;
 
+    // Install the IPC channel first: the script may use `process.send` and
+    // `process.on("message")` during evaluation.
     vm.ctx
-        .async_with(async move |ctx| {
-            install_child_process_ipc(&ctx, stream).map_err(|e| e.to_string())?;
-            let script_path = resolve_script(&module)?;
-            let import_url = Url::from_file_path(&script_path)
-                .map_err(|_| format!("Path is not absolute: {script_path}"))?;
-            let import_url_lit = format!("{:?}", import_url.as_str());
-            let code = format!("await import({import_url_lit});");
-            let mut opts = EvalOptions::default();
-            opts.promise = true;
-            let promise = ctx
-                .eval_with_options::<Promise, _>(code, opts)
-                .map_err(|e| e.to_string())?;
-            if let Err(err) = promise.into_future::<()>().await.catch(&ctx) {
-                return Err(err.throw(&ctx).to_string());
-            }
-            Ok(())
-        })
+        .with(|ctx| install_child_process_ipc(&ctx, stream))
         .await
         .map_err(|e| e.to_string())?;
 
-    vm.idle().await?;
+    let script_path = resolve_script(&module)?;
+    let import_url = Url::from_file_path(&script_path)
+        .map_err(|_| format!("Path is not absolute: {script_path}"))?;
+
+    // Run the script through the same drain loop the CLI uses, so pending
+    // promises, IPC reads, and timers all get driven to completion.
+    vm.run_file(import_url.as_str(), true, false).await;
+    crate::drain::run_until_process_exit(&vm).await?;
+
     Ok(())
 }
 

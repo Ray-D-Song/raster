@@ -134,6 +134,7 @@ await import({import_url_lit});
         .map_err(|e| e.to_string())?;
 
     vm.idle().await.map_err(|e| e.to_string())?;
+    vm.shutdown();
     Ok(())
 }
 

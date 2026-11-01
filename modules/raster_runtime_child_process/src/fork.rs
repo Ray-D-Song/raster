@@ -196,7 +196,17 @@ impl<'js> ChildProcess<'js> {
         let inst = instance.clone();
         ctx.spawn_exit_simple(async move {
             let mut status: libc::c_int = 0;
-            let waited = unsafe { libc::waitpid(pid as libc::pid_t, &mut status, 0) };
+            // Never block the JS event loop on the child: a blocking `waitpid`
+            // here freezes every other task (IPC reads, timers), which made
+            // messages look lost and hung the child's exit event.
+            let waited = loop {
+                let r = unsafe { libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG) };
+                if r != 0 {
+                    // >0: reaped, -1: already gone / error. Either way, stop.
+                    break r;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            };
             if waited >= 0 {
                 let code = if libc::WIFEXITED(status) {
                     libc::WEXITSTATUS(status)
