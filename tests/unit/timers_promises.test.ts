@@ -6,8 +6,11 @@ import { promisify } from "node:util";
 it("node:timers/promises should load like timers/promises", () => {
   expect(typeof defaultImport.setTimeout).toBe("function");
   expect(typeof defaultImport.setImmediate).toBe("function");
+  expect(typeof defaultImport.setInterval).toBe("function");
+  expect(typeof defaultImport.scheduler).toBe("object");
   expect(typeof legacyImport.setTimeout).toBe("function");
   expect(typeof legacyImport.setImmediate).toBe("function");
+  expect(typeof legacyImport.setInterval).toBe("function");
 });
 
 it("promise setTimeout resolves value", async () => {
@@ -90,4 +93,71 @@ it("setTimeout/setInterval forward additional args", async () => {
     setTimeout((x: number, y: number) => resolve(x + y), 5, 3, 4);
   });
   expect(a).toBe(7);
+});
+
+describe("setInterval (async iterator)", () => {
+  it("yields the value once per tick until the signal aborts", async () => {
+    const ac = new AbortController();
+    const seen: string[] = [];
+    for await (const tick of defaultImport.setInterval(5, "tick", {
+      signal: ac.signal,
+    })) {
+      seen.push(tick);
+      if (seen.length === 3) ac.abort();
+    }
+    expect(seen).toEqual(["tick", "tick", "tick"]);
+  });
+
+  it("stops when the consumer returns early", async () => {
+    // First tick is required; breaking must not wait for a second one.
+    const start = Date.now();
+    let ticks = 0;
+    for await (const _ of defaultImport.setInterval(1000, "slow")) {
+      ticks++;
+      break;
+    }
+    expect(ticks).toBe(1);
+    expect(Date.now() - start).toBeLessThan(1500);
+  });
+
+  it("throws synchronously for an invalid options argument", () => {
+    expect(() =>
+      defaultImport.setInterval(1, "x", 5 as unknown as never)
+    ).toThrow(TypeError);
+  });
+
+  it("ends immediately when the signal is already aborted", async () => {
+    const ac = new AbortController();
+    ac.abort();
+    const seen: unknown[] = [];
+    for await (const v of defaultImport.setInterval(5, "x", {
+      signal: ac.signal,
+    })) {
+      seen.push(v);
+    }
+    expect(seen).toEqual([]);
+  });
+});
+
+describe("scheduler", () => {
+  it("wait resolves after at least the requested delay", async () => {
+    const start = Date.now();
+    await defaultImport.scheduler.wait(20);
+    expect(Date.now() - start).toBeGreaterThanOrEqual(15);
+  });
+
+  it("yield resolves without leaving the loop broken", async () => {
+    const order: string[] = [];
+    const p = defaultImport.scheduler.yield().then(() => order.push("yield"));
+    order.push("sync");
+    await p;
+    expect(order).toEqual(["sync", "yield"]);
+  });
+
+  it("wait rejects when the signal aborts", async () => {
+    const ac = new AbortController();
+    const p = defaultImport.scheduler.wait(5000, { signal: ac.signal });
+    setTimeout(() => ac.abort("stopped"), 5);
+    await expect(p).rejects.toBe("stopped");
+  });
 });
