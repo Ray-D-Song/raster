@@ -102,6 +102,10 @@ async fn run_event_loop(
     rt_key: usize,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     loop {
+        if pending_signal() {
+            return Ok(());
+        }
+
         poll_drivers(vm).await;
         if !stay_alive(vm, rt_key).await? {
             // Nothing owns pending work any more: take one last bounded turn so
@@ -113,6 +117,18 @@ async fn run_event_loop(
 
         idle_until_wake(vm, rt_key).await?;
         poll_drivers(vm).await;
+    }
+}
+
+fn pending_signal() -> bool {
+    #[cfg(target_family = "wasm")]
+    {
+        false
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    {
+        signal_bridge::has_pending_signal()
     }
 }
 
@@ -141,16 +157,12 @@ async fn idle_bounded(vm: &Vm) -> Result<(), Box<dyn std::error::Error + Send + 
     }
 }
 
-/// Run the loop while a referenced handle is alive, waking on quiescence or a
-/// signal instead of polling, so `idle` is never cancelled mid-flight.
+/// Run the loop while work remains, waking on quiescence or a signal instead of
+/// polling, so `idle` is never cancelled mid-flight.
 async fn idle_until_wake(
     vm: &Vm,
     rt_key: usize,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    if signal_bridge_active() {
-        return Ok(());
-    }
-
     let quiescent = quiescence_watch(rt_key);
 
     #[cfg(target_family = "wasm")]
@@ -162,26 +174,19 @@ async fn idle_until_wake(
 
     #[cfg(not(target_family = "wasm"))]
     {
+        if signal_bridge::has_pending_signal() {
+            return Ok(());
+        }
+
+        let _ = quiescent;
         let wake = signal_bridge::wake_handle();
         tokio::select! {
             res = vm.idle() => res?,
             _ = wake.notified() => {},
-            _ = quiescent.notified() => {},
+            _ = sleep(Duration::from_millis(20)) => {},
         }
 
         Ok(())
-    }
-}
-
-fn signal_bridge_active() -> bool {
-    #[cfg(target_family = "wasm")]
-    {
-        false
-    }
-
-    #[cfg(not(target_family = "wasm"))]
-    {
-        signal_bridge::has_pending_signal()
     }
 }
 
@@ -203,21 +208,19 @@ async fn schedule_signals(vm: &Vm) -> Result<bool, Box<dyn std::error::Error + S
             return Ok(false);
         }
 
-        vm.ctx
-            .with(|ctx| -> rquickjs::Result<()> {
-                for name in signal_bridge::take_pending_signals() {
-                    let task_ctx = ctx.clone();
-                    let run_ctx = task_ctx.clone();
-                    task_ctx.spawn(async move {
-                        if let Err(err) = dispatch_signal(&run_ctx, &name) {
-                            report_signal_error(&run_ctx, err);
-                        }
-                    });
-                }
-                Ok(())
-            })
-            .await
-            .map_err(|e: rquickjs::Error| e.to_string())?;
+        // Dispatch on this task: `idle_turn` has returned, so the runtime lock is
+        // released. A listener owns shutdown and may keep the process running;
+        // without one the signal default terminates the process.
+        for name in signal_bridge::take_pending_signals() {
+            vm.ctx
+                .with(|js_ctx| -> rquickjs::Result<()> {
+                    if let Err(err) = dispatch_signal(&js_ctx, &name) {
+                        report_signal_error(&js_ctx, err);
+                    }
+                    Ok(())
+                })
+                .await;
+        }
 
         Ok(true)
     }
@@ -272,25 +275,34 @@ async fn stay_alive(vm: &Vm, rt_key: usize) -> Result<bool, String> {
     vm.ctx
         .with(|ctx| {
             let rt = unsafe { qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+            let listeners = signal_listener_total(&ctx)?;
+            // Publish for the signal watcher, which cannot touch JS.
+            raster_runtime_process::lifecycle::publish_signal_listener_count(listeners);
+
             if event_loop_alive(rt_key, rt) {
                 return Ok(true);
             }
             // Node keeps the loop alive while a signal listener is installed
             // (the signal watcher is a referenced handle).
-            if let Ok(process) = ctx.globals().get::<_, Object>("process") {
-                if signal_listener_count(&ctx, &process)? > 0 {
-                    return Ok(true);
-                }
-            }
-            Ok(false)
+            Ok(listeners > 0)
         })
         .await
         .map_err(|e: rquickjs::Error| e.to_string())
 }
 
+fn signal_listener_total<'js>(ctx: &Ctx<'js>) -> rquickjs::Result<usize> {
+    let process: rquickjs::Value = ctx.globals().get("process")?;
+    let Some(process) = process.as_object() else {
+        return Ok(0);
+    };
+    signal_listener_count(ctx, process)
+}
+
 /// Whether the JS loop still has work that must finish before `exit`:
-/// live handle references or a referenced timer the scheduler is parked on.
+/// live handle references, a referenced timer, or pending native driver work
+/// (async work, referenced TSFNs, queued jobs) that runs as spawned tasks.
 fn event_loop_alive(rt_key: usize, rt: *mut qjs::JSRuntime) -> bool {
     raster_runtime_utils::event_loop::should_keep_process_alive(rt_key)
         || raster_runtime_timers::keeps_timers_alive(rt)
+        || driver_poll::drivers_busy(rt)
 }

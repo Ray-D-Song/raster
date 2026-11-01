@@ -49,6 +49,15 @@ pub async fn install(
 
     tokio::spawn(async move {
         while let Some(name) = rx.recv().await {
+            // Node: with no `signal` listener the OS default termination applies,
+            // so the process dies by signal (exit code 128+signum) without running
+            // `exit` handlers. Doing that here also avoids waiting for the runtime
+            // lock, which a parked `idle` can hold indefinitely.
+            if raster_runtime_process::lifecycle::signal_listener_count_snapshot() == Some(0) {
+                std::process::exit(i32::from(
+                    raster_runtime_process::lifecycle::default_exit_code_for_signal(&name),
+                ));
+            }
             PENDING_SIGNALS.lock().unwrap().push_back(name);
             driver_poll::wake_native_drivers(rt_addr as *mut rquickjs::qjs::JSRuntime);
             SIGNAL_WAKE.notify_one();

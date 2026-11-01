@@ -14,14 +14,24 @@ use rquickjs::qjs::JSRuntime;
 use tokio::sync::Notify;
 
 type DriverPollFn = fn(*mut JSRuntime);
+type DriverBusyFn = fn(*mut JSRuntime) -> bool;
 
 static HOOK: std::sync::OnceLock<DriverPollFn> = std::sync::OnceLock::new();
+static BUSY_HOOK: std::sync::OnceLock<DriverBusyFn> = std::sync::OnceLock::new();
 static DRIVER_NOTIFY: LazyLock<Mutex<HashMap<usize, Arc<Notify>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub fn set_driver_poll_hook(hook_fn: Option<DriverPollFn>) {
     if let Some(f) = hook_fn {
         let _ = HOOK.set(f);
+    }
+}
+
+/// Register the hook that reports whether a runtime still has driver work
+/// (async work items, referenced threadsafe functions, queued jobs).
+pub fn set_driver_busy_hook(hook_fn: Option<DriverBusyFn>) {
+    if let Some(f) = hook_fn {
+        let _ = BUSY_HOOK.set(f);
     }
 }
 
@@ -49,4 +59,13 @@ pub fn poll_native_drivers(rt: *mut JSRuntime) {
     if let Some(f) = HOOK.get() {
         f(rt);
     }
+}
+
+/// Whether native drivers still hold work that must finish before exit.
+///
+/// Driver work runs as spawned runtime tasks, so it never shows up in the
+/// event-loop reference count; the drain loop would otherwise stop the process
+/// while an addon callback is still pending.
+pub fn drivers_busy(rt: *mut JSRuntime) -> bool {
+    BUSY_HOOK.get().is_some_and(|f| f(rt))
 }
