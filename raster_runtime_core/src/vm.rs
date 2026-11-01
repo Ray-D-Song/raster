@@ -248,9 +248,20 @@ impl Vm {
     /// Tear the VM down in the only safe order.
     ///
     /// QuickJS asserts that every GC object has been released when the runtime
-    /// is freed, so the context (which owns the roots) must be dropped before
-    /// the runtime. Field order alone would drop the runtime first.
-    pub fn shutdown(self) {
+    /// is freed, so context userdata that caches JS values (module/require
+    /// state, primordials, the rejection tracker) must be released, and the
+    /// context must be dropped before the runtime. Field order alone would drop
+    /// the runtime first.
+    pub async fn shutdown(self) {
+        let _ = self
+            .ctx
+            .with(|ctx| {
+                let _ = shutdown_module_state(&ctx);
+                let _ = shutdown_context_userdata(&ctx);
+                Ok::<(), Error>(())
+            })
+            .await;
+
         let Vm { ctx, runtime, .. } = self;
         drop(ctx);
         drop(runtime);

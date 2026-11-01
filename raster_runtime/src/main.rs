@@ -172,6 +172,18 @@ async fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
 
     drain::run_until_process_exit(&vm).await?;
 
+    // Worker handles keep their channel senders alive process-wide; release
+    // them so worker read loops finish and drop the JS values they captured.
+    // Then give the loop one more turn to observe the closed channels: a task
+    // still parked here would keep its JS roots alive and abort teardown with
+    // QuickJS's `gc_obj_list` assertion.
+    raster_runtime_worker_threads::shutdown_workers();
+    {
+        let idle = vm.idle();
+        tokio::pin!(idle);
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(100), idle).await;
+    }
+
     #[cfg(feature = "napi")]
     {
         // Two-phase N-API shutdown with explicit driver wait (no swallowed errors):
@@ -238,14 +250,12 @@ async fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
         .await
         .map_err(std::io::Error::other)?;
 
-    // Drop AsyncContext before AsyncRuntime so no JS_CONTEXT roots remain.
-    let Vm { ctx, runtime, .. } = vm;
-    drop(ctx);
+    // Release module/context userdata that caches JS roots before dropping the
+    // context, then drop in the safe order (context before runtime).
+    vm.shutdown().await;
 
     #[cfg(all(feature = "napi", feature = "v8-compat"))]
     unsafe { v8_compat::shutdown_runtime_addr(v8_runtime_addr) }.map_err(std::io::Error::other)?;
-
-    drop(runtime);
 
     Ok(ExitCode::from(EXIT_CODE.load(Ordering::Relaxed)))
 }
