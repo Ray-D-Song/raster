@@ -167,7 +167,10 @@ impl<'js> Http2Stream<'js> {
         headers: Opt<Value<'js>>,
     ) -> Result<()> {
         if this.borrow().role != StreamRole::Response {
-            return Err(Exception::throw_type(&ctx, "writeHead on non-response stream"));
+            return Err(Exception::throw_type(
+                &ctx,
+                "writeHead on non-response stream",
+            ));
         }
         let mut stream = this.borrow_mut();
         let code = status.as_int().unwrap_or(stream.status_code as i32) as u16;
@@ -178,11 +181,7 @@ impl<'js> Http2Stream<'js> {
         Ok(())
     }
 
-    pub fn end(
-        this: This<Class<'js, Self>>,
-        ctx: Ctx<'js>,
-        chunk: Opt<Value<'js>>,
-    ) -> Result<()> {
+    pub fn end(this: This<Class<'js, Self>>, ctx: Ctx<'js>, chunk: Opt<Value<'js>>) -> Result<()> {
         if this.borrow().role != StreamRole::Response {
             return Err(Exception::throw_type(&ctx, "end on non-response stream"));
         }
@@ -236,7 +235,10 @@ fn apply_header_value<'js>(
                     .and_then(|v| v.as_string().map(|s| s.to_string()))
                     .transpose()?
                     .unwrap_or_default();
-                let val = iter.next().transpose()?.unwrap_or(Undefined.into_value(ctx.clone()));
+                let val = iter
+                    .next()
+                    .transpose()?
+                    .unwrap_or(Undefined.into_value(ctx.clone()));
                 set_header_field(ctx, stream, name, val)?;
             }
         }
@@ -278,7 +280,11 @@ fn value_to_bytes<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> Result<Vec<u8>> {
     ObjectBytes::from(ctx, &value)?.into_bytes(ctx)
 }
 
-pub async fn pump_request_body<'a>(ctx: Ctx<'a>, req: Class<'a, Http2Stream<'a>>, mut body: Incoming) {
+pub async fn pump_request_body<'a>(
+    ctx: Ctx<'a>,
+    req: Class<'a, Http2Stream<'a>>,
+    mut body: Incoming,
+) {
     while let Some(frame) = body.frame().await {
         match frame {
             Ok(frame) => {
@@ -288,7 +294,7 @@ pub async fn pump_request_body<'a>(ctx: Ctx<'a>, req: Class<'a, Http2Stream<'a>>
                         .unwrap_or_else(|_| Undefined.into_value(ctx.clone()));
                     let _ = Http2Stream::emit_str(req.clone(), &ctx, "data", vec![chunk], false);
                 }
-            }
+            },
             Err(_) => break,
         }
     }

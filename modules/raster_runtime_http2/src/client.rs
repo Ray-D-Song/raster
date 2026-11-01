@@ -140,17 +140,14 @@ impl<'js> ClientHttp2Session<'js> {
             let (parts, body) = resp.into_parts();
             stream.borrow_mut().status_code = parts.status.as_u16();
             for (name, value) in parts.headers.iter() {
-                let _ = stream.borrow_mut().headers.set(
-                    name.as_str(),
-                    value.to_str().unwrap_or("").to_string(),
-                );
+                let _ = stream
+                    .borrow_mut()
+                    .headers
+                    .set(name.as_str(), value.to_str().unwrap_or("").to_string());
             }
             let header_obj = Object::new(ctx2.clone())?;
             for (name, value) in parts.headers.iter() {
-                let _ = header_obj.set(
-                    name.as_str(),
-                    value.to_str().unwrap_or("").to_string(),
-                );
+                let _ = header_obj.set(name.as_str(), value.to_str().unwrap_or("").to_string());
             }
             let _ = Http2Stream::emit_str(
                 stream.clone(),
@@ -206,10 +203,7 @@ fn parse_authority<'js>(ctx: &Ctx<'js>, authority: Value<'js>) -> Result<(String
             )
         }
     } else {
-        (
-            rest.to_string(),
-            if secure { 443 } else { 80 },
-        )
+        (rest.to_string(), if secure { 443 } else { 80 })
     };
     Ok((host, port, secure))
 }

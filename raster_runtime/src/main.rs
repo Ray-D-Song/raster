@@ -13,12 +13,12 @@ use std::{
 };
 
 mod base;
+#[cfg(unix)]
+mod fork_child;
 mod minimal_tracer;
 #[cfg(not(target_family = "wasm"))]
 mod repl;
 mod worker_isolate;
-#[cfg(unix)]
-mod fork_child;
 
 use constcat::concat;
 use minimal_tracer::MinimalTracer;

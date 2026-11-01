@@ -11,11 +11,10 @@ use std::{
 };
 
 use bytes::Bytes;
+use http::Response as HttpResponse;
 use http_body_util::{BodyExt, Full};
 use hyper::{Response, StatusCode};
-use http::Response as HttpResponse;
 use raster_runtime_buffer::Buffer;
-use raster_runtime_utils::{event_loop::{self, EventLoopRef}, object::ObjectExt};
 use raster_runtime_context::CtxExtension;
 use raster_runtime_events::{Emitter, EventEmitter, EventList};
 use raster_runtime_timers::{poll_timers, ExecutingTimer};
@@ -25,6 +24,10 @@ use raster_runtime_tls::{
     options::parse_server_options,
     secure_context::SecureContext,
     sni::SniRegistry,
+};
+use raster_runtime_utils::{
+    event_loop::{self, EventLoopRef},
+    object::ObjectExt,
 };
 use rquickjs::{
     class::Trace,
@@ -91,14 +94,7 @@ impl<'js> Http2Server<'js> {
     pub fn new(ctx: Ctx<'js>, listener: Opt<Function<'js>>) -> Result<Class<'js, Self>> {
         let server = Self::alloc(ctx.clone(), None)?;
         if let Some(listener) = listener.0 {
-            Self::add_event_listener_str(
-                server.clone(),
-                &ctx,
-                "request",
-                listener,
-                false,
-                false,
-            )?;
+            Self::add_event_listener_str(server.clone(), &ctx, "request", listener, false, false)?;
         }
         Ok(server)
     }
@@ -229,7 +225,10 @@ impl<'js> Http2Server<'js> {
 }
 
 impl<'js> Http2Server<'js> {
-    fn alloc(ctx: Ctx<'js>, secure: Option<(Arc<SecureContext>, bool, bool)>) -> Result<Class<'js, Self>> {
+    fn alloc(
+        ctx: Ctx<'js>,
+        secure: Option<(Arc<SecureContext>, bool, bool)>,
+    ) -> Result<Class<'js, Self>> {
         let (secure_context, request_cert, reject_unauthorized, sni_registry) = match secure {
             Some((ctx, req, rej)) => (
                 Some(ctx),
@@ -270,7 +269,8 @@ async fn serve_connection<'js>(
     sni_registry: Option<Arc<std::sync::RwLock<SniRegistry>>>,
 ) -> Result<()> {
     if let Some(context) = secure_context {
-        let sni_registry = sni_registry.unwrap_or_else(|| Arc::new(std::sync::RwLock::new(SniRegistry::new())));
+        let sni_registry =
+            sni_registry.unwrap_or_else(|| Arc::new(std::sync::RwLock::new(SniRegistry::new())));
         let selected_local_cert = Arc::new(Mutex::new(None));
         let accept_opts = AcceptOptions {
             context: (*context).clone(),
@@ -328,9 +328,7 @@ where
             .to_bytes();
         send.send_data(body_bytes, true)
             .map_err(|e| Exception::throw_message(&ctx, &e.to_string()))?;
-        tokio::spawn(async move {
-            while recv.data().await.is_some() {}
-        });
+        tokio::spawn(async move { while recv.data().await.is_some() {} });
     }
     Ok(())
 }
@@ -392,11 +390,7 @@ async fn dispatch_h2<'js>(
         .path_and_query()
         .map(|pq| pq.as_str().to_string())
         .unwrap_or_else(|| "/".into());
-    let scheme = parts
-        .uri
-        .scheme_str()
-        .unwrap_or("http")
-        .to_string();
+    let scheme = parts.uri.scheme_str().unwrap_or("http").to_string();
     let authority = parts
         .uri
         .authority()
@@ -413,14 +407,7 @@ async fn dispatch_h2<'js>(
     let (response_tx, response_rx) = oneshot::channel();
 
     let (req_stream, res_stream) = match (
-        Http2Stream::new_request(
-            &ctx,
-            method,
-            path,
-            scheme,
-            authority,
-            parts.headers,
-        ),
+        Http2Stream::new_request(&ctx, method, path, scheme, authority, parts.headers),
         Http2Stream::new_response(&ctx, response_tx),
     ) {
         (Ok(req), Ok(res)) => (req, res),
@@ -505,17 +492,18 @@ pub fn create_secure_server<'js>(
         arr.set(0, "h2")?;
         parsed.alpn_protocols = Some(convert_alpn_protocols(&ctx, arr.into_value())?);
     }
-    let secure_context = Arc::new(
-        if let Some(sc) = parsed.secure_context.clone() {
-            sc
-        } else {
-            SecureContext::from_options(&parsed)
-                .map_err(|e| Exception::throw_message(&ctx, &e))?
-        },
-    );
+    let secure_context = Arc::new(if let Some(sc) = parsed.secure_context.clone() {
+        sc
+    } else {
+        SecureContext::from_options(&parsed).map_err(|e| Exception::throw_message(&ctx, &e))?
+    });
     let server = Http2Server::alloc(
         ctx.clone(),
-        Some((secure_context, parsed.request_cert, parsed.reject_unauthorized)),
+        Some((
+            secure_context,
+            parsed.request_cert,
+            parsed.reject_unauthorized,
+        )),
     )?;
     if let Some(listener) = listener {
         Http2Server::add_event_listener_str(

@@ -14,6 +14,9 @@ pub enum WorkerToMain {
 #[derive(Debug, Clone)]
 pub enum MainToWorker {
     Message(CloneWirePayload),
-    EnvPatch { key: CloneWirePayload, value: CloneWirePayload },
+    EnvPatch {
+        key: CloneWirePayload,
+        value: CloneWirePayload,
+    },
     Terminate,
 }

@@ -5,9 +5,9 @@ use std::env;
 use std::os::unix::io::FromRawFd;
 use std::os::unix::net::UnixStream as StdUnixStream;
 
+use raster_runtime_child_process::install_child_process_ipc;
 use raster_runtime_core::modules::module_builder::{ModuleBuilder, ModuleBuilderConfig};
 use raster_runtime_core::vm::{Vm, VmOptions};
-use raster_runtime_child_process::install_child_process_ipc;
 use rquickjs::{context::EvalOptions, CatchResultExt, Promise};
 use tokio::net::UnixStream;
 use url::Url;
@@ -28,9 +28,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .with_global(raster_runtime_worker_threads::init)
         .with_module(raster_runtime_core::modules::raster_runtime::hex::RasterRuntimeHexModule)
         .with_module(raster_runtime_core::modules::raster_runtime::qjs::RasterRuntimeQjsModule)
-        .with_module(
-            raster_runtime_core::modules::raster_runtime::util::RasterRuntimeUtilModule,
-        )
+        .with_module(raster_runtime_core::modules::raster_runtime::util::RasterRuntimeUtilModule)
         .with_module(raster_runtime_core::modules::raster_runtime::xml::RasterRuntimeXmlModule),
         ..VmOptions::default()
     })

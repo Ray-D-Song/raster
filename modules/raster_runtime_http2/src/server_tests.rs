@@ -49,7 +49,8 @@ async fn http2_create_server_h2c() {
                 .body(())
                 .unwrap();
             let (response, mut send) = client.send_request(request, false).unwrap();
-            send.send_data(bytes::Bytes::from_static(b""), true).unwrap();
+            send.send_data(bytes::Bytes::from_static(b""), true)
+                .unwrap();
             let response = response.await.unwrap();
             assert_eq!(response.status(), http::StatusCode::OK);
             let mut body = response.into_body();

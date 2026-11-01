@@ -39,7 +39,6 @@ use raster_runtime_utils::{
     object::ObjectExt,
     result::ResultExt,
 };
-use tokio::sync::mpsc::UnboundedSender;
 use rquickjs::{
     class::{Trace, Tracer},
     convert::Coerced,
@@ -47,6 +46,7 @@ use rquickjs::{
     prelude::{Func, Opt, Rest, This},
     Class, Ctx, Error, Exception, IntoJs, Result, Value,
 };
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::{
     io::AsyncRead,
     process::{Child, Command},
