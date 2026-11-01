@@ -42,7 +42,7 @@ pub async fn run_until_process_exit(
             continue;
         }
 
-        idle_or_signal(vm).await?;
+        idle_turn(vm).await?;
         poll_drivers(vm).await;
 
         if schedule_signals(vm).await? {
@@ -63,7 +63,7 @@ pub async fn run_until_process_exit(
             .await
             .map_err(|e: rquickjs::Error| e.to_string())?;
 
-        idle_or_signal(vm).await?;
+        idle_turn(vm).await?;
         poll_drivers(vm).await;
 
         if schedule_signals(vm).await? {
@@ -87,7 +87,7 @@ pub async fn run_until_process_exit(
             .await
             .map_err(|e: rquickjs::Error| e.to_string())?;
 
-        idle_or_signal(vm).await?;
+        idle_turn(vm).await?;
 
         vm.ctx
             .with(|ctx| emit_process_exit(&ctx))
@@ -100,21 +100,14 @@ pub async fn run_until_process_exit(
     Ok(())
 }
 
-/// Run the QuickJS event loop until either it settles, an OS signal is queued,
-/// or the (short) poll interval elapses.
-///
-/// `idle` parks as long as any spawned task is still pending — including tasks
-/// that are merely waiting on another handle — so the drain loop must be able to
-/// interrupt it to re-check whether the process can exit.
-async fn idle_or_signal(vm: &Vm) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let idle = async {
-        vm.idle().await?;
-        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
-    };
-
+/// Run one turn of the QuickJS event loop, returning early when an OS signal is
+/// queued or the poll interval elapses so the drain loop can re-check liveness.
+/// `idle` parks while any spawned task is pending, including tasks that merely
+/// wait on another handle.
+async fn idle_turn(vm: &Vm) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     #[cfg(target_family = "wasm")]
     {
-        idle.await?;
+        vm.idle().await?;
         return Ok(());
     }
 
@@ -126,7 +119,7 @@ async fn idle_or_signal(vm: &Vm) -> Result<(), Box<dyn std::error::Error + Send 
 
         let wake = signal_bridge::wake_handle();
         tokio::select! {
-            res = idle => res?,
+            res = vm.idle() => res?,
             _ = wake.notified() => {},
             _ = sleep(DRAIN_POLL_INTERVAL) => {},
         }
