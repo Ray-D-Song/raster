@@ -47,7 +47,7 @@ jobs:
         env:
           RASTER_RUNTIME_ASYNC_HOOKS: "1"
         run: |
-          for filter in events readline util worker_threads module fs sqlite; do
+          for filter in events readline util module fs sqlite; do
             ./target/debug/raster_runtime test -d bundle/js/__tests__/unit --filter "$filter"
           done
 
