@@ -105,7 +105,7 @@ fn validate_header_value(ctx: Ctx<'_>, _name: String, value: String) -> Result<(
 }
 
 /// Coerce Node-style header values into a list of strings (arrays expand).
-fn header_value_to_list<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> Result<Vec<String>> {
+pub(super) fn header_value_to_list<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> Result<Vec<String>> {
     if value.is_undefined() || value.is_null() {
         return Ok(vec![String::new()]);
     }
@@ -231,6 +231,8 @@ pub struct IncomingMessage<'js> {
     paused: bool,
     destroyed: bool,
     socket: Class<'js, Socket<'js>>,
+    response_status_code: Option<u16>,
+    response_status_message: Option<String>,
 }
 unsafe impl<'js> JsLifetime<'js> for IncomingMessage<'js> {
     type Changed<'to> = IncomingMessage<'to>;
@@ -309,6 +311,56 @@ impl<'js> IncomingMessage<'js> {
     pub fn destroy(this: This<Class<'js, Self>>) -> Class<'js, Self> {
         this.borrow_mut().destroyed = true;
         this.0
+    }
+    #[qjs(get, rename = "statusCode")]
+    fn status_code(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
+        match self.response_status_code {
+            Some(code) => code.into_js(&ctx),
+            None => Ok(Undefined.into_value(ctx)),
+        }
+    }
+    #[qjs(get, rename = "statusMessage")]
+    fn status_message(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
+        match self.response_status_message.as_ref() {
+            Some(msg) => msg.clone().into_js(&ctx),
+            None => Ok(Undefined.into_value(ctx)),
+        }
+    }
+}
+
+impl<'js> IncomingMessage<'js> {
+    pub(crate) fn from_client_response(
+        ctx: &Ctx<'js>,
+        status_code: u16,
+        status_message: Option<String>,
+        headers: Object<'js>,
+        raw_headers: Vec<String>,
+        socket: Class<'js, Socket<'js>>,
+    ) -> Result<Self> {
+        Ok(Self {
+            emitter: EventEmitter::new(),
+            method: String::new(),
+            url: String::new(),
+            headers,
+            raw_headers,
+            trailers: Object::new(ctx.clone())?,
+            raw_trailers: Vec::new(),
+            body: Vec::new(),
+            complete: false,
+            paused: false,
+            destroyed: false,
+            socket,
+            response_status_code: Some(status_code),
+            response_status_message: status_message,
+        })
+    }
+
+    pub(crate) fn append_body(&mut self, data: &[u8]) {
+        self.body.extend_from_slice(data);
+    }
+
+    pub(crate) fn mark_complete(&mut self) {
+        self.complete = true;
     }
 }
 
@@ -1224,6 +1276,8 @@ async fn dispatch<'js>(
             paused: false,
             destroyed: false,
             socket: connection_socket.clone(),
+            response_status_code: None,
+            response_status_message: None,
         },
     ) {
         Ok(v) => v,
@@ -1469,6 +1523,7 @@ impl ModuleDef for HttpModule {
             "Server",
             "IncomingMessage",
             "ServerResponse",
+            "ClientRequest",
             "Agent",
             "globalAgent",
             "METHODS",
@@ -1519,17 +1574,36 @@ impl ModuleDef for HttpModule {
             default.set("STATUS_CODES", status_codes)?;
             default.set("validateHeaderName", Func::from(validate_header_name))?;
             default.set("validateHeaderValue", Func::from(validate_header_value))?;
-            // Named-export stubs so `import { get, request } from "node:http"` links.
-            // Full client request pipeline is not yet implemented.
-            let client_stub: rquickjs::Function = ctx.eval(
-                r#"(function(){
+            #[cfg(any(
+                feature = "tls-ring",
+                feature = "tls-aws-lc",
+                feature = "tls-graviola",
+                feature = "tls-openssl"
+            ))]
+            {
+                use crate::client_request::{http_get, http_request, ClientRequest};
+                Class::<ClientRequest>::define(default)?;
+                ClientRequest::add_event_emitter_prototype(ctx)?;
+                default.set("request", Func::from(http_request))?;
+                default.set("get", Func::from(http_get))?;
+            }
+            #[cfg(not(any(
+                feature = "tls-ring",
+                feature = "tls-aws-lc",
+                feature = "tls-graviola",
+                feature = "tls-openssl"
+            )))]
+            {
+                let client_stub: rquickjs::Function = ctx.eval(
+                    r#"(function(){
   return function httpClientStub() {
     throw new Error("http.get/request client API is not implemented in raster_runtime yet");
   };
 })()"#,
-            )?;
-            default.set("get", client_stub.clone())?;
-            default.set("request", client_stub)?;
+                )?;
+                default.set("get", client_stub.clone())?;
+                default.set("request", client_stub)?;
+            }
             Ok(())
         })?;
         Ok(())

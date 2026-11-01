@@ -1,13 +1,21 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
+use raster_runtime_events::Emitter;
 use raster_runtime_utils::module::{export_default, ModuleInfo};
 use rquickjs::{
     module::{Declarations, Exports, ModuleDef},
-    Ctx, Result,
+    prelude::Func,
+    Class, Ctx, Result,
 };
 
 pub use self::config::*;
-mod server;
+#[cfg(any(
+    feature = "tls-ring",
+    feature = "tls-aws-lc",
+    feature = "tls-graviola",
+    feature = "tls-openssl"
+))]
+mod client_request;
 pub use self::server::HttpModule;
 
 #[cfg(any(
@@ -18,6 +26,7 @@ pub use self::server::HttpModule;
 ))]
 mod client;
 mod config;
+mod server;
 
 #[cfg(any(
     feature = "tls-ring",
@@ -61,21 +70,25 @@ impl ModuleDef for HttpsModule {
                 feature = "tls-graviola",
                 feature = "tls-openssl"
             ))]
-            rquickjs::Class::<Agent>::define(default)?;
+            {
+                raster_runtime_buffer::init(ctx)?;
+                rquickjs::Class::<Agent>::define(default)?;
+                use crate::client_request::{http_get, http_request, ClientRequest};
+                Class::<ClientRequest>::define(default)?;
+                ClientRequest::add_event_emitter_prototype(ctx)?;
+                default.set("request", Func::from(http_request))?;
+                default.set("get", Func::from(http_get))?;
+            }
 
-            // ESM named-import stubs for packages that link https surface at load time.
             let stub: rquickjs::Function = ctx.eval(
                 r#"(function(){
   return function httpsStub() {
-    throw new Error("https.createServer/get/request is not fully implemented in raster_runtime yet");
+    throw new Error("https.createServer is not implemented in raster_runtime yet");
   };
 })()"#,
             )?;
-            default.set("createServer", stub.clone())?;
-            default.set("get", stub.clone())?;
-            default.set("request", stub)?;
+            default.set("createServer", stub)?;
 
-            let _ = default;
             Ok(())
         })
     }
