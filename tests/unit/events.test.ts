@@ -8,6 +8,19 @@ it("node:events should be the same as events", () => {
 const sleep = (millis: number) => new Promise((cb) => setTimeout(cb, millis));
 
 const { EventEmitter } = defaultImport;
+// Named helper exports (module-level functions, plus well-known symbols).
+const Events = defaultImport as unknown as {
+  once: (
+    emitter: any,
+    name: string,
+    options?: { signal?: AbortSignal }
+  ) => Promise<unknown[]>;
+  getEventListeners: (emitter: any, name: string) => Function[];
+  addAbortListener: (
+    signal: AbortSignal,
+    listener: () => void
+  ) => { [Symbol.dispose](): void };
+};
 
 describe("EventEmitter", () => {
   it("should use custom EventEmitter", () => {
@@ -548,5 +561,91 @@ describe("EventEmitter.on async iterator", () => {
     expect(() =>
       EventEmitter.on(ee, "data", { signal: {} as any })
     ).toThrow(TypeError);
+  });
+});
+
+describe("module-level helpers", () => {
+  it("exports the Node helper surface", () => {
+    const mod = Events as unknown as Record<string, unknown>;
+    for (const name of [
+      "once",
+      "getEventListeners",
+      "getMaxListeners",
+      "setMaxListeners",
+      "addAbortListener",
+    ]) {
+      expect(typeof mod[name]).toBe("function");
+    }
+    expect(typeof mod.errorMonitor).toBe("symbol");
+    expect(typeof mod.captureRejectionSymbol).toBe("symbol");
+    expect(mod.defaultMaxListeners).toBe(10);
+  });
+
+  it("once resolves with the emitted arguments", async () => {
+    const ee = new EventEmitter();
+    const pending = Events.once(ee, "ping");
+    setTimeout(() => ee.emit("ping", 1, "two"), 5);
+    await expect(pending).resolves.toEqual([1, "two"]);
+    // The listener must be gone afterwards.
+    expect(ee.listenerCount("ping")).toBe(0);
+  });
+
+  it("once rejects when an error is emitted first", async () => {
+    const ee = new EventEmitter();
+    const pending = Events.once(ee, "never");
+    setTimeout(() => ee.emit("error", new Error("boom")), 5);
+    await expect(pending).rejects.toThrow("boom");
+  });
+
+  it("once rejects with AbortError when the signal aborts", async () => {
+    const ee = new EventEmitter();
+    const ac = new AbortController();
+    const pending = Events.once(ee, "x", { signal: ac.signal });
+    setTimeout(() => ac.abort(), 5);
+    await expect(pending).rejects.toMatchObject({
+      name: "AbortError",
+      code: "ABORT_ERR",
+    });
+  });
+
+  it("once rejects immediately for an already-aborted signal", async () => {
+    const ac = new AbortController();
+    ac.abort();
+    await expect(
+      Events.once(new EventEmitter(), "x", { signal: ac.signal })
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("getEventListeners returns a copy of the listener list", () => {
+    const ee = new EventEmitter();
+    const fn = () => {};
+    ee.on("a", fn);
+    const listeners = Events.getEventListeners(ee, "a");
+    expect(listeners.length).toBe(1);
+    expect(listeners[0]).toBe(fn);
+    // Mutating the returned array must not affect the emitter.
+    listeners.length = 0;
+    expect(ee.listenerCount("a")).toBe(1);
+  });
+
+  it("addAbortListener fires on abort and exposes Symbol.dispose", async () => {
+    const ac = new AbortController();
+    let fired = 0;
+    const handle = Events.addAbortListener(ac.signal, () => fired++);
+    expect(typeof handle[Symbol.dispose]).toBe("function");
+    ac.abort();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(fired).toBe(1);
+  });
+
+  it("addAbortListener defers an already-aborted signal to a microtask", async () => {
+    const ac = new AbortController();
+    ac.abort();
+    let fired = 0;
+    Events.addAbortListener(ac.signal, () => fired++);
+    expect(fired).toBe(0);
+    await Promise.resolve();
+    await new Promise((r) => setTimeout(r, 5));
+    expect(fired).toBe(1);
   });
 });

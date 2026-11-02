@@ -328,6 +328,22 @@ Lightweight and fast hash classes for raster_runtime.
 
 [EventEmitter](https://nodejs.org/api/events.html#class-eventemitter)
 
+[once](https://nodejs.org/api/events.html#eventsonceemitter-name-options)
+
+[on](https://nodejs.org/api/events.html#eventsonemitter-eventname-options)
+
+[getEventListeners](https://nodejs.org/api/events.html#eventsgeteventlistenersemitter-name)
+
+[getMaxListeners](https://nodejs.org/api/events.html#eventsgetmaxlistenersemitter)
+
+[setMaxListeners](https://nodejs.org/api/events.html#eventssetmaxlistenersn-...eventtargets)
+
+[addAbortListener](https://nodejs.org/api/events.html#eventsaddabortlistenersignal-listener)
+
+`errorMonitor`, `captureRejectionSymbol` and `defaultMaxListeners` are exported and also attached to the `EventEmitter` constructor, matching Node where the default export is that constructor.
+
+> `EventEmitterAsyncResource` and automatic `captureRejections` behaviour are not implemented.
+
 ## fs
 
 [access](https://nodejs.org/api/fs.html#fsaccesspath-mode-callback)
