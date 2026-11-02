@@ -72,6 +72,29 @@ pub fn embedded_resolve<'a>(x: &'a str, y: &str) -> Result<Cow<'a, str>> {
         return Ok(x_normalized.into());
     }
 
+    // Node accepts a trailing separator on bare specifiers (`require("string_decoder/")`),
+    // and the bundled commonjs helpers emit exactly that. `path::normalize` keeps the
+    // separator, so retry after trimming it: without this, `node:stream` fails to load
+    // as soon as a node_modules directory makes the package resolver take over.
+    let trimmed = x.trim_end_matches(['/', '\\']);
+    if trimmed.len() != x.len() && !trimmed.is_empty() {
+        if BYTECODE_CACHE.contains_key(trimmed) {
+            trace!(
+                "+- Resolved by `BYTECODE_CACHE` (trailing sep): {}",
+                trimmed
+            );
+            return Ok(trimmed.into());
+        }
+        let trimmed_normalized = path::normalize(trimmed);
+        if BYTECODE_CACHE.contains_key(&trimmed_normalized) {
+            trace!(
+                "+- Resolved by `BYTECODE_CACHE` (trailing sep, normalized): {}",
+                trimmed_normalized
+            );
+            return Ok(trimmed_normalized.into());
+        }
+    }
+
     Err(Error::new_resolving(y.to_string(), x.to_string()))
 }
 
