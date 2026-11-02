@@ -22,7 +22,7 @@ use rquickjs::{
     module::{Declarations, Exports, ModuleDef},
     prelude::{Func, Opt, Rest, This},
     CatchResultExt, Class, Ctx, Exception, Function, IntoJs, JsLifetime, Object, Result,
-    String as JsString, Symbol, Undefined, Value,
+    String as JsString, Symbol, Value,
 };
 use tracing::trace;
 
