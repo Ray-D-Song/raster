@@ -158,6 +158,16 @@ pub fn require_resolve_with_options<'a>(
     // trim schema
     let x = x.trim_start_matches("file://");
 
+    // Node tolerates a trailing separator on bare specifiers
+    // (`require("string_decoder/")`), and the bundled CommonJS helpers emit
+    // exactly that. Normalize it away for bare names only: for paths the
+    // trailing slash is meaningful (`require("./dir/")` must stay a directory).
+    let x = if !x.starts_with('.') && !x.starts_with('/') {
+        x.trim_end_matches('/')
+    } else {
+        x
+    };
+
     // resolve symlink
     let y = if let Ok(path) = Path::new(y).read_link() {
         if path.is_absolute() {

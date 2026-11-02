@@ -31,6 +31,20 @@ pub fn require_from_module<'js>(
     // Match pre-facade require: `__cjs:` is an internal loader key, not a resolve input.
     let is_cjs_import = specifier.starts_with(CJS_IMPORT_PREFIX);
 
+    // Node accepts a trailing separator on bare specifiers
+    // (`require("string_decoder/")`) and bundled CommonJS helpers emit exactly
+    // that. Normalize it away for bare names before resolving; paths keep their
+    // separator because it is meaningful there.
+    let specifier = if !is_cjs_import
+        && !specifier.starts_with('.')
+        && !specifier.starts_with('/')
+        && !specifier.starts_with("file://")
+    {
+        specifier.trim_end_matches('/').to_string()
+    } else {
+        specifier
+    };
+
     let import_name: Rc<str>;
     let import_specifier: Rc<str>;
     let is_builtin;
@@ -61,7 +75,11 @@ pub fn require_from_module<'js>(
             if let Some(request) = names.disabled_node_builtin_error_request(resolved_trimmed) {
                 super::facade::unknown_builtin_module(&ctx, &request)?;
             }
-            if let Some(builtin_name) = names.resolve_builtin(&resolved) {
+            // Builtins must be looked up with the trailing separator removed:
+            // bundled CommonJS helpers `require("string_decoder/")`, and Node
+            // accepts that form. Looking up the untrimmed name falls through to
+            // the package resolver and fails.
+            if let Some(builtin_name) = names.resolve_builtin(resolved_trimmed) {
                 is_builtin = true;
                 import_name = builtin_name.into();
                 import_specifier = import_name.clone();

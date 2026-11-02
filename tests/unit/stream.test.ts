@@ -160,3 +160,20 @@ describe("stream state predicates and helpers", () => {
     expect(stream.destroyed).toBe(true);
   });
 });
+
+describe("bare specifier with trailing separator", () => {
+  it("require('string_decoder/') resolves to the builtin", () => {
+    // Bundled CommonJS helpers (inside node:stream) emit exactly this form.
+    // Regression: with a node_modules directory present, resolution fell through
+    // to the package resolver and node:stream failed to load entirely.
+    const r = _require("string_decoder/");
+    expect(typeof r.StringDecoder).toBe("function");
+    expect(new r.StringDecoder("utf8").write(Buffer.from("hi"))).toBe("hi");
+  });
+
+  it("node:stream still loads from a directory that has node_modules", async () => {
+    const S = await import("node:stream");
+    expect(typeof S.Readable).toBe("function");
+    expect(typeof S.isReadable).toBe("function");
+  });
+});
