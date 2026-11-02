@@ -707,6 +707,14 @@ impl ModuleDef for EventsModule {
     fn declare(declare: &Declarations) -> Result<()> {
         declare.declare(stringify!(EventEmitter))?;
         declare.declare("on")?;
+        declare.declare("once")?;
+        declare.declare("getEventListeners")?;
+        declare.declare("getMaxListeners")?;
+        declare.declare("setMaxListeners")?;
+        declare.declare("addAbortListener")?;
+        declare.declare("errorMonitor")?;
+        declare.declare("captureRejectionSymbol")?;
+        declare.declare("defaultMaxListeners")?;
         declare.declare("default")?;
 
         Ok(())
@@ -924,6 +932,172 @@ impl ModuleDef for EventsModule {
 })()"#,
         )?;
         ctor.set("on", on_static.clone())?;
+
+        // Nodes' module-level helpers. Kept in one eval so they share the
+        // AbortError shaping used by `on`.
+        let helpers: Object = ctx.eval(
+            r#"(function () {
+  function abortError(signal) {
+    const err = new Error("The operation was aborted");
+    err.name = "AbortError";
+    err.code = "ABORT_ERR";
+    if (signal && signal.reason !== undefined) {
+      try { err.cause = signal.reason; } catch (_) {}
+    }
+    return err;
+  }
+
+  function once(emitter, name, options) {
+    if (emitter == null || typeof emitter.on !== "function") {
+      throw new TypeError('The "emitter" argument must be an EventEmitter');
+    }
+    if (name === undefined) {
+      throw new TypeError('The "event" argument must be specified');
+    }
+    if (options === undefined || options === null) {
+      options = {};
+    } else if (typeof options !== "object" || Array.isArray(options)) {
+      throw new TypeError('The "options" argument must be of type object. Received ' + options);
+    }
+    const signal = options.signal;
+    if (signal != null) {
+      if (typeof signal !== "object" || typeof signal.aborted !== "boolean") {
+        throw new TypeError('The "options.signal" property must be an AbortSignal.');
+      }
+      if (signal.aborted) {
+        return Promise.reject(abortError(signal));
+      }
+    }
+
+    return new Promise(function (resolve, reject) {
+      function cleanup() {
+        emitter.removeListener(name, resolver);
+        if (name !== "error") {
+          emitter.removeListener("error", errorListener);
+        }
+        if (signal != null && typeof signal.removeEventListener === "function") {
+          signal.removeEventListener("abort", abortListener);
+        }
+      }
+      function errorListener(err) {
+        cleanup();
+        reject(err);
+      }
+      function resolver() {
+        const args = Array.prototype.slice.call(arguments);
+        cleanup();
+        resolve(args);
+      }
+      function abortListener() {
+        cleanup();
+        reject(abortError(signal));
+      }
+
+      emitter.once(name, resolver);
+      if (name !== "error") {
+        emitter.once("error", errorListener);
+      }
+      if (signal != null && typeof signal.addEventListener === "function") {
+        signal.addEventListener("abort", abortListener, { once: true });
+      }
+    });
+  }
+
+  function getEventListeners(emitter, name) {
+    if (emitter == null || typeof emitter.listeners !== "function") {
+      throw new TypeError('The "emitter" argument must be an EventEmitter');
+    }
+    return emitter.listeners(name);
+  }
+
+  function getMaxListeners(emitter) {
+    if (emitter == null) {
+      throw new TypeError('The "emitter" argument must be an EventEmitter');
+    }
+    if (typeof emitter.getMaxListeners === "function") {
+      return emitter.getMaxListeners();
+    }
+    return EventEmitter.defaultMaxListeners;
+  }
+
+  function setMaxListeners(n) {
+    if (typeof n !== "number" || n !== n || n < 0) {
+      throw new RangeError('The value of "n" is out of range. It must be a non-negative number. Received ' + n);
+    }
+    return n;
+  }
+
+  function addAbortListener(signal, listener) {
+    if (signal === undefined) {
+      throw new TypeError('The "signal" argument must be an AbortSignal. Received undefined');
+    }
+    if (signal === null || typeof signal !== "object" || typeof signal.aborted !== "boolean") {
+      throw new TypeError('The "signal" argument must be an AbortSignal');
+    }
+    if (typeof listener !== "function") {
+      throw new TypeError('The "listener" argument must be of type function');
+    }
+
+    let removeEventListener;
+    if (signal.aborted) {
+      // Node defers the callback so callers can finish wiring up first.
+      queueMicrotask(function () { listener(); });
+    } else {
+      signal.addEventListener("abort", listener, { once: true });
+      removeEventListener = function () {
+        signal.removeEventListener("abort", listener);
+      };
+    }
+    return {
+      [Symbol.dispose]() {
+        if (removeEventListener) removeEventListener();
+      },
+    };
+  }
+
+  return {
+    once,
+    getEventListeners,
+    getMaxListeners,
+    setMaxListeners,
+    addAbortListener,
+  };
+})()"#,
+        )?;
+
+        // Node hangs these helpers off the EventEmitter constructor too, because
+        // the module's default export *is* that constructor.
+        for name in [
+            "once",
+            "getEventListeners",
+            "getMaxListeners",
+            "setMaxListeners",
+            "addAbortListener",
+        ] {
+            let f: Function = helpers.get(name)?;
+            exports.export(name, f.clone())?;
+            ctor.set(name, f)?;
+        }
+
+        // Well-known symbols/props Node hangs off the constructor.
+        ctor.set(
+            "errorMonitor",
+            ctx.eval::<Value, _>("Symbol.for('events.errorMonitor')")?,
+        )?;
+        ctor.set(
+            "captureRejectionSymbol",
+            ctx.eval::<Value, _>("Symbol.for('nodejs.rejection')")?,
+        )?;
+        ctor.set("defaultMaxListeners", 10i32)?;
+        exports.export(
+            "errorMonitor",
+            ctx.eval::<Value, _>("Symbol.for('events.errorMonitor')")?,
+        )?;
+        exports.export(
+            "captureRejectionSymbol",
+            ctx.eval::<Value, _>("Symbol.for('nodejs.rejection')")?,
+        )?;
+        exports.export("defaultMaxListeners", 10i32)?;
 
         exports.export(stringify!(EventEmitter), ctor.clone())?;
         exports.export("on", on_static)?;
