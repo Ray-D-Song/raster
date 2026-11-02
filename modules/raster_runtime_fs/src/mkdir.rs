@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use crate::chmod::{set_mode, set_mode_sync};
 
+use crate::errors::throw_fs_error;
 use rand::RngExt;
 use raster_runtime_path::resolve_path;
 use raster_runtime_utils::result::ResultExt;
@@ -16,7 +17,7 @@ pub async fn mkdir<'js>(ctx: Ctx<'js>, path: String, options: Opt<Object<'js>>) 
     } else {
         fs::create_dir(&path).await
     }
-    .or_throw_msg(&ctx, &["Can't create dir \"", &path, "\""].concat())?;
+    .map_err(|err| throw_fs_error(&ctx, err, "mkdir", &path))?;
 
     set_mode(ctx, &path, mode).await?;
 
@@ -31,7 +32,7 @@ pub fn mkdir_sync<'js>(ctx: Ctx<'js>, path: String, options: Opt<Object<'js>>) -
     } else {
         std::fs::create_dir(&path)
     }
-    .or_throw_msg(&ctx, &["Can't create dir \"", &path, "\""].concat())?;
+    .map_err(|err| throw_fs_error(&ctx, err, "mkdir", &path))?;
 
     set_mode_sync(ctx, &path, mode)?;
 

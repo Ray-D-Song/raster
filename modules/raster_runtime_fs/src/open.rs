@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use std::path::PathBuf;
 
+use crate::errors::throw_fs_error;
 use raster_runtime_utils::result::ResultExt;
 use rquickjs::{function::Opt, Ctx, Exception, Result};
 use tokio::fs::OpenOptions;
@@ -45,10 +46,11 @@ pub async fn open(
     }
 
     let path = PathBuf::from(path);
+    let path_str = path.to_string_lossy().into_owned();
     let file = options
         .open(&path)
         .await
-        .or_throw_msg(&ctx, "Cannot open file")?;
+        .map_err(|err| throw_fs_error(&ctx, err, "open", &path_str))?;
 
     let crt = super::file_handle::crt_flags_for_node_open(flag_str);
     FileHandle::new_with_crt_flags(file, path, crt).or_throw_msg(&ctx, "Cannot open file")

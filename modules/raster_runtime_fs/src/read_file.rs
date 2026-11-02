@@ -6,6 +6,7 @@ use raster_runtime_utils::{object::ObjectExt, result::ResultExt};
 use rquickjs::{function::Opt, Ctx, Error, FromJs, IntoJs, Result, Value};
 use tokio::fs;
 
+use crate::errors::throw_fs_error;
 use crate::realpath::path_from_value;
 
 pub async fn read_file<'js>(
@@ -16,7 +17,7 @@ pub async fn read_file<'js>(
     let path = path_from_value(&ctx, path)?;
     let bytes = fs::read(&path)
         .await
-        .or_throw_msg(&ctx, &["Can't read \"", &path, "\""].concat())?;
+        .map_err(|err| throw_fs_error(&ctx, err, "open", &path))?;
 
     handle_read_file_bytes(&ctx, options, bytes)
 }
@@ -27,8 +28,7 @@ pub fn read_file_sync<'js>(
     options: Opt<Either<String, ReadFileOptions>>,
 ) -> Result<Value<'js>> {
     let path = path_from_value(&ctx, path)?;
-    let bytes =
-        std::fs::read(&path).or_throw_msg(&ctx, &["Can't read \"", &path, "\""].concat())?;
+    let bytes = std::fs::read(&path).map_err(|err| throw_fs_error(&ctx, err, "open", &path))?;
 
     handle_read_file_bytes(&ctx, options, bytes)
 }

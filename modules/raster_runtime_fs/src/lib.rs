@@ -16,6 +16,7 @@ mod stats;
 mod symlink;
 mod watch;
 mod write_file;
+mod write_stream;
 
 use raster_runtime_events::Emitter;
 use raster_runtime_utils::module::{export_default, ModuleInfo};
@@ -43,6 +44,7 @@ use self::stats::{
 use self::symlink::{symlink, symlink_sync};
 use self::watch::{watch, FSWatcher};
 use self::write_file::{write_file, write_file_sync};
+use self::write_stream::create_create_write_stream;
 
 pub const CONSTANT_F_OK: u32 = 0;
 pub const CONSTANT_R_OK: u32 = 4;
@@ -133,6 +135,10 @@ impl ModuleDef for FsModule {
         declare.declare("realpath")?;
         declare.declare("existsSync")?;
         declare.declare("createReadStream")?;
+        declare.declare("createWriteStream")?;
+        declare.declare("Stats")?;
+        declare.declare("Dirent")?;
+        declare.declare("FileHandle")?;
 
         declare.declare("default")?;
 
@@ -148,6 +154,19 @@ impl ModuleDef for FsModule {
         let fs_watcher_ctor = Class::<FSWatcher>::create_constructor(ctx)?
             .expect("Can't create FSWatcher constructor");
         globals.set("FSWatcher", fs_watcher_ctor.clone())?;
+        // `create_constructor` returns None for classes whose constructor is
+        // skipped (Stats/Dirent are built in Rust, not from JS), so recover the
+        // constructor from a prototype instead. That is the same function
+        // `instanceof` compares against, which is all callers need.
+        let stats_ctor = Class::<Stats>::prototype(ctx)?
+            .and_then(|p| p.get::<_, Value>("constructor").ok())
+            .and_then(|c| c.as_function().cloned());
+        let dirent_ctor = Class::<Dirent>::prototype(ctx)?
+            .and_then(|p| p.get::<_, Value>("constructor").ok())
+            .and_then(|c| c.as_function().cloned());
+        let file_handle_ctor = Class::<FileHandle>::prototype(ctx)?
+            .and_then(|p| p.get::<_, Value>("constructor").ok())
+            .and_then(|c| c.as_function().cloned());
         FSWatcher::add_event_emitter_prototype(ctx)?;
 
         export_default(ctx, exports, |default| {
@@ -289,6 +308,20 @@ impl ModuleDef for FsModule {
             default.set("symlinkSync", Func::from(symlink_sync))?;
             default.set("existsSync", Func::from(exists_sync))?;
             default.set("createReadStream", create_create_read_stream(ctx)?)?;
+            default.set("createWriteStream", create_create_write_stream(ctx)?)?;
+
+            // Expose the classes so `instanceof fs.Stats` / `import { Stats }`
+            // work. Node refuses direct construction of these, so the
+            // constructors are identity checks first and foremost.
+            if let Some(ctor) = stats_ctor.clone() {
+                default.set("Stats", ctor)?;
+            }
+            if let Some(ctor) = dirent_ctor.clone() {
+                default.set("Dirent", ctor)?;
+            }
+            if let Some(ctor) = file_handle_ctor.clone() {
+                default.set("FileHandle", ctor)?;
+            }
 
             let realpath_sync_fn = Function::new(ctx.clone(), realpath_sync)?;
             let realpath_sync_native = Function::new(ctx.clone(), realpath_sync)?;
