@@ -72,3 +72,91 @@ it("BYOB read preserves Uint8ClampedArray type and content", async () => {
   expect([...value!]).toEqual([1, 2, 3]);
   await reader.cancel();
 });
+
+describe("stream state predicates and helpers", () => {
+  it("exposes the Node helper surface on both the namespace and default export", async () => {
+    const S = await import("node:stream");
+    const names = [
+      "isReadable",
+      "isWritable",
+      "isDestroyed",
+      "isDisturbed",
+      "isErrored",
+      "isNodeStream",
+      "compose",
+      "duplexPair",
+      "addAbortSignal",
+      "getDefaultHighWaterMark",
+      "setDefaultHighWaterMark",
+      "destroy",
+    ];
+    for (const name of names) {
+      expect(typeof (S as any)[name]).toBe("function");
+      expect(typeof (S.default as any)[name]).toBe("function");
+    }
+  });
+
+  it("predicates return null for non-streams and booleans otherwise", async () => {
+    const { Readable, isReadable, isWritable, isDestroyed, isNodeStream } =
+      await import("node:stream");
+
+    const r = Readable.from([Buffer.from("x")]);
+    expect(isReadable(r)).toBe(true);
+    // A Readable has no writable side: Node reports null, not false.
+    expect(isWritable(r)).toBe(null);
+    expect(isDestroyed(r)).toBe(false);
+    expect(isNodeStream({})).toBe(false);
+    expect(isReadable({})).toBe(null);
+    expect(isWritable({})).toBe(null);
+
+    r.destroy();
+    await new Promise((res) => setTimeout(res, 10));
+    expect(isDestroyed(r)).toBe(true);
+    expect(isReadable(r)).toBe(false);
+  });
+
+  it("get/setDefaultHighWaterMark use object and byte modes", async () => {
+    const S = await import("node:stream");
+    expect(S.getDefaultHighWaterMark()).toBe(16384);
+    expect(S.getDefaultHighWaterMark(true)).toBe(16);
+
+    S.setDefaultHighWaterMark(true, 32);
+    expect(S.getDefaultHighWaterMark(true)).toBe(32);
+    // Bytes mode is unaffected by the object-mode change.
+    expect(S.getDefaultHighWaterMark()).toBe(16384);
+    S.setDefaultHighWaterMark(true, 16);
+  });
+
+  it("duplexPair wires two duplex streams together", async () => {
+    const { duplexPair } = await import("node:stream");
+    const [a, b] = duplexPair();
+    const received: string[] = [];
+    b.on("data", (c: Buffer) => received.push(c.toString()));
+    a.write("ping");
+    a.end();
+    await new Promise((res) => setTimeout(res, 30));
+    expect(received.join("")).toBe("ping");
+  });
+
+  it("compose pipes streams left to right", async () => {
+    const { Readable, PassThrough, compose } = await import("node:stream");
+    const upper = new PassThrough();
+    upper.on("data", () => {});
+    const out: string[] = [];
+    const sink = new PassThrough();
+    sink.on("data", (c: Buffer) => out.push(c.toString().toUpperCase()));
+    compose(Readable.from([Buffer.from("ab")]), upper, sink);
+    await new Promise((res) => setTimeout(res, 30));
+    expect(out.join("")).toBe("AB");
+  });
+
+  it("addAbortSignal destroys the stream when the signal aborts", async () => {
+    const { PassThrough, addAbortSignal } = await import("node:stream");
+    const ac = new AbortController();
+    const stream = new PassThrough();
+    addAbortSignal(ac.signal, stream);
+    ac.abort();
+    await new Promise((res) => setTimeout(res, 10));
+    expect(stream.destroyed).toBe(true);
+  });
+});

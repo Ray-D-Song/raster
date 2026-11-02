@@ -692,6 +692,20 @@ The Node 24.3 differential fixture covers module shape, statements, functions, a
 
 [pipeline](https://nodejs.org/api/stream.html#streampipelinestreams-callback)
 
+### State predicates
+
+[isReadable](https://nodejs.org/api/stream.html#streamisreadablestream) / [isWritable](https://nodejs.org/api/stream.html#streamiswritablestream) / [isDestroyed](https://nodejs.org/api/stream.html#streamisdestroyedstream) / [isDisturbed](https://nodejs.org/api/stream.html#streamisdisturbedstream) / [isErrored](https://nodejs.org/api/stream.html#streamiserroredstream) / [isNodeStream](https://nodejs.org/api/stream.html#streamisnodestreamstream) / [isReadableStream](https://nodejs.org/api/stream.html#streamisreadablestreamstream) / [isWritableStream](https://nodejs.org/api/stream.html#streamiswritablestreamstream)
+
+These return `null` (not `false`) when the argument is not a stream, matching Node.
+
+### Composition helpers
+
+[compose](https://nodejs.org/api/stream.html#streamcomposestreams) / [duplexPair](https://nodejs.org/api/stream.html#streamduplexpairoptions) / [addAbortSignal](https://nodejs.org/api/stream.html#streamaddabortsignalsignal-stream) / [destroy](https://nodejs.org/api/stream.html#streamdestroystream-error) / [getDefaultHighWaterMark](https://nodejs.org/api/stream.html#streamgetdefaulthighwatermarkobjectmode) / [setDefaultHighWaterMark](https://nodejs.org/api/stream.html#streamsetdefaulthighwatermarkobjectmode-value)
+
+All helpers are also attached to the default export (`stream.isReadable(s)`).
+
+> `compose` collapses Node's pipeline/web-stream branches into duplex `.pipe()` wiring, so it does not give the returned stream `compose` iteration semantics over async generators. `duplexPair` acks writes on `drain` rather than modelling true half-open backpressure.
+
 ## stream/web
 
 Also available as `node:stream/web`. `TextEncoderStream` and `TextDecoderStream` are installed globally when the stream/web module is loaded.
