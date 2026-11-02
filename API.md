@@ -920,6 +920,16 @@ Workers run on **OS threads** with a **separate QuickJS `AsyncRuntime` isolate**
 
 [zstdDecompressSync](https://nodejs.org/api/zlib.html#zlibzstddecompresssyncbuffer-options)
 
+### Streaming
+
+[createGzip](https://nodejs.org/api/zlib.html#zlibcreategzipoptions) / [createGunzip](https://nodejs.org/api/zlib.html#zlibcreategunzipoptions) / [createDeflate](https://nodejs.org/api/zlib.html#zlibcreatedeflateoptions) / [createInflate](https://nodejs.org/api/zlib.html#zlibcreateinflateoptions) / [createDeflateRaw](https://nodejs.org/api/zlib.html#zlibcreatedeflaterawoptions) / [createInflateRaw](https://nodejs.org/api/zlib.html#zlibcreateinflaterawoptions) / [createBrotliCompress](https://nodejs.org/api/zlib.html#zlibcreatebrotlicompressoptions) / [createBrotliDecompress](https://nodejs.org/api/zlib.html#zlibcreatebrotlidecompressoptions) / [createZstdCompress](https://nodejs.org/api/zlib.html#zlibcreatezstdcompressoptions) / [createZstdDecompress](https://nodejs.org/api/zlib.html#zlibcreatezstddecompressoptions)
+
+The matching `Gzip`, `Gunzip`, `Deflate`, `Inflate`, `DeflateRaw`, `InflateRaw`, `BrotliCompress`, `BrotliDecompress`, `ZstdCompress`, `ZstdDecompress` classes are exported as well, plus `constants`.
+
+Each factory returns a `stream.Transform` that emits a **single** framed stream across all chunks written to it (compressor state is kept between chunks), so it is interchangeable with Node's for middleware such as `compression`.
+
+> `flush(kind, cb)` currently completes immediately without honouring the flush kind, and `params()` / `close()` are not implemented.
+
 # raster_runtime API
 
 ## raster_runtime:hex
