@@ -649,3 +649,39 @@ describe("module-level helpers", () => {
     expect(fired).toBe(1);
   });
 });
+
+describe("max listener bookkeeping", () => {
+  it("exposes setMaxListeners/getMaxListeners/rawListeners on the prototype", () => {
+    const ee = new EventEmitter();
+    for (const name of ["setMaxListeners", "getMaxListeners", "rawListeners"]) {
+      expect(typeof (EventEmitter.prototype as any)[name]).toBe("function");
+    }
+  });
+
+  it("setMaxListeners(0) is accepted (framework bootstrap idiom)", () => {
+    // merge-stream / jest-worker / Next call this unconditionally.
+    const ee = new EventEmitter();
+    expect(() => ee.setMaxListeners(0)).not.toThrow();
+    expect(ee.getMaxListeners()).toBe(0);
+  });
+
+  it("getMaxListeners defaults to defaultMaxListeners", () => {
+    const ee = new EventEmitter();
+    expect(ee.getMaxListeners()).toBe(10);
+    ee.setMaxListeners(3);
+    expect(ee.getMaxListeners()).toBe(3);
+  });
+
+  it("rawListeners returns the registered listeners", () => {
+    const ee = new EventEmitter();
+    const fn = () => {};
+    ee.on("a", fn);
+    expect(ee.rawListeners("a")).toEqual([fn]);
+  });
+
+  it("rejects invalid maxListener values", () => {
+    const ee = new EventEmitter();
+    expect(() => ee.setMaxListeners(-1 as any)).toThrow();
+    expect(() => ee.setMaxListeners("x" as any)).toThrow();
+  });
+});

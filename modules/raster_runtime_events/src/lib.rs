@@ -21,8 +21,8 @@ use rquickjs::{
     class::{JsClass, Trace, Tracer},
     module::{Declarations, Exports, ModuleDef},
     prelude::{Func, Opt, Rest, This},
-    CatchResultExt, Class, Ctx, Function, JsLifetime, Object, Result, String as JsString, Symbol,
-    Value,
+    CatchResultExt, Class, Ctx, Exception, Function, IntoJs, JsLifetime, Object, Result,
+    String as JsString, Symbol, Value,
 };
 use tracing::trace;
 
@@ -292,6 +292,9 @@ where
         proto.set("removeListener", off)?;
         proto.set("listenerCount", Func::from(Self::listener_count))?;
         proto.set("listeners", Func::from(Self::listeners))?;
+        proto.set("rawListeners", Func::from(Self::raw_listeners))?;
+        proto.set("setMaxListeners", Func::from(Self::set_max_listeners))?;
+        proto.set("getMaxListeners", Func::from(Self::get_max_listeners))?;
         proto.set("removeAllListeners", Func::from(Self::remove_all_listeners))?;
 
         Ok(proto)
@@ -644,6 +647,62 @@ where
         let events = Self::resolve_events_from(&ctx, &this)?;
         let key = EventKey::from_value(&ctx, event)?;
         Ok(find_all_listeners(events, key))
+    }
+
+    /// Node's `rawListeners`: like [`Self::listeners`] but exposing the wrapper
+    /// for `once` listeners. Returning the same functions is close enough for
+    /// the common uses (`removeListeners`, introspection).
+    fn raw_listeners(
+        this: This<Object<'js>>,
+        ctx: Ctx<'js>,
+        event: Value<'js>,
+    ) -> Result<Vec<Function<'js>>> {
+        Self::listeners(this, ctx, event)
+    }
+
+    /// `setMaxListeners(n)` — stores the value on the instance so
+    /// `getMaxListeners` can return it.
+    ///
+    /// Raster does not emit `MaxListenersExceededWarning`, so this is bookkeeping
+    /// only; it exists because frameworks call `emitter.setMaxListeners(0)`
+    /// unconditionally during bootstrap (`merge-stream`, jest-worker, Next).
+    fn set_max_listeners(
+        this: This<Object<'js>>,
+        ctx: Ctx<'js>,
+        n: Value<'js>,
+    ) -> Result<Object<'js>> {
+        let Some(n) = n.as_number() else {
+            return Err(Exception::throw_type(
+                &ctx,
+                "The \"n\" argument must be of type number",
+            ));
+        };
+        if n.is_nan() || n < 0.0 {
+            return Err(Exception::throw_range(
+                &ctx,
+                "The value of \"n\" is out of range. It must be a non-negative number",
+            ));
+        }
+        this.set("_maxListeners", (n as u32).into_js(&ctx)?)?;
+        Ok(this.0.clone())
+    }
+
+    /// `getMaxListeners()` — the per-instance value, else `EventEmitter.defaultMaxListeners`.
+    fn get_max_listeners(this: This<Object<'js>>, ctx: Ctx<'js>) -> Result<u32> {
+        let stored: Value = this.get("_maxListeners")?;
+        if let Some(n) = stored.as_number() {
+            return Ok(n as u32);
+        }
+        // Fall back to the constructor's `defaultMaxListeners` (10 unless the
+        // application changed it).
+        let ctor: Value = ctx.globals().get("__rasterEventEmitterCtor")?;
+        if let Some(ctor) = ctor.as_object() {
+            let default: Value = ctor.get("defaultMaxListeners")?;
+            if let Some(n) = default.as_number() {
+                return Ok(n as u32);
+            }
+        }
+        Ok(10)
     }
 
     fn remove_all_listeners(
@@ -1098,6 +1157,11 @@ impl ModuleDef for EventsModule {
             ctx.eval::<Value, _>("Symbol.for('nodejs.rejection')")?,
         )?;
         exports.export("defaultMaxListeners", 10i32)?;
+
+        // Kept on the runtime globals (not on `globalThis`) so prototype methods
+        // can read `defaultMaxListeners` without threading it through Rust.
+        ctx.globals()
+            .set("__rasterEventEmitterCtor", ctor.clone())?;
 
         exports.export(stringify!(EventEmitter), ctor.clone())?;
         exports.export("on", on_static)?;
