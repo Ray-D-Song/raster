@@ -1182,3 +1182,112 @@ const checkDirExists = async (dirPath: string) => {
     .then(() => true)
     .catch(() => false);
 };
+
+// `defaultImport` is the fs namespace; aliases keep the new tests readable.
+const fs = defaultImport as any;
+const fsp = fs.promises as any;
+const join = path.join;
+const tmpdir = os.tmpdir;
+
+describe("createWriteStream", () => {
+  const tmp = (name: string) => join(tmpdir(), `raster-ws-${process.pid}-${name}`);
+
+  it("writes string and Buffer chunks and closes the handle", async () => {
+    const file = tmp("basic.txt");
+    const ws = fs.createWriteStream(file);
+    ws.write("hello ");
+    ws.write(Buffer.from("buffer"));
+    ws.end("-end");
+    await new Promise<void>((resolve, reject) => {
+      ws.on("finish", resolve);
+      ws.on("error", reject);
+    });
+    expect(fs.readFileSync(file, "utf8")).toBe("hello buffer-end");
+    // Node exposes bytesWritten on the stream.
+    expect(ws.bytesWritten).toBe("hello buffer-end".length);
+    fs.rmSync(file, { force: true });
+  });
+
+  it("appends when flags is 'a'", async () => {
+    const file = tmp("append.txt");
+    fs.writeFileSync(file, "first");
+    await new Promise<void>((resolve, reject) => {
+      const ws = fs.createWriteStream(file, { flags: "a" });
+      ws.on("finish", resolve);
+      ws.on("error", reject);
+      ws.end("+second");
+    });
+    expect(fs.readFileSync(file, "utf8")).toBe("first+second");
+    fs.rmSync(file, { force: true });
+  });
+
+  it("round-trips through createReadStream", async () => {
+    const file = tmp("roundtrip.txt");
+    await new Promise<void>((resolve, reject) => {
+      const ws = fs.createWriteStream(file);
+      ws.on("finish", resolve);
+      ws.on("error", reject);
+      ws.end("round trip payload");
+    });
+
+    const chunks: Buffer[] = [];
+    await new Promise<void>((resolve, reject) => {
+      const rs = fs.createReadStream(file);
+      rs.on("data", (c: Buffer) => chunks.push(c));
+      rs.on("end", resolve);
+      rs.on("error", reject);
+    });
+    expect(Buffer.concat(chunks).toString()).toBe("round trip payload");
+    fs.rmSync(file, { force: true });
+  });
+
+  it("rejects unsupported options instead of silently ignoring them", () => {
+    expect(() =>
+      fs.createWriteStream(tmp("x.txt"), { fd: 3 } as any)
+    ).toThrow(/fd is not supported/);
+    expect(() =>
+      fs.createWriteStream(tmp("x.txt"), { autoClose: false } as any)
+    ).toThrow(/autoClose/);
+  });
+});
+
+describe("fs error metadata", () => {
+  it("attaches code/syscall/path like Node", async () => {
+    await expect(
+      (readFile as any)("/definitely-not-here/x")
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+      syscall: "open",
+      path: "/definitely-not-here/x",
+    });
+
+    expect(() => fs.readFileSync("/definitely-not-here/y")).toThrow();
+    try {
+      fs.readFileSync("/definitely-not-here/y");
+    } catch (err: any) {
+      expect(err.code).toBe("ENOENT");
+      expect(err.syscall).toBe("open");
+      expect(err.path).toBe("/definitely-not-here/y");
+    }
+  });
+
+  it("mkdtemp/mkdir failures carry a code", async () => {
+    await expect(
+      (mkdir as any)("/definitely-not-here/deep/dir")
+    ).rejects.toMatchObject({ code: "ENOENT", syscall: "mkdir" });
+  });
+});
+
+describe("fs class exports", () => {
+  it("Stats is exported and matches stat results", () => {
+    const st = fs.statSync(tmpdir());
+    expect(typeof fs.Stats).toBe("function");
+    expect(st).toBeInstanceOf(fs.Stats);
+  });
+
+  it("Dirent is exported and matches readdir results", () => {
+    const entry = fs.readdirSync(tmpdir(), { withFileTypes: true })[0];
+    expect(typeof fs.Dirent).toBe("function");
+    expect(entry).toBeInstanceOf(fs.Dirent);
+  });
+});
