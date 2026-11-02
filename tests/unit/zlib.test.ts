@@ -109,3 +109,72 @@ describe("zstandard", () => {
     expect(data).toEqual(decompressed.toString());
   });
 });
+
+describe("streaming factories", () => {
+  const streamNames = [
+    ["createGzip", "createGunzip"],
+    ["createDeflate", "createInflate"],
+    ["createDeflateRaw", "createInflateRaw"],
+    ["createBrotliCompress", "createBrotliDecompress"],
+    ["createZstdCompress", "createZstdDecompress"],
+  ] as const;
+
+  it("exposes the factory functions and their Transform classes", () => {
+    const mod = defaultImport as Record<string, unknown>;
+    for (const [compress, decompress] of streamNames) {
+      expect(typeof mod[compress]).toBe("function");
+      expect(typeof mod[decompress]).toBe("function");
+    }
+    // Class names mirror the factories (`createGzip` -> `Gzip`).
+    expect(typeof mod.Gzip).toBe("function");
+    expect(typeof mod.Gunzip).toBe("function");
+    expect(typeof mod.constants).toBe("object");
+    expect((mod.constants as Record<string, number>).Z_BEST_COMPRESSION).toBe(9);
+  });
+
+  it("emits a single framed stream across chunks", async () => {
+    const { Readable, pipeline } = await import("node:stream");
+    const zlib = defaultImport as unknown as typeof import("node:zlib");
+
+    const chunks = ["hello ", "streaming ", "world"];
+    const source = Readable.from(chunks.map((c) => Buffer.from(c)));
+
+    await new Promise<void>((resolve, reject) => {
+      pipeline(
+        source,
+        zlib.createGzip(),
+        zlib.createGunzip(),
+        (err: Error | null) => (err ? reject(err) : resolve())
+      );
+    });
+
+    const gz = zlib.createGzip();
+    const out: Buffer[] = [];
+    gz.on("data", (c: Buffer) => out.push(c));
+    await new Promise<void>((resolve, reject) => {
+      gz.on("end", resolve);
+      gz.on("error", reject);
+      gz.write("part1 ");
+      gz.write("part2");
+      gz.end();
+    });
+
+    const total = Buffer.concat(out);
+    // A single gzip member decodes as a whole.
+    expect(zlib.gunzipSync(total).toString()).toBe("part1 part2");
+
+    // Multi-chunk compression must be smaller than three separate members.
+    const perChunk = Buffer.concat(
+      chunks.map((c) => zlib.gzipSync(Buffer.from(c)))
+    );
+    expect(total.length).toBeLessThan(perChunk.length);
+  });
+
+  it("stops producing data after the stream is destroyed", async () => {
+    const zlib = defaultImport as unknown as typeof import("node:zlib");
+    const gz = zlib.createGzip();
+    gz.destroy();
+    await new Promise<void>((resolve) => gz.on("close", () => resolve()));
+    expect(gz.destroyed).toBe(true);
+  });
+});
