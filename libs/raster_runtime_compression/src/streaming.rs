@@ -12,6 +12,10 @@ pub enum StreamingDecoder {
     Gzip(flate2::write::GzDecoder<Vec<u8>>),
     #[cfg(any(feature = "flate2-c", feature = "flate2-rust"))]
     Deflate(flate2::write::ZlibDecoder<Vec<u8>>),
+    /// Raw DEFLATE with no zlib wrapper (RFC 1951). `ws` permessage-deflate
+    /// and Node's `inflateRaw` both need it.
+    #[cfg(any(feature = "flate2-c", feature = "flate2-rust"))]
+    DeflateRaw(flate2::write::DeflateDecoder<Vec<u8>>),
     #[cfg(any(feature = "zstd-c", feature = "zstd-rust"))]
     Zstd(zstd::stream::write::Decoder<'static, Vec<u8>>),
     #[cfg(any(feature = "brotli-c", feature = "brotli-rust"))]
@@ -26,6 +30,10 @@ impl StreamingDecoder {
             "gzip" => Ok(Self::Gzip(flate2::write::GzDecoder::new(Vec::new()))),
             #[cfg(any(feature = "flate2-c", feature = "flate2-rust"))]
             "deflate" => Ok(Self::Deflate(flate2::write::ZlibDecoder::new(Vec::new()))),
+            #[cfg(any(feature = "flate2-c", feature = "flate2-rust"))]
+            "deflate-raw" => Ok(Self::DeflateRaw(flate2::write::DeflateDecoder::new(
+                Vec::new(),
+            ))),
             #[cfg(any(feature = "zstd-c", feature = "zstd-rust"))]
             "zstd" => Ok(Self::Zstd(zstd::stream::write::Decoder::new(Vec::new())?)),
             #[cfg(feature = "brotli-c")]
@@ -59,6 +67,12 @@ impl StreamingDecoder {
                 decoder.flush()?;
                 Ok(std::mem::take(decoder.get_mut()))
             },
+            #[cfg(any(feature = "flate2-c", feature = "flate2-rust"))]
+            Self::DeflateRaw(decoder) => {
+                decoder.write_all(input)?;
+                decoder.flush()?;
+                Ok(std::mem::take(decoder.get_mut()))
+            },
             #[cfg(any(feature = "zstd-c", feature = "zstd-rust"))]
             Self::Zstd(decoder) => {
                 decoder.write_all(input)?;
@@ -82,6 +96,8 @@ impl StreamingDecoder {
             Self::Gzip(decoder) => decoder.finish(),
             #[cfg(any(feature = "flate2-c", feature = "flate2-rust"))]
             Self::Deflate(decoder) => decoder.finish(),
+            #[cfg(any(feature = "flate2-c", feature = "flate2-rust"))]
+            Self::DeflateRaw(decoder) => decoder.finish(),
             #[cfg(any(feature = "zstd-c", feature = "zstd-rust"))]
             Self::Zstd(decoder) => Ok(decoder.into_inner()),
             #[cfg(feature = "brotli-c")]

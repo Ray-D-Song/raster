@@ -178,3 +178,37 @@ describe("streaming factories", () => {
     expect(gz.destroyed).toBe(true);
   });
 });
+
+describe("raw deflate streaming (ws permessage-deflate)", () => {
+  it("createInflateRaw decodes what createDeflateRaw produced", async () => {
+    const zlib = defaultImport as unknown as typeof import("node:zlib");
+    const payload = Buffer.from("websocket frame payload");
+
+    const enc = zlib.createDeflateRaw();
+    const out: Buffer[] = [];
+    enc.on("data", (c: Buffer) => out.push(c));
+    await new Promise<void>((resolve, reject) => {
+      enc.on("end", resolve);
+      enc.on("error", reject);
+      enc.write(payload.subarray(0, 8));
+      enc.write(payload.subarray(8));
+      enc.end();
+    });
+
+    const raw = Buffer.concat(out);
+    expect(zlib.inflateRawSync(raw).toString()).toBe("websocket frame payload");
+
+    // The streaming decoder must accept raw deflate too (previously threw
+    // "unsupported encoding: deflate-raw").
+    const dec = zlib.createInflateRaw();
+    const back: Buffer[] = [];
+    dec.on("data", (c: Buffer) => back.push(c));
+    await new Promise<void>((resolve, reject) => {
+      dec.on("end", resolve);
+      dec.on("error", reject);
+      dec.write(raw);
+      dec.end();
+    });
+    expect(Buffer.concat(back).toString()).toBe("websocket frame payload");
+  });
+});
