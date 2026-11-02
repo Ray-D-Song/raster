@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use either::Either;
 use raster_runtime_buffer::Buffer;
-use raster_runtime_utils::{object::ObjectExt, result::ResultExt};
+use raster_runtime_utils::object::ObjectExt;
 use rquickjs::{function::Opt, Ctx, Error, FromJs, IntoJs, Result, Value};
 use tokio::fs;
 
