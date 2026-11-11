@@ -35,15 +35,15 @@ describe("module.findPackageJSON without a package.json", () => {
 
   afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
-  it("returns undefined when the search reaches a node_modules directory", () => {
+  it("returns the resolved path when the search reaches a node_modules directory", () => {
     const file = path.join(root, "pkg/node_modules/nopkg/f.js");
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, "x\n");
     fs.writeFileSync(path.join(root, "pkg/package.json"), "{}");
-    expect(findPackageJSON(pathToFileURL(file).href)).toBeUndefined();
+    expect(findPackageJSON(pathToFileURL(file).href)).toBe(file);
   });
 
-  it("returns undefined when no ancestor has a package.json", () => {
+  it("returns the resolved path when no ancestor has a package.json", () => {
     const file = path.join(root, "plain/f.js");
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, "x\n");
@@ -55,7 +55,7 @@ describe("module.findPackageJSON without a package.json", () => {
       }
       if (path.dirname(dir) === dir) break;
     }
-    expect(findPackageJSON(pathToFileURL(file).href)).toBe(ancestor);
+    expect(findPackageJSON(pathToFileURL(file).href)).toBe(ancestor ?? file);
   });
 });
 

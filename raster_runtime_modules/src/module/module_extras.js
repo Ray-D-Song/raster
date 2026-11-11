@@ -642,8 +642,10 @@
       }
     }
 
+    // Node 24.21 returns the resolved path when no package.json is found,
+    // contradicting its docs and lib source (which return undefined).
     const pkg = getNearestParentPackageJSON(resolvedPath);
-    return pkg?.path;
+    return pkg?.path ?? resolvedPath;
   }
 
   // ------------------------------------------------------------ compile cache
