@@ -397,7 +397,12 @@ impl<'js> Server<'js> {
         let (tcp_stream, _) = accept_result.or_throw(&ctx)?;
 
         ctx.clone().spawn_exit(async move {
-            let tls_socket = TlsSocket::new(ctx.clone(), allow_half_open)?;
+            // The listener must receive a real `tls.TLSSocket` (a net.Socket
+            // subclass); the native handle is its `_handle` so both sides of
+            // `process_split_io` operate on the same object.
+            let tls_socket = TlsSocket::new(ctx.clone(), true)?;
+            let socket_instance =
+                crate::client::build_tls_socket_object(&ctx, &tls_socket, allow_half_open)?;
             let socket_index;
             {
                 let mut server_borrow = this.borrow_mut();
@@ -412,7 +417,6 @@ impl<'js> Server<'js> {
 
             TlsSocket::set_addresses_from_tcp(&tls_socket, &ctx, &tcp_stream)?;
 
-            let socket_instance = tls_socket.clone().into_value();
             Self::emit_str(
                 this.clone(),
                 &ctx,

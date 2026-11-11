@@ -235,7 +235,13 @@ const NET_SOCKET_GLUE_JS: &str = r#"(function () {
           decodeStrings: false,
         });
 
-        this._handle = createHandle(opts);
+        // A subclass (`tls.TLSSocket`) supplies its own backend through the
+        // static `_createHandle`, so one glue class serves both. An explicit
+        // `_handleFactory` wraps an already-built native handle (how `tls.connect`
+        // hands its TLS backend to the object returned to the caller).
+        const makeHandle =
+          opts._handleFactory || this.constructor._createHandle || createHandle;
+        this._handle = makeHandle(opts);
         if (this._handle && typeof this._handle.setOwner === "function") {
           this._handle.setOwner(this);
         }
