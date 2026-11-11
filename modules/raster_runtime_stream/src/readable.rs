@@ -390,45 +390,41 @@ where
                                 // buffered it and is at its high-water mark:
                                 // accepted, but read no further until the
                                 // consumer asks for more.
-                                loop {
-                                    match duplex_push(&owner, &ctx3, &buffer)? {
-                                        Some(true) => break,
-                                        Some(false) => {
-                                            // Buffered, but the consumer is at
-                                            // its high-water mark. Park until
-                                            // `_read`/`resume` says otherwise.
-                                            tokio::select! {
-                                                error = destroy_rx.recv() => {
-                                                    set_destroyed_and_error(&mut is_destroyed, &mut error_value, error);
-                                                    break 'read;
-                                                }
-                                                _ = resume_rx.recv() => {},
-                                                _ = handoff_rx.recv() => {
-                                                    if complete_readable_handoff(
-                                                        &mut reader,
-                                                        &ba_buffer,
-                                                        &mut buffer,
-                                                        &handoff_waiter,
-                                                    )? {
-                                                        handoff_completed2.store(true, Ordering::SeqCst);
-                                                        return Ok(());
-                                                    }
+                                match duplex_push(&owner, &ctx3, &buffer)? {
+                                    Some(true) => {},
+                                    Some(false) => {
+                                        // Buffered, but the consumer is at its
+                                        // high-water mark. Park until
+                                        // `_read`/`resume` says otherwise.
+                                        tokio::select! {
+                                            error = destroy_rx.recv() => {
+                                                set_destroyed_and_error(&mut is_destroyed, &mut error_value, error);
+                                                break 'read;
+                                            }
+                                            _ = resume_rx.recv() => {},
+                                            _ = handoff_rx.recv() => {
+                                                if complete_readable_handoff(
+                                                    &mut reader,
+                                                    &ba_buffer,
+                                                    &mut buffer,
+                                                    &handoff_waiter,
+                                                )? {
+                                                    handoff_completed2.store(true, Ordering::SeqCst);
+                                                    return Ok(());
                                                 }
                                             }
-                                            break;
                                         }
-                                        None => {
-                                            // No `push` on the owner after all;
-                                            // fall back to the classic signal.
-                                            Self::emit_str(
-                                                this2.clone(),
-                                                &ctx3,
-                                                "data",
-                                                vec![Buffer(buffer.clone()).into_js(&ctx3)?],
-                                                false
-                                            )?;
-                                            break;
-                                        }
+                                    }
+                                    None => {
+                                        // No `push` on the owner after all;
+                                        // fall back to the classic signal.
+                                        Self::emit_str(
+                                            this2.clone(),
+                                            &ctx3,
+                                            "data",
+                                            vec![Buffer(buffer.clone()).into_js(&ctx3)?],
+                                            false
+                                        )?;
                                     }
                                 }
                                 buffer.clear();

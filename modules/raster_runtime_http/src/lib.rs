@@ -23,6 +23,7 @@ mod client_request;
     feature = "tls-openssl"
 ))]
 mod https_server;
+mod websocket;
 pub use self::server::HttpModule;
 
 #[cfg(any(

@@ -1560,6 +1560,8 @@ impl ModuleDef for HttpModule {
             "STATUS_CODES",
             "validateHeaderName",
             "validateHeaderValue",
+            // Node 22+ client-side WebSocket.
+            "WebSocket",
             // Client stubs — present for ESM named-import graphs (e.g. vite).
             "get",
             "request",
@@ -1578,6 +1580,45 @@ impl ModuleDef for HttpModule {
             // Socket is an implementation detail of upgrade/connect events;
             // Node exposes it from `node:net`, not `node:http`.
             Class::<Socket>::define(&ctx.globals())?;
+            // `http.WebSocket` (Node 22+). Also published globally, as Node does.
+            Class::<crate::websocket::WebSocket>::define(default)?;
+            Class::<crate::websocket::WebSocket>::define(&ctx.globals())?;
+            if let Some(proto) = Class::<crate::websocket::WebSocket>::prototype(ctx)? {
+                proto.set("CONNECTING", crate::websocket::CONNECTING)?;
+                proto.set("OPEN", crate::websocket::OPEN)?;
+                proto.set("CLOSING", crate::websocket::CLOSING)?;
+                proto.set("CLOSED", crate::websocket::CLOSED)?;
+            }
+            if let Some(ctor) = Class::<crate::websocket::WebSocket>::create_constructor(ctx)? {
+                crate::websocket::WebSocket::add_event_emitter_prototype(ctx)?;
+                ctor.set("CONNECTING", crate::websocket::CONNECTING)?;
+                ctor.set("OPEN", crate::websocket::OPEN)?;
+                ctor.set("CLOSING", crate::websocket::CLOSING)?;
+                ctor.set("CLOSED", crate::websocket::CLOSED)?;
+                // Node's WebSocket is an EventTarget: handlers are set as
+                // `onopen`/`onmessage`/... properties, not through `on()`.
+                // Route those onto the emitter the class already has.
+                let install: rquickjs::Function = ctx.eval(
+                    r#"(function (WebSocketClass) {
+  for (const name of ["open", "message", "close", "error"]) {
+    const slot = "_on" + name;
+    Object.defineProperty(WebSocketClass.prototype, "on" + name, {
+      configurable: true,
+      enumerable: true,
+      get() { return this[slot] || null; },
+      set(handler) {
+        const previous = this[slot];
+        if (typeof previous === "function") this.removeListener(name, previous);
+        this[slot] = typeof handler === "function" ? handler : null;
+        if (typeof handler === "function") this.on(name, handler);
+      },
+    });
+  }
+  return WebSocketClass;
+})"#,
+                )?;
+                let _: Value = install.call((ctor,))?;
+            }
             Server::add_event_emitter_prototype(ctx)?;
             IncomingMessage::add_event_emitter_prototype(ctx)?;
             ServerResponse::add_event_emitter_prototype(ctx)?;
