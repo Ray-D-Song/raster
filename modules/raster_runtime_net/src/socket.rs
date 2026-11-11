@@ -198,6 +198,19 @@ impl<'js> Socket<'js> {
         self.js_owner.clone()
     }
 
+    /// Whether the native writer has not started yet, so a write should wait.
+    ///
+    /// Only `Closed` means "no transport attached yet": the Duplex parks the
+    /// write in its own `_writableState` until `connect`/`process_stream`
+    /// attaches one. `Attached` writes immediately through, and
+    /// `HandoffPending`/`Detached` are *permanently* unwritable (the transport
+    /// belongs to a TLS/HTTP layer now), so those must reach the native write
+    /// path and produce its error instead of being parked forever.
+    #[qjs(get, enumerable)]
+    pub fn transport_attached(&self) -> bool {
+        self.raw_writer.is_some() || self.transport_state != TransportState::Closed
+    }
+
     /// `_read` told us the consumer drained: let the native read loop continue.
     pub fn resume_reading(this: This<Class<'js, Self>>) -> Class<'js, Self> {
         this.borrow().readable_stream_inner.resume_reading();
@@ -921,7 +934,7 @@ impl<'js> Socket<'js> {
                 WritableStream::end(This(end_this.clone()));
             }
         };
-        let readable_done = match owner {
+        let readable_done = match owner.clone() {
             Some(owner) => ReadableStream::process_callback_loop_duplex(
                 this.clone(),
                 ctx,
@@ -948,6 +961,15 @@ impl<'js> Socket<'js> {
         borrow.ready_state = ReadyState::Open;
         borrow.transport_state = TransportState::Attached;
         drop(borrow);
+
+        // Release a write the Duplex held back while no transport was attached.
+        if let Some(owner) = owner {
+            if let Ok(hook) = owner.get::<_, Value>("_onWritesReady") {
+                if let Some(hook) = hook.as_function() {
+                    hook.call::<_, ()>((This(owner.clone()),))?;
+                }
+            }
+        }
 
         Ok((readable_done, writable_done))
     }
