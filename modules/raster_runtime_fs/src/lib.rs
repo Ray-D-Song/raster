@@ -24,7 +24,7 @@ use raster_runtime_utils::module::{export_default, ModuleInfo};
 use raster_runtime_utils::result::ResultExt;
 use rquickjs::{
     module::{Declarations, Exports, ModuleDef},
-    prelude::{Async, Func, Opt, This},
+    prelude::{Async, Func, Opt},
     Exception, Function,
 };
 use rquickjs::{Class, Ctx, IntoJs, Object, Result, Value};
@@ -849,7 +849,7 @@ fn lutimes_async<'js>(
 async fn opendir<'js>(ctx: Ctx<'js>, path: String) -> Result<Value<'js>> {
     // `readdir(..., { withFileTypes: true })` already yields Dirents, so the
     // entries come from one implementation rather than a second walker.
-    let mut opts = Object::new(ctx.clone())?;
+    let opts = Object::new(ctx.clone())?;
     opts.set("withFileTypes", true)?;
     let entries: Value = read_dir(ctx.clone(), path.clone(), Opt(Some(opts)))
         .await?
@@ -922,41 +922,39 @@ async fn copy_tree<'js>(
     }
 }
 
-fn copy_dir_recursive<'js>(
+async fn copy_dir_recursive<'js>(
     ctx: Ctx<'js>,
     src: std::path::PathBuf,
     dest: std::path::PathBuf,
     force: bool,
-) -> impl std::future::Future<Output = Result<()>> + 'js {
-    async move {
-        tokio::fs::create_dir_all(&dest)
+) -> Result<()> {
+    tokio::fs::create_dir_all(&dest)
+        .await
+        .or_throw_msg(&ctx, &format!("cp: mkdir {}", dest.display()))?;
+    let mut rd = tokio::fs::read_dir(&src)
+        .await
+        .or_throw_msg(&ctx, &format!("cp: readdir {}", src.display()))?;
+    while let Some(entry) = rd
+        .next_entry()
+        .await
+        .or_throw_msg(&ctx, &format!("cp: readdir {}", src.display()))?
+    {
+        let name = entry.file_name();
+        let from = entry.path();
+        let to = dest.join(&name);
+        let file_type = entry
+            .file_type()
             .await
-            .or_throw_msg(&ctx, &format!("cp: mkdir {}", dest.display()))?;
-        let mut rd = tokio::fs::read_dir(&src)
-            .await
-            .or_throw_msg(&ctx, &format!("cp: readdir {}", src.display()))?;
-        while let Some(entry) = rd
-            .next_entry()
-            .await
-            .or_throw_msg(&ctx, &format!("cp: readdir {}", src.display()))?
-        {
-            let name = entry.file_name();
-            let from = entry.path();
-            let to = dest.join(&name);
-            let file_type = entry
-                .file_type()
+            .or_throw_msg(&ctx, &format!("cp: stat {}", from.display()))?;
+        if file_type.is_dir() {
+            Box::pin(copy_dir_recursive(ctx.clone(), from, to, force)).await?;
+        } else if force || !to.exists() {
+            tokio::fs::copy(&from, &to)
                 .await
-                .or_throw_msg(&ctx, &format!("cp: stat {}", from.display()))?;
-            if file_type.is_dir() {
-                Box::pin(copy_dir_recursive(ctx.clone(), from, to, force)).await?;
-            } else if force || !to.exists() {
-                tokio::fs::copy(&from, &to)
-                    .await
-                    .or_throw_msg(&ctx, &format!("cp {} -> {}", from.display(), to.display()))?;
-            }
+                .or_throw_msg(&ctx, &format!("cp {} -> {}", from.display(), to.display()))?;
         }
-        Ok(())
     }
+    Ok(())
 }
 
 /// Create the shared fs access-mode constants object (`F_OK`/`R_OK`/`W_OK`/`X_OK`).
