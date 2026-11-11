@@ -21,6 +21,7 @@ mod array_buffer_view;
 mod blob;
 mod buffer;
 mod codec;
+mod natives;
 mod file;
 
 pub struct BufferModule;
