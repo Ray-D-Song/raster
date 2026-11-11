@@ -177,3 +177,27 @@ describe("bare specifier with trailing separator", () => {
     expect(typeof S.isReadable).toBe("function");
   });
 });
+
+describe("destroy() without an argument", () => {
+  it("closes cleanly instead of throwing undefined", async () => {
+    const { PassThrough } = await import("node:stream");
+    const stream = new PassThrough();
+    // `destroy()` with no argument broadcasts `Some(undefined)` internally.
+    // It used to be treated as an error and rethrown, so callers got a bare
+    // `undefined` with no message or stack.
+    await new Promise<void>((resolve) => {
+      stream.on("close", resolve);
+      stream.destroy();
+    });
+    expect(stream.destroyed).toBe(true);
+  });
+
+  it("still surfaces a real error passed to destroy()", async () => {
+    const { PassThrough } = await import("node:stream");
+    const stream = new PassThrough();
+    const boom = new Error("boom");
+    const seen = new Promise<Error>((resolve) => stream.on("error", resolve));
+    stream.destroy(boom);
+    await expect(seen).resolves.toBe(boom);
+  });
+});
