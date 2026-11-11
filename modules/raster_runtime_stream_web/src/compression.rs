@@ -82,7 +82,7 @@ const COMPRESSION_STREAM_JS: &str = r#"(function () {
       #state = { handle: null, controller: null, pendingError: null };
 
       constructor(format) {
-        const state = { handle: null, controller: null, pendingError: null, drain: null, drainResolve: null };
+        const state = { handle: null, controller: null, pendingError: null, drain: null, drainReject: null };
         super({
           start: (controller) => {
             state.controller = controller;
@@ -121,11 +121,11 @@ const COMPRESSION_STREAM_JS: &str = r#"(function () {
                 handle.off("drain", state.drain);
                 state.drain = null;
               }
-              if (state.drainResolve) {
-                const resolveDrain = state.drainResolve;
-                state.drainResolve = null;
+              if (state.drainReject) {
+                const rejectDrain = state.drainReject;
+                state.drainReject = null;
                 try {
-                  resolveDrain();
+                  rejectDrain(error);
                 } catch {}
               }
               state.detach();
@@ -140,24 +140,26 @@ const COMPRESSION_STREAM_JS: &str = r#"(function () {
             }
             if (more === false) {
               // The handle signals write readiness with `drain`. If it errors
-              // instead, nothing will ever drain, so the waiter must still be
-              // settled: one left pending forever keeps the transform (and the
+              // instead, nothing will ever drain, so this promise must reject:
+              // a waiter left pending forever keeps the transform (and the
               // handle it closes over) reachable, which the runtime reports as
-              // a leaked object at exit. It is resolved rather than rejected
-              // because the failure already reaches JavaScript through
-              // `controller.error`, and a rejection nobody observes would
-              // surface as an unhandled rejection.
+              // a leaked object at exit.
               const drainPromise = new Promise((resolve, reject) => {
                 const onDrain = () => {
                   handle.off("drain", onDrain);
                   state.drain = null;
-                  state.drainResolve = null;
+                  state.drainReject = null;
                   resolve();
                 };
                 state.drain = onDrain;
-                state.drainResolve = resolve;
+                state.drainReject = reject;
                 handle.on("drain", onDrain);
               });
+              // The error already reaches JavaScript through the stream
+              // (`controller.error`); this rejection exists only so the
+              // transform stops waiting. Marking it handled keeps it from also
+              // surfacing as an unhandled rejection.
+              drainPromise.catch(() => {});
               return drainPromise;
             }
             return undefined;
@@ -247,11 +249,11 @@ const COMPRESSION_STREAM_JS: &str = r#"(function () {
             handle.off("drain", state.drain);
             state.drain = null;
           }
-          if (state.drainResolve) {
-            const resolveDrain = state.drainResolve;
-            state.drainResolve = null;
+          if (state.drainReject) {
+            const rejectDrain = state.drainReject;
+            state.drainReject = null;
             try {
-              resolveDrain();
+              rejectDrain(error);
             } catch {}
           }
           state.handle = null;
