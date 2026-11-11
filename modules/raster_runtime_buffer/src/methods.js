@@ -318,6 +318,118 @@
     return _fill(this, value, offset, end, encoding);
   };
 
+  // ---- indexOf / lastIndexOf / includes ----
+
+  const encodingOps = {
+    utf8: { encoding: "utf8", encodingVal: "utf8", native: true },
+    ucs2: { encoding: "ucs2", encodingVal: "utf16le", native: true },
+    utf16le: { encoding: "utf16le", encodingVal: "utf16le", native: true },
+    latin1: { encoding: "latin1", encodingVal: "latin1", native: true },
+    ascii: { encoding: "ascii", encodingVal: "ascii", native: false },
+    base64: { encoding: "base64", encodingVal: "base64", native: false },
+    base64url: { encoding: "base64url", encodingVal: "base64url", native: false },
+    hex: { encoding: "hex", encodingVal: "hex", native: false },
+  };
+
+  function getEncodingOps(encoding) {
+    encoding += "";
+    switch (encoding.length) {
+      case 4:
+        if (encoding === "utf8") return encodingOps.utf8;
+        if (encoding === "ucs2") return encodingOps.ucs2;
+        encoding = encoding.toLowerCase();
+        if (encoding === "utf8") return encodingOps.utf8;
+        if (encoding === "ucs2") return encodingOps.ucs2;
+        break;
+      case 5:
+        if (encoding === "utf-8") return encodingOps.utf8;
+        if (encoding === "ascii") return encodingOps.ascii;
+        if (encoding === "ucs-2") return encodingOps.ucs2;
+        encoding = encoding.toLowerCase();
+        if (encoding === "utf-8") return encodingOps.utf8;
+        if (encoding === "ascii") return encodingOps.ascii;
+        if (encoding === "ucs-2") return encodingOps.ucs2;
+        break;
+      case 7:
+        if (encoding === "utf16le" || encoding.toLowerCase() === "utf16le") return encodingOps.utf16le;
+        break;
+      case 8:
+        if (encoding === "utf-16le" || encoding.toLowerCase() === "utf-16le") return encodingOps.utf16le;
+        break;
+      case 6:
+        if (encoding === "latin1" || encoding === "binary") return encodingOps.latin1;
+        if (encoding === "base64") return encodingOps.base64;
+        encoding = encoding.toLowerCase();
+        if (encoding === "latin1" || encoding === "binary") return encodingOps.latin1;
+        if (encoding === "base64") return encodingOps.base64;
+        break;
+      case 3:
+        if (encoding === "hex" || encoding.toLowerCase() === "hex") return encodingOps.hex;
+        break;
+      case 9:
+        if (encoding === "base64url" || encoding.toLowerCase() === "base64url") return encodingOps.base64url;
+        break;
+    }
+    return undefined;
+  }
+
+  function validateBuffer(buffer, name = "buffer") {
+    if (!isArrayBufferView(buffer)) {
+      throw invalidArgType(name, ["Buffer", "TypedArray", "DataView"], buffer);
+    }
+  }
+
+  function bidirectionalIndexOf(buffer, val, byteOffset, encoding, dir) {
+    validateBuffer(buffer);
+
+    if (typeof byteOffset === "string") {
+      encoding = byteOffset;
+      byteOffset = undefined;
+    } else if (byteOffset > 0x7fffffff) {
+      byteOffset = 0x7fffffff;
+    } else if (byteOffset < -0x80000000) {
+      byteOffset = -0x80000000;
+    }
+    byteOffset = +byteOffset;
+    if (Number.isNaN(byteOffset)) {
+      byteOffset = dir ? 0 : buffer.length || buffer.byteLength;
+    }
+    dir = !!dir;
+
+    if (typeof val === "number") {
+      return natives.indexOfNumber(buffer, val >>> 0, byteOffset, dir);
+    }
+
+    let ops;
+    if (encoding === undefined) ops = encodingOps.utf8;
+    else ops = getEncodingOps(encoding);
+
+    if (typeof val === "string") {
+      if (ops === undefined) throw unknownEncoding(encoding);
+      if (ops.native) return natives.indexOfString(buffer, val, byteOffset, ops.encodingVal, dir);
+      return natives.indexOfBuffer(buffer, Buffer.from(val, ops.encoding), byteOffset, ops.encodingVal, dir);
+    }
+
+    if (isUint8Array(val)) {
+      const encodingVal = ops === undefined ? "utf8" : ops.encodingVal;
+      return natives.indexOfBuffer(buffer, val, byteOffset, encodingVal, dir);
+    }
+
+    throw invalidArgType("value", ["number", "string", "Buffer", "Uint8Array"], val);
+  }
+
+  proto.indexOf = function indexOf(val, byteOffset, encoding, _reserved) {
+    return bidirectionalIndexOf(this, val, byteOffset, encoding, true);
+  };
+
+  proto.lastIndexOf = function lastIndexOf(val, byteOffset, encoding, _reserved) {
+    return bidirectionalIndexOf(this, val, byteOffset, encoding, false);
+  };
+
+  proto.includes = function includes(val, byteOffset, encoding, _reserved) {
+    return bidirectionalIndexOf(this, val, byteOffset, encoding, true) !== -1;
+  };
+
   // ---- compare / equals ----
 
   function compare(buf1, buf2) {
