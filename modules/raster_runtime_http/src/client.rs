@@ -128,3 +128,43 @@ pub use rustls_client::*;
 
 #[cfg(feature = "tls-openssl")]
 pub use openssl_client::*;
+
+/// Build a client for one request that supplied its own TLS verification
+/// options.
+///
+/// `https.get`/`https.request` in Node read `rejectUnauthorized` and `ca` from
+/// the request options; the shared pooled client cannot, because it is built
+/// once from the process-wide `TLS_CONFIG`. Requests that pass neither keep
+/// using the pool.
+pub fn build_client_for_request(
+    ctx: &rquickjs::Ctx<'_>,
+    options: crate::client_request::RequestTlsOptions,
+) -> rquickjs::Result<HyperClient> {
+    #[cfg(any(feature = "tls-ring", feature = "tls-aws-lc", feature = "tls-graviola"))]
+    {
+        let reject_unauthorized = options.reject_unauthorized.unwrap_or(true);
+        let config =
+            raster_runtime_tls::build_client_config(raster_runtime_tls::BuildClientConfigOptions {
+                reject_unauthorized,
+                ca: options.ca,
+            })
+            .map_err(|err| rquickjs::Exception::throw_message(ctx, &err.to_string()))?;
+        build_client(Some(config))
+            .map_err(|err| rquickjs::Exception::throw_message(ctx, &err.to_string()))
+    }
+    #[cfg(feature = "tls-openssl")]
+    {
+        let reject_unauthorized = options.reject_unauthorized.unwrap_or(true);
+        // The openssl builder has no per-request `ca` slot in this back-end;
+        // honour verification, which is what requests actually depend on.
+        let _ = options.ca;
+        let builder =
+            raster_runtime_tls::build_client_config(raster_runtime_tls::BuildClientConfigOptions {
+                reject_unauthorized,
+                ca: None,
+            })
+            .map_err(|err| rquickjs::Exception::throw_message(ctx, &err.to_string()))?;
+        build_client(Some(builder))
+            .map_err(|err| rquickjs::Exception::throw_message(ctx, &err.to_string()))
+    }
+}

@@ -83,11 +83,16 @@ impl ModuleDef for HttpsModule {
                     crate::server::handoff_tls_to_http_server,
                 );
                 rquickjs::Class::<Agent>::define(default)?;
-                use crate::client_request::{http_get, http_request, ClientRequest};
+                // `https` shares the http request/response classes, so their
+                // constructors and event methods must be registered here too:
+                // they are not inherited from the `http` module.
+                Class::<crate::server::IncomingMessage>::define(default)?;
+                crate::server::IncomingMessage::add_event_emitter_prototype(ctx)?;
+                use crate::client_request::{https_get, https_request, ClientRequest};
                 Class::<ClientRequest>::define(default)?;
                 ClientRequest::add_event_emitter_prototype(ctx)?;
-                default.set("request", Func::from(http_request))?;
-                default.set("get", Func::from(http_get))?;
+                default.set("request", Func::from(https_request))?;
+                default.set("get", Func::from(https_get))?;
                 default.set(
                     "createServer",
                     Func::from(crate::https_server::create_https_server),
