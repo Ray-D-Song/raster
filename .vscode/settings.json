@@ -13,5 +13,13 @@
   "search.exclude": {
     "**/refs/**": true
   },
-  "yaml.format.singleQuote": false
+  "yaml.format.singleQuote": false,
+  "remote.autoForwardPorts": true,
+  "remote.forwardPorts": [5173],
+  "remote.portsAttributes": {
+    "5173": {
+      "label": "raster-wasm",
+      "onAutoForward": "notify"
+    }
+  }
 }
