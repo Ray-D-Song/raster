@@ -38,7 +38,11 @@ impl RawInflate {
             let mut scratch = [0u8; 16 * 1024];
             let status = self
                 .decoder
-                .decompress(&input[consumed..], &mut scratch, flate2::FlushDecompress::None)
+                .decompress(
+                    &input[consumed..],
+                    &mut scratch,
+                    flate2::FlushDecompress::None,
+                )
                 .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
             let produced = (self.decoder.total_out() - before_out) as usize;
             out.extend_from_slice(&scratch[..produced]);

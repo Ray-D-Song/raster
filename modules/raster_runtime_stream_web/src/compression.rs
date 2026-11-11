@@ -21,7 +21,10 @@ pub fn install_compression_streams(ctx: &Ctx<'_>) -> Result<()> {
     }
 
     let value: rquickjs::Object = ctx.eval(COMPRESSION_STREAM_JS)?;
-    globals.set("CompressionStream", value.get::<_, Value>("CompressionStream")?)?;
+    globals.set(
+        "CompressionStream",
+        value.get::<_, Value>("CompressionStream")?,
+    )?;
     globals.set(
         "DecompressionStream",
         value.get::<_, Value>("DecompressionStream")?,
@@ -32,7 +35,10 @@ pub fn install_compression_streams(ctx: &Ctx<'_>) -> Result<()> {
 /// Export both constructors from the `stream/web` module.
 pub fn export_compression_streams(default: &rquickjs::Object<'_>) -> Result<()> {
     let globals = default.ctx().globals();
-    default.set("CompressionStream", globals.get::<_, Value>("CompressionStream")?)?;
+    default.set(
+        "CompressionStream",
+        globals.get::<_, Value>("CompressionStream")?,
+    )?;
     default.set(
         "DecompressionStream",
         globals.get::<_, Value>("DecompressionStream")?,
