@@ -549,4 +549,142 @@
   }
   if (proto.toString.name !== "toString") Object.defineProperty(proto.toString, "name", { value: "toString" });
   proto.toLocaleString = proto.toString;
+
+  for (const bits of [16, 32, 64]) {
+    const width = bits / 8;
+    const name = "swap" + bits;
+    proto[name] = { [name]() {
+      const len = this.length;
+      if (len % width !== 0) throw invalidBufferSize(`${bits}-bits`);
+      if (len > 0) natives.swap(this, width);
+      return this;
+    } }[name];
+  }
+
+  const tLength = Object.getOwnPropertyDescriptor(TypedArrayProto, "length").get;
+  proto.toJSON = function toJSON() {
+    const len = tLength.call(this);
+    if (len > 0) {
+      const data = new Array(len);
+      for (let i = 0; i < len; ++i) data[i] = this[i];
+      return { type: "Buffer", data };
+    }
+    return { type: "Buffer", data: [] };
+  };
+
+  function adjustOffset(offset, length) {
+    offset = Math.trunc(offset);
+    if (offset === 0) return 0;
+    if (offset < 0) {
+      offset += length;
+      return offset > 0 ? offset : 0;
+    }
+    if (offset < length) return offset;
+    return offset !== offset ? 0 : length;
+  }
+  proto.subarray = function subarray(start, end) {
+    const srcLength = this.length;
+    start = adjustOffset(start, srcLength);
+    end = end !== undefined ? adjustOffset(end, srcLength) : srcLength;
+    const newLength = end > start ? end - start : 0;
+    return Reflect.construct(Uint8Array, [this.buffer, this.byteOffset + start, newLength], Buffer);
+  };
+  proto.slice = function slice(start, end) {
+    return this.subarray(start, end);
+  };
+
+  function toInteger(n, defaultVal) {
+    n = +n;
+    if (n === n && n >= Number.MIN_SAFE_INTEGER && n <= Number.MAX_SAFE_INTEGER) {
+      return n % 1 === 0 ? n : Math.floor(n);
+    }
+    return defaultVal;
+  }
+  proto.copy = function copy(target, targetStart, sourceStart, sourceEnd) {
+    const source = this;
+    if (!isArrayBufferView(source)) throw invalidArgType("source", ["Buffer", "Uint8Array"], source);
+    if (!isArrayBufferView(target)) throw invalidArgType("target", ["Buffer", "Uint8Array"], target);
+    if (targetStart === undefined) {
+      targetStart = 0;
+    } else {
+      targetStart = Number.isInteger(targetStart) ? targetStart : toInteger(targetStart, 0);
+      if (targetStart < 0) throw outOfRange("targetStart", ">= 0", targetStart);
+    }
+    if (sourceStart === undefined) {
+      sourceStart = 0;
+    } else {
+      sourceStart = Number.isInteger(sourceStart) ? sourceStart : toInteger(sourceStart, 0);
+      if (sourceStart < 0 || sourceStart > source.byteLength) {
+        throw outOfRange("sourceStart", `>= 0 && <= ${source.byteLength}`, sourceStart);
+      }
+    }
+    if (sourceEnd === undefined) {
+      sourceEnd = source.byteLength;
+    } else {
+      sourceEnd = Number.isInteger(sourceEnd) ? sourceEnd : toInteger(sourceEnd, 0);
+      if (sourceEnd < 0) throw outOfRange("sourceEnd", ">= 0", sourceEnd);
+    }
+    if (targetStart >= target.byteLength || sourceStart >= sourceEnd) return 0;
+    if (sourceEnd - sourceStart > target.byteLength - targetStart) {
+      sourceEnd = sourceStart + target.byteLength - targetStart;
+    }
+    let nb = sourceEnd - sourceStart;
+    const sourceLen = source.byteLength - sourceStart;
+    if (nb > sourceLen) nb = sourceLen;
+    if (nb <= 0) return 0;
+    new Uint8Array(target.buffer, target.byteOffset, target.byteLength).set(
+      new Uint8Array(source.buffer, source.byteOffset + sourceStart, nb),
+      targetStart
+    );
+    return nb;
+  };
+  Object.defineProperty(proto.copy, "length", { value: 4 });
+
+  const typedArraySlice = TypedArrayProto.slice;
+  Buffer.copyBytesFrom = function copyBytesFrom(view, offset, length) {
+    if (typedArrayTag.call(view) === undefined) throw invalidArgType("view", ["TypedArray"], view);
+    const viewLength = tLength.call(view);
+    if (viewLength === 0) return Buffer.alloc(0);
+    if (offset !== undefined || length !== undefined) {
+      if (offset !== undefined) {
+        validateInteger(offset, "offset", 0);
+        if (offset >= viewLength) return Buffer.alloc(0);
+      } else {
+        offset = 0;
+      }
+      let end;
+      if (length !== undefined) {
+        validateInteger(length, "length", 0);
+        end = offset + length;
+      } else {
+        end = viewLength;
+      }
+      view = typedArraySlice.call(view, offset, end);
+    }
+    const out = Buffer.alloc(view.byteLength);
+    out.set(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
+    return out;
+  };
+
+  Buffer.of = (...items) => {
+    const b = Buffer.alloc(items.length);
+    for (let k = 0; k < items.length; k++) b[k] = items[k];
+    return b;
+  };
+
+  Buffer.poolSize = 64 * 1024;
+  Object.defineProperty(proto, "parent", {
+    enumerable: true,
+    get() {
+      if (!(this instanceof Buffer)) return undefined;
+      return this.buffer;
+    },
+  });
+  Object.defineProperty(proto, "offset", {
+    enumerable: true,
+    get() {
+      if (!(this instanceof Buffer)) return undefined;
+      return this.byteOffset;
+    },
+  });
 });
