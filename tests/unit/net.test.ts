@@ -44,3 +44,38 @@ describe("net.isIP", () => {
     expect(isIP(4 as any)).toBe(0);
   });
 });
+
+describe("net.Server address()", () => {
+  const { createServer } = defaultImport;
+
+  it("returns null before listen (Node parity)", () => {
+    const server = createServer();
+    // Node returns null, not undefined: code that probes the port before
+    // listening relies on the two being distinguishable.
+    expect(server.address()).toBeNull();
+    expect(server.address()).not.toBeUndefined();
+  });
+
+  it("returns address/family/port inside the listen callback", async () => {
+    const server = createServer();
+    const addr: any = await new Promise((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve(server.address()));
+    });
+    expect(addr).not.toBeNull();
+    expect(addr.address).toBe("127.0.0.1");
+    expect(addr.family).toBe("IPv4");
+    expect(typeof addr.port).toBe("number");
+    expect(addr.port).toBeGreaterThan(0);
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it("returns null again after close (Node parity)", async () => {
+    const server = createServer();
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    expect(server.address()).not.toBeNull();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    expect(server.address()).toBeNull();
+  });
+});
