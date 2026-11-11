@@ -580,7 +580,8 @@ impl<'js> ServerResponse<'js> {
             // exact `Content-Length` instead of degrading to chunked. A response
             // that already started streaming (`write()` called) or one that must
             // not carry a body (HEAD, 204, 304) keeps the existing behaviour.
-            let bodyless_status = matches!(res.status_code, 204 | 304) || (100..200).contains(&res.status_code);
+            let bodyless_status =
+                matches!(res.status_code, 204 | 304) || (100..200).contains(&res.status_code);
             if !res.headers_sent
                 && !res.body_started
                 && !res.is_head
@@ -591,10 +592,8 @@ impl<'js> ServerResponse<'js> {
                     .any(|k| k.eq_ignore_ascii_case("content-length"))
             {
                 let len = bytes.as_ref().map(|b| b.len()).unwrap_or(0);
-                res.headers.insert(
-                    "content-length".to_string(),
-                    vec![len.to_string()],
-                );
+                res.headers
+                    .insert("content-length".to_string(), vec![len.to_string()]);
             }
             res.start();
             if let Some(bytes) = bytes {
