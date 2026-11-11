@@ -471,4 +471,82 @@
 
     return natives.compareOffset(this, target, targetStart, sourceStart, targetEnd, sourceEnd);
   };
+
+  const tByteLength = Object.getOwnPropertyDescriptor(TypedArrayProto, "byteLength").get;
+  const dvByteLength = Object.getOwnPropertyDescriptor(DataView.prototype, "byteLength").get;
+  function viewLength(buf) {
+    if (!isArrayBufferView(buf)) throw makeError(TypeError, "ERR_INVALID_ARG_TYPE", "argument must be a buffer");
+    return buf instanceof DataView ? dvByteLength.call(buf) : tByteLength.call(buf);
+  }
+  function parseIndex(value, def) {
+    if (value === undefined) return def;
+    let n = +value;
+    n = n !== n ? 0 : Math.trunc(n);
+    if (n < 0) throw makeError(RangeError, "ERR_OUT_OF_RANGE", "Index out of range");
+    return n;
+  }
+  const sliceEncodings = [
+    ["utf8", "utf8"],
+    ["ucs2", "utf16le"],
+    ["latin1", "latin1"],
+    ["ascii", "ascii"],
+    ["base64", "base64"],
+    ["base64url", "base64url"],
+    ["hex", "hex"],
+  ];
+  for (const [name, enc] of sliceEncodings) {
+    const slice = { [name + "Slice"](start, end) {
+      const len = viewLength(this);
+      if (len === 0) return "";
+      start = parseIndex(start, 0);
+      end = parseIndex(end, len);
+      if (end > len) throw makeError(RangeError, "ERR_OUT_OF_RANGE", "Index out of range");
+      if (start >= end) return "";
+      return natives.slice(this, enc, start, end);
+    } }[name + "Slice"];
+    Object.defineProperty(slice, "name", { value: "" });
+    proto[name + "Slice"] = slice;
+  }
+
+  function checkString(value) {
+    if (typeof value !== "string") throw makeError(TypeError, "ERR_INVALID_ARG_TYPE", "argument must be a string");
+  }
+  const jsWrapped = new Set(["utf8", "latin1", "ascii"]);
+  const toStaticIndex = (v) => {
+    const n = typeof v === "bigint" ? Number(v) : +v;
+    return n !== n ? 0 : Math.trunc(n);
+  };
+  for (const [name, enc] of sliceEncodings) {
+    let fn;
+    if (jsWrapped.has(name)) {
+      fn = { [name + "Write"](string, offset, length) {
+        if (offset === undefined) offset = 0;
+        if (length === undefined) length = this.byteLength - (typeof offset === "bigint" ? Number(offset) : offset);
+        if (offset < 0 || offset > this.byteLength) throw bufferOutOfBounds("offset");
+        if (length < 0 || length > this.byteLength - (typeof offset === "bigint" ? Number(offset) : offset)) {
+          throw bufferOutOfBounds("length");
+        }
+        const len = viewLength(this);
+        checkString(string);
+        offset = toStaticIndex(offset);
+        length = Math.min(toStaticIndex(length), len - offset);
+        if (length <= 0) return 0;
+        return natives.write(this, enc, string, offset, length);
+      } }[name + "Write"];
+    } else {
+      fn = { [name + "Write"](string, offset, length) {
+        const len = viewLength(this);
+        checkString(string);
+        offset = parseIndex(offset, 0);
+        if (offset > len) throw bufferOutOfBounds("offset");
+        length = Math.min(parseIndex(length, len - offset), len - offset);
+        if (length === 0) return 0;
+        return natives.write(this, enc, string, offset, length);
+      } }[name + "Write"];
+    }
+    Object.defineProperty(fn, "name", { value: "" });
+    proto[name + "Write"] = fn;
+  }
+  if (proto.toString.name !== "toString") Object.defineProperty(proto.toString, "name", { value: "toString" });
+  proto.toLocaleString = proto.toString;
 });
