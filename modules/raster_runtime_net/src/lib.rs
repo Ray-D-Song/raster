@@ -284,12 +284,29 @@ const NET_SOCKET_GLUE_JS: &str = r#"(function () {
           callback(new Error("Socket is closed"));
           return;
         }
+        // Before the native writer exists there is nowhere to put these bytes.
+        // Hold the callback instead of calling into the handle: `Writable` only
+        // runs one `_write` at a time, so every later chunk waits in
+        // `_writableState` with correct `writableLength`, ordering and
+        // backpressure. `_onWritesReady` re-enters once the transport attaches.
+        if (!handle.transportAttached) {
+          this._pendingWrite = { chunk, encoding, callback };
+          return;
+        }
         this.bytesWritten += chunk.length;
         try {
           handle.write(chunk, callback);
         } catch (err) {
           callback(err || new Error("Socket write failed"));
         }
+      }
+
+      // The native driver attached a writer; flush the write we held back.
+      _onWritesReady() {
+        const pending = this._pendingWrite;
+        if (!pending) return;
+        this._pendingWrite = null;
+        this._write(pending.chunk, pending.encoding, pending.callback);
       }
 
       _final(callback) {
@@ -299,6 +316,14 @@ const NET_SOCKET_GLUE_JS: &str = r#"(function () {
       }
 
       _destroy(err, callback) {
+        // A write still held back because the transport never attached can
+        // never complete: fail it the way Node does instead of dropping it.
+        const pending = this._pendingWrite;
+        this._pendingWrite = null;
+        if (pending) {
+          const reason = err || new Error("Socket is closed");
+          process.nextTick(() => pending.callback(reason));
+        }
         if (this._handle) this._handle.destroy(err);
         callback(err);
         // `emitClose: false` above means Duplex adds no `close` of its own. The
