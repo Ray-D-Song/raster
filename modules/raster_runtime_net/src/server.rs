@@ -18,7 +18,7 @@ use rquickjs::IntoJs;
 use rquickjs::{
     class::Trace,
     prelude::{Opt, Rest, This},
-    Class, Ctx, Exception, Function, JsLifetime, Object, Result, Undefined, Value,
+    Class, Ctx, Exception, Function, JsLifetime, Null, Object, Result, Undefined, Value,
 };
 #[cfg(unix)]
 use tokio::net::UnixListener;
@@ -100,7 +100,7 @@ impl<'js> Server<'js> {
             ctx.clone(),
             Self {
                 emitter,
-                address: Undefined.into_value(ctx.clone()),
+                address: Null.into_value(ctx.clone()),
                 close_tx,
                 allow_half_open,
                 already_listen: Arc::new(AtomicBool::new(false)),
@@ -290,6 +290,11 @@ impl<'js> Server<'js> {
 
             already_running.store(false, Ordering::Relaxed);
             should_close.store(false, Ordering::Relaxed);
+
+            // Node resets `server.address()` to null once the listener is gone,
+            // so code that probes it after `close` gets the documented value
+            // instead of the last bound address.
+            this.borrow_mut().address = Null.into_value(ctx2.clone());
 
             // The listening handle is gone: release its event-loop reference.
             this.borrow().loop_ref.unreference();
