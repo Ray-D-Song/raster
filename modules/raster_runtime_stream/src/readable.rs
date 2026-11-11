@@ -19,7 +19,7 @@ use raster_runtime_utils::{
 use rquickjs::{
     class::{Trace, Tracer},
     prelude::{Func, Opt, This},
-    Class, Ctx, Error, IntoJs, JsLifetime, Null, Result, Value,
+    Class, Ctx, Error, IntoJs, JsLifetime, Null, Object, Result, Value,
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt, BufReader},
@@ -158,6 +158,18 @@ impl<'js> ReadableStreamInner<'js> {
     #[inline]
     pub fn has_consumer(&self) -> bool {
         self.listener.is_some() || self.state == ReadableState::Flowing
+    }
+
+    /// Wake a parked [`ReadableStream::process_callback_loop_duplex`] reader.
+    ///
+    /// On the duplex path the JS `Duplex` owns buffering and backpressure, so
+    /// the native loop parks as soon as `push` returns `false` and only this
+    /// signal (from `_read` / `resume`) lets it read again. Reuses the
+    /// "consumer wants data" channel the classic loop already has; that loop
+    /// reads it only to clear its byte array, so sending here cannot change its
+    /// behaviour.
+    pub fn resume_reading(&self) {
+        let _ = self.data_listener_attached_tx.send(());
     }
 }
 
@@ -301,6 +313,192 @@ where
         io_loop_ref: Arc<EventLoopRef>,
     ) -> Result<Receiver<bool>> {
         Self::do_process(this, ctx, readable, on_end, Some(io_loop_ref))
+    }
+
+    /// Push-driven read loop for objects whose JS owner is a `Duplex`.
+    ///
+    /// [`ReadableStream::process_callback_loop`] stays the authority for plain
+    /// streams and is deliberately left untouched. A JS `Duplex` (see
+    /// `net.Socket`) already implements flowing/paused and high-water-mark
+    /// backpressure, so running that state machine alongside it gives two
+    /// disagreeing owners of "should we keep reading". This loop instead hands
+    /// every chunk to `owner.push()`: the return value is the consumer's
+    /// backpressure signal, and `false` parks the reader until
+    /// [`ReadableStreamInner::resume_reading`] fires from `_read`/`resume`.
+    fn process_callback_loop_duplex<
+        T: AsyncRead + Send + 'static + 'js + Unpin,
+        C: FnOnce() + Sized + 'js,
+    >(
+        this: Class<'js, Self>,
+        ctx: &Ctx<'js>,
+        readable: T,
+        on_end: C,
+        owner: Object<'js>,
+        io_loop_ref: Arc<EventLoopRef>,
+    ) -> Result<Receiver<bool>> {
+        let ctx2 = ctx.clone();
+        let handoff_completed = Arc::new(AtomicBool::new(false));
+        let handoff_completed2 = handoff_completed.clone();
+
+        ctx.spawn_exit(async move {
+            let this2 = this.clone();
+            let ctx3 = ctx2.clone();
+
+            let borrow = this2.borrow();
+            let inner = borrow.inner();
+            let mut destroy_rx = inner.destroy_tx.subscribe();
+            let is_ended = inner.is_ended;
+            let mut is_destroyed = inner.is_destroyed;
+            let mut resume_rx = inner.data_listener_attached_tx.subscribe();
+            let ba_buffer = inner.buffer.clone();
+            let handoff_waiter = inner.handoff_waiter.clone();
+            let mut handoff_rx = inner.handoff_notify.subscribe();
+            drop(borrow);
+
+            let read_function = async move {
+                let mut reader = Some(BufReader::new(readable));
+                let mut buffer = Vec::<u8>::with_capacity(DEFAULT_BUFFER_SIZE);
+                let mut error_value = None;
+                let io_loop_ref = io_loop_ref;
+                let mut reached_eof = false;
+
+                if !is_ended && !is_destroyed {
+                    if complete_readable_handoff(
+                        &mut reader,
+                        &ba_buffer,
+                        &mut buffer,
+                        &handoff_waiter,
+                    )? {
+                        handoff_completed2.store(true, Ordering::SeqCst);
+                        return Ok(());
+                    }
+
+                    'read: loop {
+                        if !event_loop::keeps_event_loop_alive(&io_loop_ref) {
+                            break;
+                        }
+
+                        tokio::select! {
+                            result = reader.as_mut().expect("reader").read_buf(&mut buffer) => {
+                                let bytes_read = result.or_throw(&ctx3)?;
+                                if bytes_read == 0 {
+                                    reached_eof = true;
+                                    break;
+                                }
+
+                                // Hand the chunk over. `false` means the Duplex
+                                // buffered it and is at its high-water mark:
+                                // accepted, but read no further until the
+                                // consumer asks for more.
+                                loop {
+                                    match duplex_push(&owner, &ctx3, &buffer)? {
+                                        Some(true) => break,
+                                        Some(false) => {
+                                            // Buffered, but the consumer is at
+                                            // its high-water mark. Park until
+                                            // `_read`/`resume` says otherwise.
+                                            tokio::select! {
+                                                error = destroy_rx.recv() => {
+                                                    set_destroyed_and_error(&mut is_destroyed, &mut error_value, error);
+                                                    break 'read;
+                                                }
+                                                _ = resume_rx.recv() => {},
+                                                _ = handoff_rx.recv() => {
+                                                    if complete_readable_handoff(
+                                                        &mut reader,
+                                                        &ba_buffer,
+                                                        &mut buffer,
+                                                        &handoff_waiter,
+                                                    )? {
+                                                        handoff_completed2.store(true, Ordering::SeqCst);
+                                                        return Ok(());
+                                                    }
+                                                }
+                                            }
+                                            break;
+                                        }
+                                        None => {
+                                            // No `push` on the owner after all;
+                                            // fall back to the classic signal.
+                                            Self::emit_str(
+                                                this2.clone(),
+                                                &ctx3,
+                                                "data",
+                                                vec![Buffer(buffer.clone()).into_js(&ctx3)?],
+                                                false
+                                            )?;
+                                            break;
+                                        }
+                                    }
+                                }
+                                buffer.clear();
+
+                                if complete_readable_handoff(
+                                    &mut reader,
+                                    &ba_buffer,
+                                    &mut buffer,
+                                    &handoff_waiter,
+                                )? {
+                                    handoff_completed2.store(true, Ordering::SeqCst);
+                                    return Ok(());
+                                }
+                            }
+                            error = destroy_rx.recv() => {
+                                set_destroyed_and_error(&mut is_destroyed, &mut error_value, error);
+                                break;
+                            }
+                            _ = handoff_rx.recv() => {
+                                if complete_readable_handoff(
+                                    &mut reader,
+                                    &ba_buffer,
+                                    &mut buffer,
+                                    &handoff_waiter,
+                                )? {
+                                    handoff_completed2.store(true, Ordering::SeqCst);
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if handoff_completed2.load(Ordering::SeqCst) {
+                    return Ok(());
+                }
+
+                {
+                    let mut borrow = this2.borrow_mut();
+                    let inner = borrow.inner_mut();
+                    if is_destroyed {
+                        inner.is_destroyed = true;
+                    } else {
+                        inner.is_ended = true;
+                    }
+                }
+
+                if !is_destroyed {
+                    // EOF: `push(null)` is what ends the JS readable side; the
+                    // Duplex emits `end` when the consumer reaches it.
+                    if reached_eof {
+                        let _ = duplex_end(&owner, &ctx3);
+                        on_end();
+                    } else {
+                        let _ = duplex_end(&owner, &ctx3);
+                    }
+                }
+
+                if let Some(error_value) = error_value {
+                    return Err(ctx3.throw(error_value));
+                }
+
+                Ok::<_, Error>(())
+            }
+            .await;
+
+            let had_error = read_function.emit_error("readable", &ctx2, this.clone())?;
+
+            Ok::<_, Error>(had_error)
+        })
     }
 
     fn request_handoff<T: Send + 'static>(
@@ -587,6 +785,36 @@ where
             Ok::<_, Error>(had_error)
         })
     }
+}
+
+/// Hand `chunk` to the JS `Duplex` owner via `push`.
+///
+/// `Some(true)` — accepted and the consumer wants more.
+/// `Some(false)` — accepted, but the Duplex is at its high-water mark.
+/// `None` — the owner has no usable `push`; caller falls back to emitting.
+fn duplex_push<'js>(owner: &Object<'js>, ctx: &Ctx<'js>, chunk: &[u8]) -> Result<Option<bool>> {
+    let Some(push) = owner.get::<_, Value>("push")?.as_function().cloned() else {
+        return Ok(None);
+    };
+    let payload = Buffer(chunk.to_vec()).into_js(ctx)?;
+    Ok(Some(push.call((This(owner.clone()), payload))?))
+}
+
+/// Signal end-of-stream to the JS `Duplex` readable side.
+///
+/// Prefers the owner's `_onEof` hook, which also resumes a stream that has no
+/// consumer reading (so `end` still fires for a socket that only listens for
+/// it). Falls back to `push(null)` for objects without the hook.
+fn duplex_end<'js>(owner: &Object<'js>, ctx: &Ctx<'js>) -> Result<()> {
+    if let Some(hook) = owner.get::<_, Value>("_onEof")?.as_function().cloned() {
+        hook.call::<_, ()>((This(owner.clone()),))?;
+        return Ok(());
+    }
+    if let Some(push) = owner.get::<_, Value>("push")?.as_function().cloned() {
+        push.call::<_, bool>((This(owner.clone()), Null))?;
+    }
+    let _ = ctx;
+    Ok(())
 }
 
 #[cfg(test)]

@@ -371,21 +371,18 @@ impl<'js> Server<'js> {
         let net_stream = stream_result.or_throw(&ctx)?;
 
         ctx.clone().spawn_exit(async move {
-            let socket_instance = Socket::new(ctx.clone(), allow_half_open)?;
+            // The listener must receive the JS `net.Socket` (a Duplex), and the
+            // native read/write loops must run on *that same object's* handle.
+            // Building a bare handle here would give the two sides different
+            // objects and the pushed bytes would never reach the stream.
+            let (js_socket, socket_instance) = build_accepted_socket(&ctx, allow_half_open)?;
             let socket_index;
             {
                 let mut sever_borrow = this.borrow_mut();
                 socket_index = sever_borrow.sockets.append(socket_instance.clone());
             }
 
-            let socket_instance2 = socket_instance.clone().into_value();
-            Self::emit_str(
-                this.clone(),
-                &ctx,
-                "connection",
-                vec![socket_instance2],
-                false,
-            )?;
+            Self::emit_str(this.clone(), &ctx, "connection", vec![js_socket], false)?;
 
             let had_error = net_stream
                 .process(&socket_instance, &ctx, allow_half_open)
@@ -491,4 +488,32 @@ mod tests {
         })
         .await;
     }
+}
+
+/// Build an accepted connection as the JS `net.Socket` class.
+///
+/// Returns the user-facing object plus the native handle taken out of it, so
+/// both `process_stream` and the listener operate on one socket. Falls back to a
+/// bare handle when the JS class is not registered yet (module still loading).
+fn build_accepted_socket<'js>(
+    ctx: &Ctx<'js>,
+    allow_half_open: bool,
+) -> Result<(Value<'js>, Class<'js, Socket<'js>>)> {
+    let ctor: Value = ctx.globals().get("__rasterNetSocketClass")?;
+    let ctor = ctor.as_constructor().cloned();
+    if let Some(ctor) = ctor {
+        let opts = Object::new(ctx.clone())?;
+        opts.set("allowHalfOpen", allow_half_open)?;
+        let instance: Value = ctor.construct((opts,))?;
+        let handle = instance
+            .as_object()
+            .and_then(|obj| obj.get::<_, Value>("_handle").ok())
+            .and_then(|v| v.as_object().cloned())
+            .and_then(|obj| Class::<Socket>::from_object(&obj));
+        if let Some(handle) = handle {
+            return Ok((instance, handle));
+        }
+    }
+    let handle = Socket::new(ctx.clone(), allow_half_open)?;
+    Ok((handle.clone().into_value(), handle))
 }

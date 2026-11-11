@@ -19,6 +19,7 @@ use raster_runtime_utils::{
 };
 use rquickjs::{
     class::{JsClass, Trace, Tracer},
+    function::Args,
     module::{Declarations, Exports, ModuleDef},
     prelude::{Func, Opt, Rest, This},
     CatchResultExt, Class, Ctx, Exception, Function, IntoJs, JsLifetime, Object, Result,
@@ -125,9 +126,9 @@ fn remove_listener_by_id<'js>(
     }
 
     if now_empty {
-        if let Some(class) = Class::<EventEmitter>::from_object(&this.0) {
+        if let Some(class) = probe_class::<EventEmitter>(ctx, &this.0) {
             class.borrow_mut().on_event_changed(key.clone(), false)?;
-        } else if let Some(class) = Class::<EventTarget>::from_object(&this.0) {
+        } else if let Some(class) = probe_class::<EventTarget>(ctx, &this.0) {
             class.borrow_mut().on_event_changed(key.clone(), false)?;
         }
     }
@@ -166,16 +167,32 @@ fn class_to_obj<'js, C: JsClass<'js>>(class: Class<'js, C>) -> Result<Object<'js
     Object::from_value(class.into_value())
 }
 
+/// Probe for a native class without leaving a pending exception behind.
+///
+/// `Class::from_object` answers "is this object that class?" through
+/// `JS_GetOpaque2`, which *throws* `TypeError: <class> object expected` when
+/// the class does not match. The ordinary answer for a plain JS object (every
+/// bundled `Readable`/`Writable`/`Duplex`) is "not that class", so the throw is
+/// spurious: leaving it pending makes the next unrelated `eval` in the same
+/// context fail with it. Drop it here.
+fn probe_class<'js, C: JsClass<'js>>(ctx: &Ctx<'js>, obj: &Object<'js>) -> Option<Class<'js, C>> {
+    let found = Class::<C>::from_object(obj);
+    if found.is_none() && ctx.has_exception() {
+        let _ = ctx.catch();
+    }
+    found
+}
+
 /// Resolve the event list from a JS object. For native Emitter classes,
 /// reads from the native struct. For plain JS objects (e.g. stream.js Readable),
 /// lazily creates and stores a native EventEmitter as a hidden property.
 #[allow(clippy::arc_with_non_send_sync)]
 pub fn resolve_events<'js>(ctx: &Ctx<'js>, obj: &Object<'js>) -> Result<Events<'js>> {
     // Try native EventEmitter / EventTarget first
-    if let Some(class) = Class::<EventEmitter>::from_object(obj) {
+    if let Some(class) = probe_class::<EventEmitter>(ctx, obj) {
         return Ok(class.borrow().events.clone());
     }
-    if let Some(class) = Class::<EventTarget>::from_object(obj) {
+    if let Some(class) = probe_class::<EventTarget>(ctx, obj) {
         return Ok(class.borrow().events.clone());
     }
     let sym = events_symbol(ctx)?;
@@ -241,7 +258,22 @@ impl<'js, T> EmitError<'js> for Result<T> {
     {
         if let Err(err) = self.catch(ctx) {
             trace!("Error caught in: {}", id);
-            if this.borrow().has_listener_str("error") {
+            // A native backend dispatching through its JS owner keeps no
+            // listeners of its own, so its table is always empty: ask the owner
+            // instead. Every other class keeps using its own listener table.
+            let handled = match this.borrow().js_owner(ctx) {
+                Some(owner) => {
+                    owner
+                        .get::<_, Value>("listenerCount")
+                        .ok()
+                        .and_then(|v| v.as_function().cloned())
+                        .and_then(|f| f.call::<_, i64>((This(owner), "error")).ok())
+                        .unwrap_or(0)
+                        > 0
+                },
+                None => this.borrow().has_listener_str("error"),
+            };
+            if handled {
                 let error_value = err.into_value(ctx)?;
                 C::emit_str(this, ctx, "error", vec![error_value], false)?;
                 return Ok(true);
@@ -258,6 +290,22 @@ where
 {
     fn get_event_list(&self) -> Arc<RwLock<EventList<'js>>>;
 
+    /// The JS stream object that owns this native handle, if any.
+    ///
+    /// When a native class is only a backend (`net.Socket` is a JS `Duplex`
+    /// whose `_handle` is this object) events must be dispatched on the owner,
+    /// not on the bare handle.
+    fn js_owner(&self, _ctx: &Ctx<'js>) -> Option<Object<'js>> {
+        None
+    }
+
+    /// Whether events are dispatched on the JS object instead of the Rust
+    /// `EventList`. Native stream backends return true so there is a single
+    /// listener table (the JS one).
+    fn emits_through_js() -> bool {
+        false
+    }
+
     fn on_event_changed(&mut self, _event: EventKey<'js>, _added: bool) -> Result<()> {
         Ok(())
     }
@@ -265,7 +313,7 @@ where
     /// Resolve the event list from a `this` object. For native classes,
     /// extracts from the class data. For plain JS objects, uses the hidden property.
     fn resolve_events_from(ctx: &Ctx<'js>, this: &Object<'js>) -> Result<Events<'js>> {
-        if let Some(class) = Class::<Self>::from_object(this) {
+        if let Some(class) = probe_class::<Self>(ctx, this) {
             return Ok(class.borrow().get_event_list());
         }
         resolve_events(ctx, this)
@@ -375,7 +423,7 @@ where
         }
 
         if removed_last {
-            if let Some(class) = Class::<Self>::from_object(&this.0) {
+            if let Some(class) = probe_class::<Self>(&ctx, &this.0) {
                 class.borrow_mut().on_event_changed(key, false)?;
             }
         }
@@ -500,7 +548,7 @@ where
             items.insert(0, item);
         }
         if is_new {
-            if let Some(class) = Class::<Self>::from_object(&this.0) {
+            if let Some(class) = probe_class::<Self>(&ctx, &this.0) {
                 class.borrow_mut().on_event_changed(key, true)?;
             }
         }
@@ -588,6 +636,28 @@ where
         args: Vec<Value<'js>>,
         defer: bool,
     ) -> Result<()> {
+        if Self::emits_through_js() {
+            let base = class_to_obj(this.clone())?;
+            let target = match Class::<Self>::from_object(&base) {
+                Some(class) => class.borrow().js_owner(ctx).unwrap_or(base),
+                None => base,
+            };
+            let emit: Value = target.get("emit")?;
+            if let Some(emit) = emit.as_function() {
+                let mut call_args = Args::new(ctx.clone(), args.len() + 1);
+                call_args.this(target)?;
+                call_args.push_arg(event)?;
+                for arg in args {
+                    call_args.push_arg(arg)?;
+                }
+                if defer {
+                    emit.defer_arg(call_args)?;
+                } else {
+                    emit.call_arg::<Value>(call_args)?;
+                }
+                return Ok(());
+            }
+        }
         let event = to_event(ctx, event)?;
         Self::do_emit(event, This(class_to_obj(this)?), ctx, args.into(), defer)?;
         Ok(())
