@@ -547,7 +547,10 @@
     Object.defineProperty(fn, "name", { value: "" });
     proto[name + "Write"] = fn;
   }
-  if (proto.toString.name !== "toString") Object.defineProperty(proto.toString, "name", { value: "toString" });
+  Object.defineProperty(proto.toString, "name", { value: "toString" });
+  Object.defineProperty(proto.toString, "length", { value: 3 });
+  Object.defineProperty(proto.write, "name", { value: "write" });
+  Object.defineProperty(proto.write, "length", { value: 4 });
   proto.toLocaleString = proto.toString;
 
   for (const bits of [16, 32, 64]) {
@@ -582,12 +585,22 @@
     if (offset < length) return offset;
     return offset !== offset ? 0 : length;
   }
+  const tBuffer = Object.getOwnPropertyDescriptor(TypedArrayProto, "buffer").get;
+  const tByteOffset = Object.getOwnPropertyDescriptor(TypedArrayProto, "byteOffset").get;
+  const dvBuffer = Object.getOwnPropertyDescriptor(DataView.prototype, "buffer").get;
+  const dvByteOffset = Object.getOwnPropertyDescriptor(DataView.prototype, "byteOffset").get;
+  const viewBytes = (v, start, count) => {
+    const dv = v instanceof DataView;
+    const buf = dv ? dvBuffer.call(v) : tBuffer.call(v);
+    const off = dv ? dvByteOffset.call(v) : tByteOffset.call(v);
+    return new Uint8Array(buf, off + start, count === undefined ? viewLength(v) - start : count);
+  };
   proto.subarray = function subarray(start, end) {
-    const srcLength = this.length;
+    const srcLength = tLength.call(this);
     start = adjustOffset(start, srcLength);
     end = end !== undefined ? adjustOffset(end, srcLength) : srcLength;
     const newLength = end > start ? end - start : 0;
-    return Reflect.construct(Uint8Array, [this.buffer, this.byteOffset + start, newLength], Buffer);
+    return Reflect.construct(Uint8Array, [tBuffer.call(this), tByteOffset.call(this) + start, newLength], Buffer);
   };
   proto.slice = function slice(start, end) {
     return this.subarray(start, end);
@@ -614,28 +627,25 @@
       sourceStart = 0;
     } else {
       sourceStart = Number.isInteger(sourceStart) ? sourceStart : toInteger(sourceStart, 0);
-      if (sourceStart < 0 || sourceStart > source.byteLength) {
-        throw outOfRange("sourceStart", `>= 0 && <= ${source.byteLength}`, sourceStart);
+      if (sourceStart < 0 || sourceStart > viewLength(source)) {
+        throw outOfRange("sourceStart", `>= 0 && <= ${viewLength(source)}`, sourceStart);
       }
     }
     if (sourceEnd === undefined) {
-      sourceEnd = source.byteLength;
+      sourceEnd = viewLength(source);
     } else {
       sourceEnd = Number.isInteger(sourceEnd) ? sourceEnd : toInteger(sourceEnd, 0);
       if (sourceEnd < 0) throw outOfRange("sourceEnd", ">= 0", sourceEnd);
     }
-    if (targetStart >= target.byteLength || sourceStart >= sourceEnd) return 0;
-    if (sourceEnd - sourceStart > target.byteLength - targetStart) {
-      sourceEnd = sourceStart + target.byteLength - targetStart;
+    if (targetStart >= viewLength(target) || sourceStart >= sourceEnd) return 0;
+    if (sourceEnd - sourceStart > viewLength(target) - targetStart) {
+      sourceEnd = sourceStart + viewLength(target) - targetStart;
     }
     let nb = sourceEnd - sourceStart;
-    const sourceLen = source.byteLength - sourceStart;
+    const sourceLen = viewLength(source) - sourceStart;
     if (nb > sourceLen) nb = sourceLen;
     if (nb <= 0) return 0;
-    new Uint8Array(target.buffer, target.byteOffset, target.byteLength).set(
-      new Uint8Array(source.buffer, source.byteOffset + sourceStart, nb),
-      targetStart
-    );
+    viewBytes(target, 0).set(viewBytes(source, sourceStart, nb), targetStart);
     return nb;
   };
   Object.defineProperty(proto.copy, "length", { value: 4 });
@@ -666,27 +676,23 @@
     return out;
   };
 
-  Buffer.of = (...items) => {
+  const of = (...items) => {
     const b = Buffer.alloc(items.length);
     for (let k = 0; k < items.length; k++) b[k] = items[k];
     return b;
   };
+  Buffer.of = of;
 
   Buffer.poolSize = 64 * 1024;
-  Object.defineProperty(proto, "parent", {
-    enumerable: true,
-    get() {
-      if (!(this instanceof Buffer)) return undefined;
-      return this.buffer;
-    },
-  });
-  Object.defineProperty(proto, "offset", {
-    enumerable: true,
-    get() {
-      if (!(this instanceof Buffer)) return undefined;
-      return this.byteOffset;
-    },
-  });
+  for (const [name, key] of [["parent", "buffer"], ["offset", "byteOffset"]]) {
+    Object.defineProperty(proto, name, {
+      enumerable: true,
+      get() {
+        if (!(this instanceof Buffer)) return undefined;
+        return this[key];
+      },
+    });
+  }
 
   // Temporary buffers to convert numbers.
   const float32Array = new Float32Array(1);
