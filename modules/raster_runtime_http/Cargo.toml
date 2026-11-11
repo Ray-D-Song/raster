@@ -52,6 +52,15 @@ tls-openssl = [
 
 [dependencies]
 bytes = { version = "1", default-features = false }
+fastwebsockets = { version = "0.10", default-features = false, features = [
+  "upgrade",
+  "simdutf8",
+  "base64",
+  "sha1",
+] }
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
+sha1 = { version = "0.10", default-features = false }
+getrandom = { version = "0.3", default-features = false }
 http-body-util = { version = "0.1", default-features = false }
 hyper = { version = "1", features = ["client", "server", "http1"], default-features = false }
 hyper-util = { version = "0.1", features = [

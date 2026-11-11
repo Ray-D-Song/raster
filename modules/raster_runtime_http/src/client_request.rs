@@ -458,7 +458,7 @@ impl<'js> ClientRequest<'js> {
     }
 }
 
-fn chunk_to_bytes<'js>(ctx: &Ctx<'js>, chunk: Value<'js>) -> Result<Vec<u8>> {
+pub(crate) fn chunk_to_bytes<'js>(ctx: &Ctx<'js>, chunk: Value<'js>) -> Result<Vec<u8>> {
     if let Some(s) = chunk.as_string() {
         return Ok(s.to_string()?.into_bytes());
     }

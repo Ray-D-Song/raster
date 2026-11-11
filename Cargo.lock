@@ -211,6 +211,12 @@ checksum = "fd307490d624467aa6f74b0eabb77633d1f758a7b25f12bceb0b22e08d9726f6"
 
 [[package]]
 name = "base64"
+version = "0.21.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
+
+[[package]]
+name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
@@ -385,7 +391,7 @@ checksum = "6f8d983286843e49675a4b7a2d174efe136dc93a18d69130dd18198a6c167601"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
- "rand_core",
+ "rand_core 0.10.0",
 ]
 
 [[package]]
@@ -646,7 +652,7 @@ dependencies = [
  "ctutils",
  "hybrid-array",
  "num-traits",
- "rand_core",
+ "rand_core 0.10.0",
  "serdect",
  "subtle",
  "zeroize",
@@ -669,7 +675,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77727bb15fa921304124b128af125e7e3b968275d1b108b379190264f4423710"
 dependencies = [
  "hybrid-array",
- "rand_core",
+ "rand_core 0.10.0",
 ]
 
 [[package]]
@@ -680,7 +686,7 @@ checksum = "21f41f23de7d24cdbda7f0c4d9c0351f99a4ceb258ef30e5c1927af8987ffe5a"
 dependencies = [
  "crypto-bigint",
  "libm",
- "rand_core",
+ "rand_core 0.10.0",
 ]
 
 [[package]]
@@ -876,7 +882,7 @@ checksum = "20449acd54b660981ae5caa2bcb56d1fe7f25f2e37a38ec507400fab034d4bb6"
 dependencies = [
  "curve25519-dalek",
  "ed25519",
- "rand_core",
+ "rand_core 0.10.0",
  "serde",
  "sha2 0.11.0",
  "signature",
@@ -903,7 +909,7 @@ dependencies = [
  "hkdf",
  "hybrid-array",
  "pkcs8",
- "rand_core",
+ "rand_core 0.10.0",
  "rustcrypto-ff",
  "rustcrypto-group",
  "sec1",
@@ -952,6 +958,26 @@ name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
+
+[[package]]
+name = "fastwebsockets"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "305d3ba574508e27190906d11707dad683e0494e6b85eae9b044cb2734a5e422"
+dependencies = [
+ "base64 0.21.7",
+ "bytes",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "pin-project",
+ "rand 0.8.8",
+ "sha1 0.10.7",
+ "simdutf8",
+ "thiserror",
+ "tokio",
+ "utf-8",
+]
 
 [[package]]
 name = "fiat-crypto"
@@ -1172,7 +1198,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "r-efi 6.0.0",
- "rand_core",
+ "rand_core 0.10.0",
  "wasip2",
  "wasip3",
 ]
@@ -2274,6 +2300,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
 [[package]]
+name = "ppv-lite86"
+version = "0.2.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
+dependencies = [
+ "zerocopy",
+]
+
+[[package]]
 name = "prettyplease"
 version = "0.2.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2291,7 +2326,7 @@ checksum = "1b52e6ee42db392378a95622b463c9740631171d1efce43fa445a569c1600cb6"
 dependencies = [
  "crypto-bigint",
  "crypto-common 0.2.1",
- "rand_core",
+ "rand_core 0.10.0",
  "rustcrypto-ff",
  "subtle",
  "zeroize",
@@ -2366,13 +2401,43 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rand"
+version = "0.8.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e058c7de0b26af77780c769414d6257830bb240f3c38477dbc2c16e5f54d6d4c"
+dependencies = [
+ "libc",
+ "rand_chacha",
+ "rand_core 0.6.4",
+]
+
+[[package]]
+name = "rand"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2e8e8bcc7961af1fdac401278c6a831614941f6164ee3bf4ce61b7edb162207"
 dependencies = [
  "chacha20",
  "getrandom 0.4.2",
- "rand_core",
+ "rand_core 0.10.0",
+]
+
+[[package]]
+name = "rand_chacha"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6c10a63a0fa32252be49d21e7709d4d4baf8d231c2dbce1eaa8141b9b127d88"
+dependencies = [
+ "ppv-lite86",
+ "rand_core 0.6.4",
+]
+
+[[package]]
+name = "rand_core"
+version = "0.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
+dependencies = [
+ "getrandom 0.2.17",
 ]
 
 [[package]]
@@ -2535,7 +2600,7 @@ dependencies = [
  "phf",
  "phf_codegen",
  "quick-xml",
- "rand",
+ "rand 0.10.1",
  "raster_runtime_build",
  "raster_runtime_context",
  "raster_runtime_encoding",
@@ -2589,7 +2654,7 @@ dependencies = [
  "p521",
  "pbkdf2",
  "pkcs8",
- "rand",
+ "rand 0.10.1",
  "raster_runtime_buffer",
  "raster_runtime_context",
  "raster_runtime_encoding",
@@ -2693,7 +2758,7 @@ dependencies = [
  "once_cell",
  "percent-encoding",
  "pin-project-lite",
- "rand",
+ "rand 0.10.1",
  "raster_runtime_abort",
  "raster_runtime_buffer",
  "raster_runtime_compression",
@@ -2720,7 +2785,7 @@ dependencies = [
  "junction",
  "libc",
  "notify",
- "rand",
+ "rand 0.10.1",
  "raster_runtime_buffer",
  "raster_runtime_context",
  "raster_runtime_encoding",
@@ -2747,7 +2812,10 @@ dependencies = [
 name = "raster_runtime_http"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "bytes",
+ "fastwebsockets",
+ "getrandom 0.3.4",
  "http-body-util",
  "hyper",
  "hyper-openssl",
@@ -2769,6 +2837,7 @@ dependencies = [
  "rquickjs",
  "rustls",
  "rustls-pemfile",
+ "sha1 0.10.7",
  "tokio",
  "tokio-rustls",
  "tokio-stream",
@@ -2938,7 +3007,7 @@ name = "raster_runtime_net"
 version = "0.1.0"
 dependencies = [
  "itoa",
- "rand",
+ "rand 0.10.1",
  "raster_runtime_buffer",
  "raster_runtime_context",
  "raster_runtime_events",
@@ -2957,7 +3026,7 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "itoa",
- "rand",
+ "rand 0.10.1",
  "raster_runtime_test",
  "raster_runtime_utils",
  "rquickjs",
@@ -2991,7 +3060,7 @@ dependencies = [
  "criterion",
  "memchr",
  "once_cell",
- "rand",
+ "rand 0.10.1",
  "raster_runtime_utils",
  "rquickjs",
 ]
@@ -3133,7 +3202,7 @@ dependencies = [
 name = "raster_runtime_tls"
 version = "0.1.0"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "idna",
  "once_cell",
  "openssl",
@@ -3423,7 +3492,7 @@ dependencies = [
  "digest 0.11.2",
  "pkcs1",
  "pkcs8",
- "rand_core",
+ "rand_core 0.10.0",
  "sha2 0.11.0",
  "signature",
  "spki",
@@ -3451,7 +3520,7 @@ version = "0.14.0-rc.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd2a8adb347447693cd2ba0d218c4b66c62da9b0a5672b17b981e4291ec65ff6"
 dependencies = [
- "rand_core",
+ "rand_core 0.10.0",
  "subtle",
 ]
 
@@ -3461,7 +3530,7 @@ version = "0.14.0-rc.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "369f9b61aa45933c062c9f6b5c3c50ab710687eca83dd3802653b140b43f85ed"
 dependencies = [
- "rand_core",
+ "rand_core 0.10.0",
  "rustcrypto-ff",
  "subtle",
 ]
@@ -3780,7 +3849,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28d567dcbaf0049cb8ac2608a76cd95ff9e4412e1899d389ee400918ca7537f5"
 dependencies = [
  "digest 0.11.2",
- "rand_core",
+ "rand_core 0.10.0",
 ]
 
 [[package]]
@@ -4215,6 +4284,12 @@ checksum = "24cc0f6d6f267b73e5a2cadf007ba8f9bc39c6a6f9666f8cf25ea809a153b032"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "utf-8"
+version = "0.7.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09cc8ee72d2a9becf2f2febe0205bbed8fc6615b7cb429ad062dc7b7ddd036a9"
 
 [[package]]
 name = "utf8_iter"
@@ -4791,7 +4866,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08db1edfb05d9b3c1542e521aea074442088292f00b5f28e435c714a98f85031"
 dependencies = [
  "assert-json-diff",
- "base64",
+ "base64 0.22.1",
  "deadpool",
  "futures",
  "http",
@@ -4908,7 +4983,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b3d5d6ff67acd3945b933e592bfa7143db4fcbb2f871754b6b9fbd7847fc5aea"
 dependencies = [
  "curve25519-dalek",
- "rand_core",
+ "rand_core 0.10.0",
  "zeroize",
 ]
 
