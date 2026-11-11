@@ -55,7 +55,7 @@ impl<'js> Performance<'js> {
         time_origin / 1e6
     }
 
-    fn now() -> f64 {
+    pub fn now() -> f64 {
         let now = time::now_nanos();
         let started = time::origin_nanos();
         let elapsed = now.saturating_sub(started);

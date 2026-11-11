@@ -4,29 +4,42 @@ use raster_runtime_events::Emitter;
 use raster_runtime_utils::module::{export_default, ModuleInfo};
 use rquickjs::{
     module::{Declarations, Exports, ModuleDef},
-    Class, Ctx, Object, Result,
+    Class, Ctx, Result,
 };
 
 use crate::performance::Performance;
 
+mod observer;
 mod performance;
 
 pub struct PerfHooksModule;
 
 impl ModuleDef for PerfHooksModule {
     fn declare(declare: &Declarations<'_>) -> Result<()> {
-        declare.declare("performance")?;
-        declare.declare("default")?;
+        for name in [
+            "performance",
+            "Performance",
+            "PerformanceEntry",
+            "PerformanceMark",
+            "PerformanceMeasure",
+            "PerformanceObserver",
+            "PerformanceObserverEntryList",
+            "PerformanceResourceTiming",
+            "constants",
+            "createHistogram",
+            "eventLoopUtilization",
+            "monitorEventLoopDelay",
+            "timerify",
+            "default",
+        ] {
+            declare.declare(name)?;
+        }
         Ok(())
     }
 
     fn evaluate<'js>(ctx: &Ctx<'js>, exports: &Exports<'js>) -> Result<()> {
         export_default(ctx, exports, |default| {
-            let globals = ctx.globals();
-
-            let performance: Object = globals.get("performance")?;
-            default.set("performance", performance)?;
-
+            observer::install(ctx, default)?;
             Ok(())
         })
     }
@@ -43,6 +56,14 @@ impl From<PerfHooksModule> for ModuleInfo<PerfHooksModule> {
 
 pub fn init(ctx: &Ctx<'_>) -> Result<()> {
     let globals = ctx.globals();
+
+    // The observation layer reads the monotonic clock through this hook; it is
+    // the same clock `performance.now()` uses, so entry timestamps and `now()`
+    // are always on one timeline.
+    globals.set(
+        "__rasterPerfNow",
+        rquickjs::Function::new(ctx.clone(), || -> f64 { Performance::now() })?,
+    )?;
 
     let instance = Class::instance(ctx.clone(), Performance::new())?;
     Performance::add_event_target_prototype(ctx)?;
