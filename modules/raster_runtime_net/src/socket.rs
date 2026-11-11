@@ -39,7 +39,17 @@ impl<'js> SteamEvents<'js> for Socket<'js> {
         // A closed socket owns no further I/O: it must stop keeping the process
         // alive, exactly like Node releasing the handle at `close`.
         this.borrow().loop_ref.unreference();
-        Self::emit_str(this, ctx, "close", vec![had_error.into_js(ctx)?], false)
+        // Emit first (listeners may inspect the handle), then drop the owner
+        // reference so the cycle can be collected.
+        let result = Self::emit_str(
+            this.clone(),
+            ctx,
+            "close",
+            vec![had_error.into_js(ctx)?],
+            false,
+        );
+        this.borrow_mut().js_owner = None;
+        result
     }
 }
 
@@ -98,6 +108,11 @@ pub struct Socket<'js> {
     /// the raw HTTP shutdown handle (`raw_shutdown`).
     pub(crate) tcp_control: Option<Arc<std::net::TcpStream>>,
     loop_ref: Arc<EventLoopRef>,
+    /// The JS `net.Socket` (a Duplex) owning this handle, when one exists.
+    ///
+    /// Released at `destroy()`/`close` so the `this <-> _handle` cycle becomes
+    /// collectable before runtime teardown (see `gc_obj_list`).
+    js_owner: Option<Object<'js>>,
 }
 
 unsafe impl<'js> JsLifetime<'js> for Socket<'js> {
@@ -107,6 +122,11 @@ unsafe impl<'js> JsLifetime<'js> for Socket<'js> {
 impl<'js> Trace<'js> for Socket<'js> {
     fn trace<'a>(&self, tracer: Tracer<'a, 'js>) {
         self.emitter.trace(tracer);
+        // The owning Duplex must stay alive while the handle holds it: an
+        // untraced `Persistent` lets the collector free the object, and every
+        // later restore hands out a dangling reference (which surfaces as
+        // `TypeError: RustClass object expected` on the next class probe).
+        self.js_owner.trace(tracer);
     }
 }
 
@@ -115,8 +135,20 @@ impl<'js> Emitter<'js> for Socket<'js> {
         self.emitter.get_event_list()
     }
 
-    fn on_event_changed(&mut self, event: EventKey<'js>, added: bool) -> Result<()> {
-        self.readable_stream_inner.on_event_changed(event, added)
+    /// A Socket is a Duplex: the listener table lives on the JS object.
+    fn emits_through_js() -> bool {
+        true
+    }
+
+    fn js_owner(&self, _ctx: &Ctx<'js>) -> Option<Object<'js>> {
+        self.js_owner.clone()
+    }
+
+    fn on_event_changed(&mut self, _event: EventKey<'js>, _added: bool) -> Result<()> {
+        // Readable/writable state is owned by the JS Duplex; mirroring listener
+        // changes here would make `ReadableStreamInner.state` a second, unsynced
+        // authority over "should we keep reading".
+        Ok(())
     }
 }
 
@@ -142,6 +174,36 @@ impl<'js> WritableStream<'js> for Socket<'js> {
 
 #[rquickjs::methods(rename_all = "camelCase")]
 impl<'js> Socket<'js> {
+    /// Create the native backend for the JS `net.Socket` class.
+    pub fn handle_factory(ctx: Ctx<'js>, opts: Opt<Object<'js>>) -> Result<Class<'js, Self>> {
+        let mut allow_half_open = false;
+        if let Some(opts) = opts.0 {
+            if let Some(v) = opts.get_optional("allowHalfOpen")? {
+                allow_half_open = v;
+            }
+        }
+        Self::new(ctx, allow_half_open)
+    }
+
+    /// Bind the owning JS Duplex so native events reach its EventEmitter.
+    pub fn set_owner(this: This<Class<'js, Self>>, owner: Object<'js>) -> Class<'js, Self> {
+        this.borrow_mut().js_owner = Some(owner);
+        this.0
+    }
+
+    /// The JS Duplex owning this handle. Read by the stream read loop so it can
+    /// `push` into the JS object rather than the bare handle.
+    #[qjs(get, enumerable)]
+    pub fn js_owner_ref(&self) -> Option<Object<'js>> {
+        self.js_owner.clone()
+    }
+
+    /// `_read` told us the consumer drained: let the native read loop continue.
+    pub fn resume_reading(this: This<Class<'js, Self>>) -> Class<'js, Self> {
+        this.borrow().readable_stream_inner.resume_reading();
+        this.0
+    }
+
     #[qjs(constructor)]
     pub fn ctor(ctx: Ctx<'js>, opts: Opt<Object<'js>>) -> Result<Class<'js, Self>> {
         let mut allow_half_open = false;
@@ -268,6 +330,10 @@ impl<'js> Socket<'js> {
     }
 
     pub fn destroy(this: This<Class<'js, Self>>, error: Opt<Value<'js>>) -> Class<'js, Self> {
+        // Drop the JS owner eagerly: holding it past close leaves an
+        // uncollectable `this <-> _handle` cycle that aborts teardown with
+        // QuickJS's `gc_obj_list` assertion.
+        this.borrow_mut().js_owner = None;
         {
             let mut borrow = this.borrow_mut();
             if let Some(control) = borrow.tcp_control.take() {
@@ -629,6 +695,7 @@ impl<'js> Socket<'js> {
                 tcp_options: TcpSocketOptions::default(),
                 tcp_control: None,
                 loop_ref,
+                js_owner: None,
             },
         )?;
         Ok(instance)
@@ -839,20 +906,38 @@ impl<'js> Socket<'js> {
         writer: W,
         allow_half_open: bool,
     ) -> Result<(Receiver<bool>, Receiver<bool>)> {
-        let this2 = this.clone();
-        let this3 = this.clone();
         let loop_ref = this.borrow().loop_ref.clone();
-        let readable_done = ReadableStream::process_callback_loop(
-            this.clone(),
-            ctx,
-            reader,
-            move || {
-                if !allow_half_open && !this3.borrow().is_detached() {
-                    WritableStream::end(This(this2));
-                }
-            },
-            loop_ref.clone(),
-        )?;
+        // A JS `Duplex` owning this handle (`net.Socket`) gets the push-driven
+        // loop: it owns flowing/paused and backpressure, so the classic
+        // `ReadableStreamInner.state` machine must not run beside it. Everything
+        // else keeps the untouched classic path.
+        let owner = {
+            let borrow = this.borrow();
+            borrow.js_owner_ref()
+        };
+        let end_this = this.clone();
+        let on_end = move || {
+            if !allow_half_open && !end_this.borrow().is_detached() {
+                WritableStream::end(This(end_this.clone()));
+            }
+        };
+        let readable_done = match owner {
+            Some(owner) => ReadableStream::process_callback_loop_duplex(
+                this.clone(),
+                ctx,
+                reader,
+                on_end,
+                owner,
+                loop_ref.clone(),
+            )?,
+            None => ReadableStream::process_callback_loop(
+                this.clone(),
+                ctx,
+                reader,
+                on_end,
+                loop_ref.clone(),
+            )?,
+        };
         let writable_done =
             WritableStream::process_loop(this.clone(), ctx, writer, Some(loop_ref))?;
 
