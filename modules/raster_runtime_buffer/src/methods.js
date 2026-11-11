@@ -190,6 +190,134 @@
 
   const validateOffset = (value, name, min = 0, max = kMaxLength) => validateInteger(value, name, min, max);
 
+  // ---- fill ----
+
+  function normalizeEncoding(enc) {
+    if (enc == null || enc === "utf8" || enc === "utf-8") return "utf8";
+    return slowCases(enc);
+  }
+
+  function slowCases(enc) {
+    switch (enc.length) {
+      case 4:
+        if (enc === "UTF8") return "utf8";
+        if (enc === "ucs2" || enc === "UCS2") return "utf16le";
+        enc = `${enc}`.toLowerCase();
+        if (enc === "utf8") return "utf8";
+        if (enc === "ucs2") return "utf16le";
+        break;
+      case 3:
+        if (enc === "hex" || enc === "HEX" || `${enc}`.toLowerCase() === "hex") return "hex";
+        break;
+      case 5:
+        if (enc === "ascii") return "ascii";
+        if (enc === "ucs-2") return "utf16le";
+        if (enc === "UTF-8") return "utf8";
+        if (enc === "ASCII") return "ascii";
+        if (enc === "UCS-2") return "utf16le";
+        enc = `${enc}`.toLowerCase();
+        if (enc === "utf-8") return "utf8";
+        if (enc === "ascii") return "ascii";
+        if (enc === "ucs-2") return "utf16le";
+        break;
+      case 6:
+        if (enc === "base64") return "base64";
+        if (enc === "latin1" || enc === "binary") return "latin1";
+        if (enc === "BASE64") return "base64";
+        if (enc === "LATIN1" || enc === "BINARY") return "latin1";
+        enc = `${enc}`.toLowerCase();
+        if (enc === "base64") return "base64";
+        if (enc === "latin1" || enc === "binary") return "latin1";
+        break;
+      case 7:
+        if (enc === "utf16le" || enc === "UTF16LE" || `${enc}`.toLowerCase() === "utf16le") return "utf16le";
+        break;
+      case 8:
+        if (enc === "utf-16le" || enc === "UTF-16LE" || `${enc}`.toLowerCase() === "utf-16le") return "utf16le";
+        break;
+      case 9:
+        if (enc === "base64url" || enc === "BASE64URL" || `${enc}`.toLowerCase() === "base64url") return "base64url";
+        break;
+      default:
+        if (enc === "") return "utf8";
+    }
+    return undefined;
+  }
+
+  function validateString(value, name) {
+    if (typeof value !== "string") throw invalidArgType(name, "string", value);
+  }
+
+  function _fill(buf, value, offset, end, encoding) {
+    if (typeof value === "string") {
+      if (offset === undefined || typeof offset === "string") {
+        encoding = offset;
+        offset = 0;
+        end = buf.length;
+      } else if (typeof end === "string") {
+        encoding = end;
+        end = buf.length;
+      }
+
+      const normalizedEncoding = normalizeEncoding(encoding);
+      if (normalizedEncoding === undefined) {
+        validateString(encoding, "encoding");
+        throw unknownEncoding(encoding);
+      }
+
+      if (value.length === 0) {
+        value = 0;
+      } else if (value.length === 1) {
+        if (normalizedEncoding === "utf8") {
+          const code = value.charCodeAt(0);
+          if (code < 128) value = code;
+        } else if (normalizedEncoding === "latin1") {
+          value = value.charCodeAt(0);
+        }
+      }
+    } else {
+      encoding = undefined;
+    }
+
+    if (offset === undefined) {
+      offset = 0;
+      end = buf.length;
+    } else {
+      validateOffset(offset, "offset");
+      if (end === undefined) {
+        end = buf.length;
+      } else {
+        validateOffset(end, "end", 0, buf.length);
+      }
+      if (offset >= end) return buf;
+    }
+
+    if (typeof value === "number") {
+      const byteLen = buf.byteLength;
+      const fillLength = end - offset;
+      if (offset > end || fillLength + offset > byteLen) throw bufferOutOfBounds();
+      TypedArrayProto.fill.call(buf, value, offset, end);
+    } else {
+      let source = value;
+      if (typeof value !== "string" && !isArrayBufferView(value)) {
+        source = (+value >>> 0) & 255;
+        TypedArrayProto.fill.call(buf, source, offset, end);
+        return buf;
+      }
+      const res = natives.fill(buf, source, offset, end, encoding);
+      if (res < 0) {
+        if (res === -1) throw invalidArgValue("value", value);
+        throw bufferOutOfBounds();
+      }
+    }
+
+    return buf;
+  }
+
+  proto.fill = function fill(value, offset, end, encoding) {
+    return _fill(this, value, offset, end, encoding);
+  };
+
   // ---- compare / equals ----
 
   function compare(buf1, buf2) {
