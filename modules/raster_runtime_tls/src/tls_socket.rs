@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use std::sync::{Arc, Mutex, RwLock};
 
+use raster_runtime_context::CtxExtension;
 use raster_runtime_events::{Emitter, EventEmitter, EventKey, EventList};
 use raster_runtime_stream::{
     impl_stream_events,
@@ -9,7 +10,9 @@ use raster_runtime_stream::{
     writable::{WritableStream, WritableStreamInner},
     SteamEvents,
 };
-use raster_runtime_utils::{error::ErrorExtensions, event_loop::EventLoopRef, result::ResultExt};
+use raster_runtime_utils::{
+    error::ErrorExtensions, event_loop::EventLoopRef, object::ObjectExt, result::ResultExt,
+};
 use rquickjs::{
     class::{Trace, Tracer},
     prelude::{Opt, Rest, This},
@@ -83,6 +86,10 @@ pub struct TlsSocket<'js> {
     local_cert_der: Option<Vec<u8>>,
     pub(crate) check_server_identity_cb: Option<Function<'js>>,
     loop_ref: Arc<EventLoopRef>,
+    /// The JS `tls.TLSSocket` (a `net.Socket`, hence a Duplex) owning this
+    /// handle. Same split as `net.Socket`: the native class is only the
+    /// transport backend.
+    js_owner: Option<Object<'js>>,
 }
 
 unsafe impl<'js> JsLifetime<'js> for TlsSocket<'js> {
@@ -96,6 +103,8 @@ impl<'js> Trace<'js> for TlsSocket<'js> {
         if let Some(cb) = &self.check_server_identity_cb {
             cb.trace(tracer);
         }
+        // Keep the owning Duplex alive while this handle holds it.
+        self.js_owner.trace(tracer);
     }
 }
 
@@ -104,8 +113,20 @@ impl<'js> Emitter<'js> for TlsSocket<'js> {
         self.emitter.get_event_list()
     }
 
-    fn on_event_changed(&mut self, event: EventKey<'js>, added: bool) -> Result<()> {
-        self.readable_stream_inner.on_event_changed(event, added)
+    /// A TLSSocket is a `net.Socket`, hence a Duplex: listeners live on the JS
+    /// object, exactly like `net.Socket`.
+    fn emits_through_js() -> bool {
+        true
+    }
+
+    fn js_owner(&self, _ctx: &Ctx<'js>) -> Option<Object<'js>> {
+        self.js_owner.clone()
+    }
+
+    fn on_event_changed(&mut self, _event: EventKey<'js>, _added: bool) -> Result<()> {
+        // Readable/writable state belongs to the JS Duplex; mirroring listener
+        // changes here would give `ReadableStreamInner.state` a second say.
+        Ok(())
     }
 }
 
@@ -131,6 +152,109 @@ impl<'js> WritableStream<'js> for TlsSocket<'js> {
 
 #[rquickjs::methods(rename_all = "camelCase")]
 impl<'js> TlsSocket<'js> {
+    /// Bind the owning JS `tls.TLSSocket` so native events reach it.
+    pub fn set_owner(this: This<Class<'js, Self>>, owner: Object<'js>) -> Class<'js, Self> {
+        this.borrow_mut().js_owner = Some(owner);
+        this.0
+    }
+
+    /// The JS TLSSocket owning this handle.
+    #[qjs(get, enumerable)]
+    pub fn js_owner_ref(&self) -> Option<Object<'js>> {
+        self.js_owner.clone()
+    }
+
+    /// Whether a write can reach the TLS transport right now.
+    ///
+    /// `tls.connect` needs the handshake to finish before bytes can flow, so
+    /// this stays false while the socket is still connecting. Unlike
+    /// `net.Socket`, there is no "permanently unwritable" state here: a
+    /// destroyed socket is rejected by the write path itself.
+    #[qjs(get, enumerable)]
+    pub fn transport_attached(&self) -> bool {
+        !self.secure_connecting && !self.destroyed
+    }
+
+    /// STARTTLS server side: take over an accepted plain socket and run the TLS
+    /// server handshake on its transport.
+    ///
+    /// `new tls.TLSSocket(socket, { isServer: true, key, cert })` in Node. The
+    /// socket's transport is handed off (its read/write loops stop), the
+    /// handshake runs, and this object's loops take over the negotiated stream.
+    pub fn starttls_server(
+        this: This<Class<'js, Self>>,
+        ctx: Ctx<'js>,
+        socket: Value<'js>,
+        options: Value<'js>,
+    ) -> Result<()> {
+        let Some(net_socket) = crate::client::net_handle_of(&socket) else {
+            return Err(Exception::throw_type(&ctx, "socket must be a net.Socket"));
+        };
+        let opts = crate::options::parse_server_options(&ctx, options)?;
+        let secure_context = match opts.secure_context.clone() {
+            Some(context) => context,
+            None => crate::secure_context::SecureContext::from_options(&opts)
+                .map_err(|e| Exception::throw_message(&ctx, &e))?,
+        };
+        let request_cert = opts.request_cert;
+        let reject_unauthorized = opts.reject_unauthorized;
+        let this2 = this.clone();
+        let ctx2 = ctx.clone();
+
+        ctx.spawn_exit(async move {
+            let (read_half, write_half, prefix) =
+                raster_runtime_net::Socket::begin_tls_handoff(&ctx2, net_socket).await?;
+            let io = raster_runtime_net::PrefixedTcpStream::new(prefix, read_half, write_half);
+            let accept_opts = crate::backend::AcceptOptions {
+                context: secure_context,
+                request_cert,
+                reject_unauthorized,
+                timeout: Some(std::time::Duration::from_secs(30)),
+                sni_registry: Default::default(),
+                selected_local_cert: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            };
+            let tls_stream = crate::backend::accept(io, accept_opts)
+                .await
+                .map_err(|e| Exception::throw_message(&ctx2, &e.to_string()))?;
+            let selected_local_cert = std::sync::Arc::new(std::sync::Mutex::new(None));
+            let tls_stream = match Self::finish_server_handshake(
+                this2.clone(),
+                ctx2.clone(),
+                tls_stream,
+                reject_unauthorized,
+                selected_local_cert,
+            )
+            .await
+            {
+                Ok(stream) => stream,
+                Err(err_value) => {
+                    Self::fail_connect(this2, &ctx2, err_value)?;
+                    return Ok(());
+                },
+            };
+            let (reader, writer) = tokio::io::split(tls_stream);
+            // The native side is always half-open for TLS; JS decides policy.
+            let (readable_done, writable_done) =
+                Self::process_split_io(&this2, &ctx2, reader, writer, true)?;
+            let had_error = rw_join(&ctx2, readable_done, writable_done).await?;
+            Self::emit_close(this2, &ctx2, had_error)?;
+            Ok::<_, rquickjs::Error>(())
+        })?;
+
+        Ok(())
+    }
+
+    /// Create the native backend for the JS `tls.TLSSocket` class.
+    ///
+    /// `allowHalfOpen` defaults to true: TLS sessions are half-open by nature
+    /// (a `close_notify` only ends one direction), and the JS layer decides the
+    /// user-visible behaviour — the same split Bun uses.
+    /// `_read`/`resume` told us the consumer drained: wake the native reader.
+    pub fn resume_reading(this: This<Class<'js, Self>>) -> Class<'js, Self> {
+        this.borrow().readable_stream_inner.resume_reading();
+        this.0
+    }
+
     #[qjs(get, enumerable)]
     pub fn encrypted(&self) -> bool {
         true
@@ -287,6 +411,9 @@ impl<'js> TlsSocket<'js> {
     }
 
     pub fn destroy(this: This<Class<'js, Self>>, error: Opt<Value<'js>>) -> Class<'js, Self> {
+        // Drop the owner eagerly so the `this <-> _handle` cycle is collectable
+        // before runtime teardown (same reason as `net.Socket::destroy`).
+        this.borrow_mut().js_owner = None;
         this.borrow_mut().destroyed = true;
         ReadableStream::destroy(This(this.clone()), Opt(None));
         WritableStream::destroy(This(this.clone()), error);
@@ -403,8 +530,19 @@ impl<'js> TlsSocket<'js> {
                 local_cert_der: None,
                 check_server_identity_cb: None,
                 loop_ref: EventLoopRef::new_referenced(rt_key),
+                js_owner: None,
             },
         )
+    }
+
+    pub fn handle_factory(ctx: Ctx<'js>, opts: Opt<Object<'js>>) -> Result<Class<'js, Self>> {
+        let mut allow_half_open = true;
+        if let Some(opts) = opts.0 {
+            if let Some(v) = opts.get_optional("allowHalfOpen")? {
+                allow_half_open = v;
+            }
+        }
+        Self::new(ctx, allow_half_open)
     }
 
     pub fn apply_connection_info(&mut self, ctx: &Ctx<'js>, info: &TlsConnectionInfo) {
@@ -596,18 +734,50 @@ impl<'js> TlsSocket<'js> {
         let this2 = this.clone();
         let this3 = this.clone();
         let loop_ref = this.borrow().loop_ref.clone();
-        let readable_done = ReadableStream::process_callback_loop(
-            this.clone(),
-            ctx,
-            reader,
-            move || {
-                if !allow_half_open {
-                    WritableStream::end(This(this3));
-                }
-            },
-            loop_ref.clone(),
-        )?;
+        // Same dispatch as `net.Socket`: a JS `tls.TLSSocket` owns flowing,
+        // buffering and backpressure, so the push-driven loop runs instead of
+        // the classic state machine. A bare handle keeps the classic path.
+        let owner = this.borrow().js_owner.clone();
+        let end_this = this3.clone();
+        // With a JS owner the native read loop never shuts the write half:
+        // TLS ends one direction at a time, so half-open is always honoured
+        // natively and the user-visible behaviour is decided in JS
+        // (`_onEof` -> `end()` + `writeAfterFIN`), as in Bun.
+        let end_write_half_on_eof = owner.is_none() && !allow_half_open;
+        let on_end = move || {
+            if end_write_half_on_eof && !end_this.borrow().destroyed {
+                WritableStream::end(This(end_this.clone()));
+            }
+        };
+        let readable_done = match owner.clone() {
+            Some(owner) => ReadableStream::process_callback_loop_duplex(
+                this.clone(),
+                ctx,
+                reader,
+                on_end,
+                owner,
+                loop_ref.clone(),
+            )?,
+            None => ReadableStream::process_callback_loop(
+                this.clone(),
+                ctx,
+                reader,
+                on_end,
+                loop_ref.clone(),
+            )?,
+        };
         let writable_done = WritableStream::process_loop(this2, ctx, writer, Some(loop_ref))?;
+
+        // TLS bytes can flow now; release a write the Duplex held back while
+        // the handshake was still pending.
+        if let Some(owner) = owner {
+            if let Ok(hook) = owner.get::<_, Value>("_onWritesReady") {
+                if let Some(hook) = hook.as_function() {
+                    hook.call::<_, ()>((This(owner),))?;
+                }
+            }
+        }
+
         Ok((readable_done, writable_done))
     }
 

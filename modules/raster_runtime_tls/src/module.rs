@@ -6,7 +6,7 @@ use raster_runtime_utils::module::{export_default, ModuleInfo};
 use rquickjs::{
     module::{Declarations, Exports, ModuleDef},
     prelude::Func,
-    Class, Ctx, Exception, IntoJs, Object, Result, Undefined, Value,
+    Class, Ctx, Exception, Function, IntoJs, Object, Result, Undefined, Value,
 };
 
 use crate::alpn::convert_alpn_protocols_export;
@@ -20,6 +20,221 @@ use crate::tls_socket::TlsSocket;
 const CLIENT_RENEG_LIMIT: i32 = 3;
 const CLIENT_RENEG_WINDOW: i32 = 600;
 const DEFAULT_ECDH_CURVE: &str = "auto";
+
+/// JS implementation of `tls.TLSSocket`.
+///
+/// Extends the JS `net.Socket` class, so:
+///   `s instanceof tls.TLSSocket` — true
+///   `s instanceof net.Socket`    — true
+///   `s instanceof stream.Duplex` — true
+///
+/// The native `TlsSocket` is only the backend (`_handle`), exactly like
+/// `net.Socket`. `allowHalfOpen` is permanently true on the native side: TLS
+/// ends one direction at a time (`close_notify`), so the native read loop must
+/// never shut the write half. The user-visible behaviour is decided here, in
+/// `writeAfterFIN`.
+const TLS_SOCKET_GLUE_JS: &str = r#"(function () {
+  "use strict";
+
+  function build(createHandle, NetSocket) {
+    class TLSSocket extends NetSocket {      constructor(socket, options) {
+        const opts = options || {};
+        // Callers that already own a native handle (`tls.connect` performs the
+        // handshake itself) pass `_handleFactory`; otherwise this class creates
+        // its own backend through the factory the module supplied.
+        const supplied = opts._handleFactory;
+        super({
+          // Only forward a factory when the caller already owns a handle.
+          // Otherwise `net.Socket` resolves `this.constructor._createHandle`,
+          // which the TLSSocket class sets to the TLS backend factory.
+          ...(supplied ? { _handleFactory: supplied } : {}),
+          allowHalfOpen: opts.allowHalfOpen === true,
+        });
+
+        // STARTTLS: wrap an existing `net.Socket`. Its transport has to move to
+        // this TLS handle, which is asynchronous, so record the source and let
+        // `_starttlsHandoff` drive it once the caller is ready (Node does the
+        // same through `TLSSocket` + `beginTlsHandoff`).
+        this._tlsWrappedSocket =
+          socket && typeof socket._handle === "object" && socket._handle
+            ? socket
+            : null;
+        if (this._tlsWrappedSocket) {
+          this.connecting = true;
+          this.pending = false;
+          this._starttlsOptions = opts;
+          // `new tls.TLSSocket(socket, { isServer: true, ... })` (STARTTLS): the
+          // accepted plain socket's transport moves to this TLS handle. Deferred
+          // to keep the constructor synchronous, exactly like Node's
+          // `beginTlsHandoff`.
+          if (opts.isServer) {
+            const source = this._tlsWrappedSocket;
+            process.nextTick(() => {
+              const target = this._handle;
+              if (target && typeof target.starttlsServer === "function") {
+                target.starttlsServer(source, opts);
+              }
+            });
+          }
+        }
+        this._secureEstablished = false;
+        this._controlReleased = false;
+        this.secureConnecting = true;
+        this.servername = opts.servername || null;
+        this.alpnProtocol = null;
+        this.authorized = false;
+        this.authorizationError = null;
+
+        // Node installs `writeAfterFIN` when the peer ends a non-half-open
+        // socket; `_onEof` applies it, since the native side now always keeps
+        // the write half open (TLS ends one direction at a time).
+        this.on("end", () => {
+          if (!this.allowHalfOpen) this._onReadableStreamEnd();
+        });
+
+        // Wake the native reader when the consumer drains, same as net.Socket.
+        this.on("resume", () => {
+          const handle = this._handle;
+          if (handle && typeof handle.resumeReading === "function") {
+            handle.resumeReading();
+          }
+        });
+
+        // TLS decrypts inbound records inside the native layer, so the byte
+        // counter has to be fed where plaintext is handed to the readable
+        // side. Wrapping `push` keeps that in JS and leaves the shared read
+        // loop untouched.
+        const push = this.push;
+        this.push = (chunk, encoding) => {
+          if (chunk !== null && chunk !== undefined) {
+            this.bytesRead += chunk.length;
+          }
+          return push.call(this, chunk, encoding);
+        };
+      }
+
+      _onReadableStreamEnd() {
+        if (!this.allowHalfOpen) {
+          // Node: a non-half-open socket ends its write side when the peer
+          // ends, then turns later writes into EPIPE.
+          this.write = writeAfterFIN;
+          if (!this.writableEnded) this.end();
+        }
+      }
+
+      // Native read loop reached EOF: end the readable side, then apply the
+      // half-open policy for the write side.
+      _onEof() {
+        if (this._readableState && this._readableState.ended) return;
+        this.push(null);
+        if (this._readableState && this._readableState.flowing !== true) {
+          this.resume();
+        }
+        this._onReadableStreamEnd();
+      }
+
+      // --- TLS-only surface -------------------------------------------------
+
+      get _secureEstablishedFlag() {
+        return this._secureEstablished;
+      }
+
+      setSecureEstablished() {
+        this._secureEstablished = true;
+        this.secureConnecting = false;
+        this._controlReleased = true;
+      }
+
+      getPeerCertificate(detailed) {
+        const handle = this._handle;
+        if (!handle || typeof handle.getPeerCertificate !== "function") return {};
+        return handle.getPeerCertificate(!!detailed);
+      }
+
+      getCertificate() {
+        const handle = this._handle;
+        if (!handle || typeof handle.getCertificate !== "function") return {};
+        return handle.getCertificate();
+      }
+
+      getCipher() {
+        const handle = this._handle;
+        if (!handle || typeof handle.getCipher !== "function") return {};
+        return handle.getCipher();
+      }
+
+      getProtocol() {
+        const handle = this._handle;
+        if (!handle || typeof handle.getProtocol !== "function") return null;
+        return handle.getProtocol();
+      }
+
+      isSessionReused() {
+        const handle = this._handle;
+        if (!handle || typeof handle.isSessionReused !== "function") return false;
+        return handle.isSessionReused();
+      }
+
+      // `setServername` before a handshake reconnects with SNI; after it, TLS
+      // forbids renegotiation, so the request is ignored like Node.
+      setServername(name) {
+        if (this._secureEstablished) return this;
+        this.servername = name;
+        return this;
+      }
+
+      // A TLS socket has no half-open negotiation: renegotiation is a no-op
+      // unless the handle supports it.
+      renegotiate(options, cb) {
+        const handle = this._handle;
+        if (handle && typeof handle.renegotiate === "function") {
+          return handle.renegotiate(options, cb);
+        }
+        if (typeof cb === "function") process.nextTick(cb, new Error("renegotiation not supported"));
+        return false;
+      }
+    }
+
+    // Node's `net.Socket` error for a write after the peer's FIN.
+    function writeAfterFIN(chunk, encoding, cb) {
+      if (!this.writableEnded) {
+        return NetSocket.prototype.write.call(this, chunk, encoding, cb);
+      }
+      if (typeof encoding === "function") {
+        cb = encoding;
+        encoding = null;
+      }
+      const er = new Error("This socket has been ended by the other party");
+      er.code = "EPIPE";
+      if (typeof cb === "function") process.nextTick(cb, er);
+      this.destroy(er);
+      return false;
+    }
+
+    TLSSocket.prototype._writeAfterFIN = writeAfterFIN;
+    // Every TLSSocket — plain `new TLSSocket()` included — must own a TLS
+    // backend, not inherit net.Socket's. Subclasses of the net class read this
+    // static through `this.constructor`.
+    TLSSocket._createHandle = (opts) => createHandle(opts);
+
+    return TLSSocket;
+  }
+
+  return { build };
+})()"#;
+
+/// Resolve the JS `net.Socket` class emitted by the net module.
+///
+/// The tls module can be evaluated before `node:net` is imported, so pull it in
+/// on demand; the net module publishes the class on the global it always sets.
+fn require_net_socket_class<'js>(ctx: &Ctx<'js>) -> Result<Value<'js>> {
+    let existing: Value = ctx.globals().get("__rasterNetSocketClass")?;
+    if existing.is_function() {
+        return Ok(existing);
+    }
+    ctx.eval::<(), _>(r#"require("node:net")"#)?;
+    ctx.globals().get("__rasterNetSocketClass")
+}
 
 fn link_prototypes<'js>(ctx: &Ctx<'js>, _default: &Object<'js>) -> Result<()> {
     if let (Some(tls_proto), Some(net_proto)) = (
@@ -91,6 +306,19 @@ impl ModuleDef for TlsModule {
             if Class::<NetSocket>::prototype(ctx)?.is_some() {
                 link_prototypes(ctx, default)?;
             }
+
+            // `tls.TLSSocket` is a JS class extending `net.Socket` so that
+            // `instanceof tls.TLSSocket`, `instanceof net.Socket` and
+            // `instanceof stream.Duplex` all hold. The native `TlsSocket` is
+            // only its `_handle`; the Duplex owns flowing and backpressure.
+            let tls_handle_ctor = Function::new(ctx.clone(), TlsSocket::handle_factory)?;
+            let glue: Object = ctx.eval(TLS_SOCKET_GLUE_JS)?;
+            let build = glue.get::<_, Function>("build")?;
+            let net_socket_class: Value = require_net_socket_class(ctx)?;
+            let tls_class: Function = build.call((tls_handle_ctor, net_socket_class))?;
+            default.set("TLSSocket", tls_class.clone())?;
+            ctx.globals()
+                .set("__rasterTlsSocketClass", tls_class.clone())?;
 
             default.set("connect", Func::from(connect))?;
             default.set("createServer", Func::from(create_server))?;

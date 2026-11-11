@@ -3,11 +3,13 @@
 use std::sync::{Arc, Mutex};
 
 use raster_runtime_context::CtxExtension;
-use raster_runtime_events::Emitter;
 use raster_runtime_net::{check_network_access, get_hostname, PrefixedTcpStream, Socket};
 use raster_runtime_stream::SteamEvents;
 use raster_runtime_utils::{error::ErrorExtensions, result::ResultExt};
-use rquickjs::{prelude::Rest, Class, Ctx, Error, Exception, Result, Value};
+use rquickjs::{
+    prelude::{Opt, Rest, This},
+    Class, Ctx, Error, Exception, Function, Result, Value,
+};
 use tokio::net::TcpStream;
 
 use crate::backend::{connect as tls_connect, ConnectOptions, VerifyRecord};
@@ -28,7 +30,47 @@ fn handle_connect_error<'js>(
     TlsSocket::fail_connect(tls_socket, ctx, err_value)
 }
 
-pub fn connect<'js>(ctx: Ctx<'js>, args: Rest<Value<'js>>) -> Result<Class<'js, TlsSocket<'js>>> {
+/// Native backend behind a JS socket object.
+///
+/// `net.Socket` is a JS Duplex whose `_handle` is the Rust `Socket`; callers
+/// hold the wrapper, so transport operations have to reach through it. A bare
+/// native handle is still accepted for internal callers.
+pub(crate) fn net_handle_of<'js>(value: &Value<'js>) -> Option<Class<'js, Socket<'js>>> {
+    if let Ok(class) = Class::<Socket>::from_value(value) {
+        return Some(class);
+    }
+    let obj = value.as_object()?;
+    let handle: Value = obj.get("_handle").ok()?;
+    Class::<Socket>::from_value(&handle).ok()
+}
+
+/// Wrap an already-created native TLS handle in the JS `tls.TLSSocket` object.
+///
+/// `tls.connect` builds the backend itself (it owns the handshake), so the JS
+/// object is constructed around that handle rather than creating its own. The
+/// object is still a real `net.Socket` subclass, which is what makes the three
+/// `instanceof` checks hold for callers.
+pub(crate) fn build_tls_socket_object<'js>(
+    ctx: &Ctx<'js>,
+    handle: &Class<'js, TlsSocket<'js>>,
+    allow_half_open: bool,
+) -> Result<Value<'js>> {
+    let ctor: Value = ctx.globals().get("__rasterTlsSocketClass")?;
+    let Some(ctor) = ctor.as_constructor().cloned() else {
+        return Ok(handle.clone().into_value());
+    };
+    // The glue's constructor prefers `_handleFactory`, so hand it the handle we
+    // already built instead of letting it create a second one.
+    let opts = rquickjs::Object::new(ctx.clone())?;
+    opts.set("allowHalfOpen", allow_half_open)?;
+    let handle_value = handle.clone().into_value();
+    let factory = Function::new(ctx.clone(), move |_o: Opt<Value<'js>>| handle_value.clone())?;
+    opts.set("_handleFactory", factory)?;
+    let instance: Value = ctor.construct((rquickjs::Undefined, opts))?;
+    Ok(instance)
+}
+
+pub fn connect<'js>(ctx: Ctx<'js>, args: Rest<Value<'js>>) -> Result<Value<'js>> {
     let (options_value, callback) = normalize_connect_args(&ctx, args.0)?;
     let options = parse_connect_options(&ctx, options_value.clone())?;
 
@@ -81,7 +123,12 @@ pub fn connect<'js>(ctx: Ctx<'js>, args: Rest<Value<'js>>) -> Result<Class<'js, 
     let reject_unauthorized = options.reject_unauthorized;
     let timeout = options.timeout;
     let port = options.port;
-    let allow_half_open = false;
+    // User-visible half-open policy. The native handle always stays half-open
+    // for TLS; this option only drives the JS layer.
+    let allow_half_open = options_value
+        .as_object()
+        .and_then(|obj| obj.get::<_, Option<bool>>("allowHalfOpen").ok().flatten())
+        .unwrap_or(false);
 
     let verify_record = if !reject_unauthorized {
         Some(Arc::new(Mutex::new(VerifyRecord {
@@ -92,7 +139,10 @@ pub fn connect<'js>(ctx: Ctx<'js>, args: Rest<Value<'js>>) -> Result<Class<'js, 
         None
     };
 
-    let tls_socket = TlsSocket::new(ctx.clone(), allow_half_open)?;
+    // The native side is always half-open for TLS (one direction ends at a
+    // time); the JS layer decides user-visible behaviour from its own option.
+    let tls_socket = TlsSocket::new(ctx.clone(), true)?;
+    let tls_js = build_tls_socket_object(&ctx, &tls_socket, allow_half_open)?;
     {
         let mut borrow = tls_socket.borrow_mut();
         borrow.servername = sni_name.clone();
@@ -102,14 +152,18 @@ pub fn connect<'js>(ctx: Ctx<'js>, args: Rest<Value<'js>>) -> Result<Class<'js, 
     }
 
     if let Some(cb) = callback {
-        TlsSocket::add_event_listener_str(
-            tls_socket.clone(),
-            &ctx,
-            "secureConnect",
-            cb,
-            true,
-            true,
-        )?;
+        // Register on the JS TLSSocket, not the native handle: events dispatch
+        // through the owner, so a listener in the handle's own table never
+        // fires (same rule as `net.Socket.connect`'s callback).
+        if let Some(obj) = tls_js.as_object() {
+            if let Some(once) = obj
+                .get::<_, Value>("once")
+                .ok()
+                .and_then(|v| v.as_function().cloned())
+            {
+                once.call::<_, ()>((This(obj.clone()), "secureConnect", cb))?;
+            }
+        }
     }
 
     let tls_socket2 = tls_socket.clone();
@@ -120,8 +174,11 @@ pub fn connect<'js>(ctx: Ctx<'js>, args: Rest<Value<'js>>) -> Result<Class<'js, 
     ctx.spawn_exit(async move {
         let connect_result = async {
             if let Some(socket_val) = socket_opt {
-                let net_socket = Class::<Socket>::from_value(&socket_val)
-                    .map_err(|_| Exception::throw_type(&ctx2, "socket must be a net.Socket"))?;
+                // The caller passes the JS `net.Socket` it holds. Its native
+                // backend is `_handle`; taking the transport means operating on
+                // that handle, not on the wrapper.
+                let net_socket = net_handle_of(&socket_val)
+                    .ok_or_else(|| Exception::throw_type(&ctx2, "socket must be a net.Socket"))?;
 
                 let (read_half, write_half, prefix) =
                     Socket::begin_tls_handoff(&ctx2, net_socket.clone()).await?;
@@ -241,5 +298,5 @@ pub fn connect<'js>(ctx: Ctx<'js>, args: Rest<Value<'js>>) -> Result<Class<'js, 
         Ok(())
     })?;
 
-    Ok(tls_socket)
+    Ok(tls_js)
 }
