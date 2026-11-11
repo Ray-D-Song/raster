@@ -116,6 +116,14 @@ const CREATE_READ_STREAM_IMPL_JS: &str = r#"(function () {
     }
     const stream = Readable.from(generate(), streamOpts);
     stream.path = path;
+    stream.pending = false;
+    // `fs.createReadStream` returns a `ReadStream` in Node, and callers branch
+    // on `instanceof fs.ReadStream`. Re-parent the instance onto that prototype
+    // so both identities hold without a second stream implementation.
+    const ReadStreamCtor = globalThis.__rasterFsReadStreamClass;
+    if (typeof ReadStreamCtor === "function" && stream instanceof Readable) {
+      Object.setPrototypeOf(stream, ReadStreamCtor.prototype);
+    }
     return stream;
   };
 })()"#;

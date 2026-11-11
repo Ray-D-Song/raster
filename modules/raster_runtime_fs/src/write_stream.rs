@@ -150,6 +150,12 @@ const CREATE_WRITE_STREAM_IMPL_JS: &str = r#"(function () {
       );
     };
 
+    // `fs.createWriteStream` returns a `WriteStream` in Node, and callers
+    // branch on `instanceof fs.WriteStream`.
+    const WriteStreamCtor = globalThis.__rasterFsWriteStreamClass;
+    if (typeof WriteStreamCtor === "function") {
+      Object.setPrototypeOf(stream, WriteStreamCtor.prototype);
+    }
     return stream;
   };
 })()"#;
