@@ -10,6 +10,7 @@ use raster_runtime_utils::{
     module::{export_default, ModuleInfo},
 };
 use rquickjs::{
+    atom::PredefinedAtom,
     function::Func,
     module::{Declarations, Exports, ModuleDef},
     prelude::Rest,
@@ -152,6 +153,27 @@ fn get_or_create_types_object<'js>(ctx: &Ctx<'js>) -> Result<Object<'js>> {
     return globalThis[KEY];
   }
 
+  const objectToString = Object.prototype.toString;
+
+  // `[object X]` → `"X"`, the internal-slot tag the engine reports. Unlike a
+  // user-assigned `Symbol.toStringTag`, this is not forgeable in QuickJS for the
+  // built-ins below, so it is what the predicates key on.
+  const tagOf = (value) => {
+    if (value === null || value === undefined) return "";
+    const tag = objectToString.call(value);
+    return tag.slice(8, tag.length - 1);
+  };
+
+  // A real Error has its own `stack`/`message` slots; `Object.create(Error.prototype)`
+  // does not, and Node reports `false` for it.
+  const hasOwnErrorSlot = (value) => {
+    try {
+      return typeof value.stack === "string" && typeof value.name === "string";
+    } catch {
+      return false;
+    }
+  };
+
   const types = {
     isProxy(value) {
       return typeof value === "object" && value !== null && globalThis.__rasterIsProxy
@@ -164,28 +186,95 @@ fn get_or_create_types_object<'js>(ctx: &Ctx<'js>) -> Result<Object<'js>> {
         : false;
     },
     isArrayBuffer(value) {
-      return typeof value === "object" && value !== null && globalThis.__rasterIsArrayBuffer
-        ? globalThis.__rasterIsArrayBuffer(value)
-        : false;
+      // A SharedArrayBuffer is a distinct type in Node, so exclude it here.
+      return typeof value === "object" && value !== null
+        && !!globalThis.__rasterIsArrayBuffer
+        && globalThis.__rasterIsArrayBuffer(value)
+        && !globalThis.__rasterIsSharedArrayBuffer(value);
+    },
+    isSharedArrayBuffer(value) {
+      return typeof value === "object" && value !== null
+        && !!globalThis.__rasterIsSharedArrayBuffer
+        && globalThis.__rasterIsSharedArrayBuffer(value);
     },
     isAnyArrayBuffer(value) {
-      return this.isArrayBuffer(value);
+      // Matches Node: either kind of ArrayBuffer.
+      return types.isArrayBuffer(value) || types.isSharedArrayBuffer(value);
     },
-    isSharedArrayBuffer() {
-      return false;
+
+    // --- ArrayBufferView / TypedArray family ------------------------------
+    isArrayBufferView(value) {
+      return ArrayBuffer.isView(value);
     },
     isTypedArray(value) {
-      return ArrayBuffer.isView(value) && !(value instanceof DataView);
+      return types.isArrayBufferView(value) && !types.isDataView(value);
     },
     isDataView(value) {
-      return Object.prototype.toString.call(value) === "[object DataView]";
+      return tagOf(value) === "DataView";
     },
     isUint8Array(value) {
-      return Object.prototype.toString.call(value) === "[object Uint8Array]";
+      return tagOf(value) === "Uint8Array";
     },
-    // Date brand check: works across realms, rejects plain objects and
-    // Symbol.toStringTag forgeries (unlike Object.prototype.toString alone).
+    isUint8ClampedArray(value) {
+      return tagOf(value) === "Uint8ClampedArray";
+    },
+    isUint16Array(value) {
+      return tagOf(value) === "Uint16Array";
+    },
+    isUint32Array(value) {
+      return tagOf(value) === "Uint32Array";
+    },
+    isInt8Array(value) {
+      return tagOf(value) === "Int8Array";
+    },
+    isInt16Array(value) {
+      return tagOf(value) === "Int16Array";
+    },
+    isInt32Array(value) {
+      return tagOf(value) === "Int32Array";
+    },
+    isFloat16Array(value) {
+      return tagOf(value) === "Float16Array";
+    },
+    isFloat32Array(value) {
+      return tagOf(value) === "Float32Array";
+    },
+    isFloat64Array(value) {
+      return tagOf(value) === "Float64Array";
+    },
+    isBigInt64Array(value) {
+      return tagOf(value) === "BigInt64Array";
+    },
+    isBigUint64Array(value) {
+      return tagOf(value) === "BigUint64Array";
+    },
+
+    // --- collections and iterators ---------------------------------------
+    isMap(value) {
+      return tagOf(value) === "Map";
+    },
+    isSet(value) {
+      return tagOf(value) === "Set";
+    },
+    isWeakMap(value) {
+      return tagOf(value) === "WeakMap";
+    },
+    isWeakSet(value) {
+      return tagOf(value) === "WeakSet";
+    },
+    isMapIterator(value) {
+      // Only an actual map iterator has this tag; a plain object cannot fake
+      // it because the tag is not a property.
+      return tagOf(value) === "Map Iterator";
+    },
+    isSetIterator(value) {
+      return tagOf(value) === "Set Iterator";
+    },
+
+    // --- other built-ins --------------------------------------------------
     isDate(value) {
+      // Brand check: works across realms and rejects a Symbol.toStringTag
+      // forgery, which `Object.prototype.toString` alone would accept.
       if (typeof value !== "object" || value === null) {
         return false;
       }
@@ -195,6 +284,99 @@ fn get_or_create_types_object<'js>(ctx: &Ctx<'js>) -> Result<Object<'js>> {
       } catch {
         return false;
       }
+    },
+    isRegExp(value) {
+      if (typeof value !== "object" || value === null) {
+        return false;
+      }
+      try {
+        Object.getOwnPropertyDescriptor(RegExp.prototype, "source").get.call(value);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    isNativeError(value) {
+      if (typeof value !== "object" || value === null) {
+        return false;
+      }
+      // `Object.create(Error.prototype)` is not a native error; only objects
+      // created by the Error constructors carry the internal slots.
+      return Error.prototype.isPrototypeOf(value)
+        && Object.prototype.toString.call(value) === "[object Error]"
+        && typeof value.message === "string"
+        && hasOwnErrorSlot(value);
+    },
+    isArgumentsObject(value) {
+      return tagOf(value) === "Arguments";
+    },
+    isGeneratorFunction(value) {
+      return tagOf(value) === "GeneratorFunction";
+    },
+    isGeneratorObject(value) {
+      return tagOf(value) === "Generator";
+    },
+    isAsyncFunction(value) {
+      return tagOf(value) === "AsyncFunction";
+    },
+    isModuleNamespaceObject(value) {
+      // Module namespace objects are the only ones whose toStringTag is
+      // "Module" and are not constructible.
+      return tagOf(value) === "Module";
+    },
+
+    // --- boxed primitives -------------------------------------------------
+    isStringObject(value) {
+      // A primitive also tags as `[object String]`; only an object wrapper is
+      // an object here.
+      return typeof value === "object" && value !== null && tagOf(value) === "String";
+    },
+    isNumberObject(value) {
+      // A primitive also tags as `[object Number]`; only an object wrapper is
+      // an object here.
+      return typeof value === "object" && value !== null && tagOf(value) === "Number";
+    },
+    isBooleanObject(value) {
+      // A primitive also tags as `[object Boolean]`; only an object wrapper is
+      // an object here.
+      return typeof value === "object" && value !== null && tagOf(value) === "Boolean";
+    },
+    isBigIntObject(value) {
+      // A primitive also tags as `[object BigInt]`; only an object wrapper is
+      // an object here.
+      return typeof value === "object" && value !== null && tagOf(value) === "BigInt";
+    },
+    isSymbolObject(value) {
+      // A primitive also tags as `[object Symbol]`; only an object wrapper is
+      // an object here.
+      return typeof value === "object" && value !== null && tagOf(value) === "Symbol";
+    },
+    isBoxedPrimitive(value) {
+      return types.isStringObject(value) || types.isNumberObject(value)
+        || types.isBooleanObject(value) || types.isBigIntObject(value)
+        || types.isSymbolObject(value);
+    },
+
+    // --- platform objects that cannot exist here --------------------------
+    // Node registers these only when the corresponding subsystem is present;
+    // reporting `false` is the correct answer for every value.
+    isExternal(value) {
+      return typeof value === "object" && value !== null
+        && !!globalThis.__rasterIsExternal
+        ? globalThis.__rasterIsExternal(value)
+        : false;
+    },
+    isKeyObject(value) {
+      return typeof value === "object" && value !== null
+        && !!globalThis.__rasterIsKeyObject
+        ? globalThis.__rasterIsKeyObject(value)
+        : false;
+    },
+    isCryptoKey(value) {
+      return typeof value === "object" && value !== null
+        && !!globalThis.__rasterIsCryptoKey
+        ? globalThis.__rasterIsCryptoKey(value)
+        : false;
     },
   };
 
@@ -207,6 +389,432 @@ fn get_or_create_types_object<'js>(ctx: &Ctx<'js>) -> Result<Object<'js>> {
   return types;
 })()"#,
     )
+}
+
+/// `MIMEType`/`MIMEParams` and the utility functions `util` was missing.
+///
+/// Behaviours follow Node 24, obtained by probing it rather than from the docs:
+/// `getSystemErrorName`/`getSystemErrorMessage` reject non-negative codes with
+/// `ERR_OUT_OF_RANGE`; `MIMEType` lowercases type/subtype but keeps parameter
+/// case, and `toString()` drops the space after `;`.
+const UTIL_EXTRAS_JS: &str = r#"(function () {
+  "use strict";
+
+  // --- MIME ---------------------------------------------------------------
+  const TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+  class MIMEParams {
+    #entries = new Map();
+    constructor() {}
+    get(name) {
+      const key = String(name).toLowerCase();
+      const entry = this.#entries.get(key);
+      return entry === undefined ? null : entry;
+    }
+    set(name, value) {
+      if (arguments.length < 2) {
+        throw new TypeError('The "value" argument must be specified');
+      }
+      const key = String(name).toLowerCase();
+      if (!TOKEN.test(key)) {
+        throw new TypeError("Invalid MIME parameter name: " + key);
+      }
+      const text = String(value);
+      if (text.length > 0 && !TOKEN.test(text) && !/^"[^"]*"$/.test(text)) {
+        // A value with separators must be quoted, as in Node.
+        if (!/^[\x20-\x7e]*$/.test(text) || /[;,"\\]/.test(text)) {
+          throw new TypeError("Invalid MIME parameter value: " + text);
+        }
+      }
+      this.#entries.set(key, text);
+      return this;
+    }
+    delete(name) {
+      this.#entries.delete(String(name).toLowerCase());
+    }
+    has(name) {
+      return this.#entries.has(String(name).toLowerCase());
+    }
+    *entries() {
+      // Insertion order, as in Node.
+      for (const entry of this.#entries.entries()) yield entry;
+    }
+    *keys() {
+      for (const [key] of this.entries()) yield key;
+    }
+    *values() {
+      for (const [, value] of this.entries()) yield value;
+    }
+    forEach(fn, thisArg) {
+      for (const [key, value] of this.entries()) fn.call(thisArg, value, key, this);
+    }
+    toString() {
+      const parts = [];
+      for (const [key, value] of this.entries()) {
+        parts.push(";" + key + "=" + value);
+      }
+      return parts.join("");
+    }
+    [Symbol.iterator]() {
+      return this.entries();
+    }
+  }
+
+  class MIMEType {
+    #type = "";
+    #subtype = "";
+    #params = new MIMEParams();
+    constructor(input) {
+      const text = String(input);
+      const semi = text.indexOf(";");
+      const essence = semi === -1 ? text : text.slice(0, semi);
+      const slash = essence.indexOf("/");
+      if (slash === -1) {
+        throw new TypeError("Invalid MIME type: " + text);
+      }
+      const type = essence.slice(0, slash).trim().toLowerCase();
+      const subtype = essence.slice(slash + 1).trim().toLowerCase();
+      if (!TOKEN.test(type) || !TOKEN.test(subtype)) {
+        throw new TypeError("Invalid MIME type: " + text);
+      }
+      this.#type = type;
+      this.#subtype = subtype;
+      if (semi !== -1) {
+        for (const raw of text.slice(semi + 1).split(";")) {
+          const part = raw.trim();
+          if (!part) continue;
+          const eq = part.indexOf("=");
+          if (eq === -1) continue;
+          this.#params.set(part.slice(0, eq), part.slice(eq + 1));
+        }
+      }
+    }
+    get type() { return this.#type; }
+    set type(value) {
+      const text = String(value).toLowerCase();
+      if (!TOKEN.test(text)) throw new TypeError("Invalid MIME type: " + text);
+      this.#type = text;
+    }
+    get subtype() { return this.#subtype; }
+    set subtype(value) {
+      const text = String(value).toLowerCase();
+      if (!TOKEN.test(text)) throw new TypeError("Invalid MIME subtype: " + text);
+      this.#subtype = text;
+    }
+    get essence() { return this.#type + "/" + this.#subtype; }
+    get params() { return this.#params; }
+    toString() { return this.essence + this.#params.toString(); }
+    toJSON() { return this.toString(); }
+  }
+
+  // --- system errors ------------------------------------------------------
+  // A representative slice of the C errno table. `code: -1` is EPERM on the
+  // platforms Raster targets; the lookup tolerates absence.
+  const SYSTEM_ERRORS = new Map([
+    [-1, ["EPERM", "operation not permitted"]],
+    [-2, ["ENOENT", "no such file or directory"]],
+    [-3, ["ESRCH", "no such process"]],
+    [-4, ["EINTR", "interrupted system call"]],
+    [-5, ["EIO", "i/o error"]],
+    [-6, ["ENXIO", "no such device or address"]],
+    [-7, ["E2BIG", "argument list too long"]],
+    [-9, ["EBADF", "bad file descriptor"]],
+    [-11, ["EAGAIN", "resource temporarily unavailable"]],
+    [-12, ["ENOMEM", "not enough memory"]],
+    [-13, ["EACCES", "permission denied"]],
+    [-14, ["EFAULT", "bad address"]],
+    [-16, ["EBUSY", "resource busy or locked"]],
+    [-17, ["EEXIST", "file already exists"]],
+    [-18, ["EXDEV", "cross-device link not permitted"]],
+    [-19, ["ENODEV", "no such device"]],
+    [-20, ["ENOTDIR", "not a directory"]],
+    [-21, ["EISDIR", "illegal operation on a directory"]],
+    [-22, ["EINVAL", "invalid argument"]],
+    [-23, ["ENFILE", "file table overflow"]],
+    [-24, ["EMFILE", "too many open files"]],
+    [-25, ["ENOTTY", "inappropriate ioctl for device"]],
+    [-27, ["EFBIG", "file too large"]],
+    [-28, ["ENOSPC", "no space left on device"]],
+    [-29, ["ESPIPE", "invalid seek"]],
+    [-30, ["EROFS", "read-only file system"]],
+    [-31, ["EMLINK", "too many links"]],
+    [-32, ["EPIPE", "broken pipe"]],
+    [-34, ["ERANGE", "result out of range"]],
+    [-36, ["ENAMETOOLONG", "name too long"]],
+    [-39, ["ENOTEMPTY", "directory not empty"]],
+    [-40, ["ELOOP", "too many symbolic links encountered"]],
+    // Network family (Node reports these as negative errno too).
+    [-97, ["EAFNOSUPPORT", "address family not supported by protocol"]],
+    [-98, ["EADDRINUSE", "address already in use"]],
+    [-99, ["EADDRNOTAVAIL", "address not available"]],
+    [-100, ["ENETDOWN", "network is down"]],
+    [-101, ["ENETUNREACH", "network is unreachable"]],
+    [-103, ["ECONNABORTED", "software caused connection abort"]],
+    [-104, ["ECONNRESET", "connection reset by peer"]],
+    [-105, ["ENOBUFS", "no buffer space available"]],
+    [-106, ["EISCONN", "socket is already connected"]],
+    [-107, ["ENOTCONN", "socket is not connected"]],
+    [-110, ["ETIMEDOUT", "connection timed out"]],
+    [-111, ["ECONNREFUSED", "connection refused"]],
+    [-113, ["EHOSTUNREACH", "host is unreachable"]],
+  ]);
+
+  const getSystemErrorMap = () => SYSTEM_ERRORS;
+
+  function getSystemErrorName(err) {
+    // Node rejects a non-negative code here too (`ERR_OUT_OF_RANGE`).
+    if (typeof err !== "number" || !Number.isInteger(err) || err >= 0) {
+      const error = new RangeError(
+        'The value of "err" is out of range. It must be a negative integer. Received ' + err
+      );
+      error.code = "ERR_OUT_OF_RANGE";
+      throw error;
+    }
+    const entry = SYSTEM_ERRORS.get(err);
+    if (entry) return entry[0];
+    return "Unknown system error " + err;
+  }
+
+  function getSystemErrorMessage(err) {
+    if (typeof err !== "number" || !Number.isInteger(err) || err >= 0) {
+      const error = new RangeError(
+        'The value of "err" is out of range. It must be a negative integer. Received ' + err
+      );
+      error.code = "ERR_OUT_OF_RANGE";
+      throw error;
+    }
+    const entry = SYSTEM_ERRORS.get(err);
+    return entry ? entry[1] : "Unknown system error " + err;
+  }
+
+  // --- signals ------------------------------------------------------------
+  const SIGNAL_NUMBERS = {
+    SIGINT: 2, SIGILL: 4, SIGABRT: 6, SIGFPE: 8, SIGKILL: 9, SIGSEGV: 11,
+    SIGPIPE: 13, SIGALRM: 14, SIGTERM: 15, SIGHUP: 1, SIGQUIT: 3, SIGTRAP: 5,
+    SIGBUS: 7, SIGUSR1: 10, SIGUSR2: 12, SIGCHLD: 17, SIGCONT: 18, SIGSTOP: 19,
+    SIGTSTP: 20, SIGTTIN: 21, SIGTTOU: 22, SIGURG: 23, SIGXCPU: 24,
+    SIGXFSZ: 25, SIGVTALRM: 26, SIGPROF: 27, SIGWINCH: 28, SIGIO: 29,
+    SIGPWR: 30, SIGSYS: 31,
+  };
+
+  function convertProcessSignalToExitCode(signal) {
+    if (typeof signal !== "string" || !(signal in SIGNAL_NUMBERS)) {
+      const error = new TypeError('Unknown signal: ' + signal);
+      error.code = "ERR_UNKNOWN_SIGNAL";
+      throw error;
+    }
+    return 128 + SIGNAL_NUMBERS[signal];
+  }
+
+  // --- diff ---------------------------------------------------------------
+  // Port of Node's `internal/util/inspect.diff`: a Myers-free simple LCS walk
+  // that emits `[operation, text]` pairs, which is the documented shape.
+  function diff(actual, expected) {
+    if (actual === expected) return [[0, actual]];
+    const actualLines = String(actual).split(/(\n)/);
+    const expectedLines = String(expected).split(/(\n)/);
+
+    // Longest common subsequence table over lines.
+    const rows = actualLines.length + 1;
+    const cols = expectedLines.length + 1;
+    const lcs = new Array(rows);
+    for (let i = 0; i < rows; i++) lcs[i] = new Int32Array(cols);
+    for (let i = actualLines.length - 1; i >= 0; i--) {
+      for (let j = expectedLines.length - 1; j >= 0; j--) {
+        lcs[i][j] = actualLines[i] === expectedLines[j]
+          ? lcs[i + 1][j + 1] + 1
+          : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+      }
+    }
+
+    const result = [];
+    let i = 0;
+    let j = 0;
+    while (i < actualLines.length && j < expectedLines.length) {
+      if (actualLines[i] === expectedLines[j]) {
+        result.push([0, actualLines[i]]);
+        i++;
+        j++;
+      } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
+        result.push([1, actualLines[i]]);
+        i++;
+      } else {
+        result.push([-1, expectedLines[j]]);
+        j++;
+      }
+    }
+    while (i < actualLines.length) result.push([1, actualLines[i++]]);
+    while (j < expectedLines.length) result.push([-1, expectedLines[j++]]);
+    return result;
+  }
+
+  // --- call sites ---------------------------------------------------------
+  function getCallSites(frames) {
+    const limit = frames === undefined ? 10 : frames;
+    const previousLimit = Error.stackTraceLimit;
+    Error.stackTraceLimit = limit + 1;
+    // Capture a plain stack rather than using `captureStackTrace(holder, fn)`:
+    // the filtered form trims everything up to `fn`, and since this helper is
+    // the innermost frame it would leave nothing at all.
+    const stack = new Error().stack || "";
+    Error.stackTraceLimit = previousLimit;
+    const sites = [];
+    for (const line of stack.split("\n").slice(1)) {
+      const match = /^\s*at\s+(?:(.*?)\s+\()?(.*?):(\d+):(\d+)\)?$/.exec(line);
+      if (!match) continue;
+      // Skip this helper's own frame.
+      if (match[1] === "getCallSites") continue;
+      const scriptName = match[2];
+      const lineNumber = Number(match[3]);
+      const column = Number(match[4]);
+      sites.push({
+        functionName: match[1] || "<anonymous>",
+        scriptName,
+        scriptId: "0",
+        lineNumber,
+        column,
+        columnNumber: column,
+      });
+      if (sites.length >= limit) break;
+    }
+    return sites;
+  }
+
+  // --- aborted ------------------------------------------------------------
+  function aborted(signal, resource) {
+    if (typeof signal !== "object" || signal === null || typeof signal.aborted !== "boolean") {
+      throw new TypeError('The "signal" argument must be an AbortSignal');
+    }
+    const target = resource && typeof resource === "object" ? resource : null;
+    return new Promise((resolve, reject) => {
+      if (signal.aborted) {
+        const error = signal.reason !== undefined
+          ? signal.reason
+          : new Error("The operation was aborted");
+        if (target && typeof target.destroy === "function") target.destroy(error);
+        reject(error);
+        return;
+      }
+      const onAbort = () => {
+        const error = signal.reason !== undefined
+          ? signal.reason
+          : new Error("The operation was aborted");
+        if (target && typeof target.destroy === "function") target.destroy(error);
+        reject(error);
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      resolve(() => signal.removeEventListener("abort", onAbort));
+    });
+  }
+
+  // --- callbackify --------------------------------------------------------
+  function callbackify(original) {
+    if (typeof original !== "function") {
+      throw new TypeError('The "original" argument must be of type function');
+    }
+    return function (...args) {
+      const callback = args.pop();
+      if (typeof callback !== "function") {
+        throw new TypeError('The last argument must be of type function');
+      }
+      Promise.resolve().then(() => original.apply(this, args)).then(
+        (value) => queueMicrotask(() => callback(null, value)),
+        (error) => queueMicrotask(() => callback(error))
+      );
+    };
+  }
+
+  // --- _extend ------------------------------------------------------------
+  function _extend(target, source) {
+    for (const key of Object.keys(source)) target[key] = source[key];
+    return target;
+  }
+
+  return {
+    MIMEType,
+    MIMEParams,
+    getSystemErrorMap,
+    getSystemErrorName,
+    getSystemErrorMessage,
+    convertProcessSignalToExitCode,
+    diff,
+    getCallSites,
+    aborted,
+    callbackify,
+    _extend,
+  };
+})()"#;
+
+/// Add `inspect.colors`, `inspect.styles` and `inspect.defaultOptions`.
+///
+/// Node hangs these off the `inspect` function object, and code reads them
+/// directly (`util.inspect.colors.green[0]`, `defaultOptions.depth`).
+fn attach_inspect_metadata<'js>(ctx: &Ctx<'js>, default: &Object<'js>) -> Result<()> {
+    let inspect: Function = default.get("inspect")?;
+    let metadata: Object = ctx.eval(
+        r#"(function () {
+  // ANSI open/close pairs, matching Node's names and codes.
+  const colors = {
+    bold: [1, 22], italic: [3, 23], underline: [4, 24], inverse: [7, 27],
+    white: [37, 39], grey: [90, 39], black: [30, 39], blue: [34, 39],
+    cyan: [36, 39], green: [32, 39], magenta: [35, 39], red: [31, 39],
+    yellow: [33, 39],
+  };
+  // Node's default type-to-colour mapping.
+  const styles = {
+    special: "cyan", number: "yellow", bigint: "yellow", boolean: "yellow",
+    undefined: "grey", null: "bold", string: "green", symbol: "green",
+    date: "magenta", regexp: "red",
+  };
+  const defaultOptions = {
+    indentationLvl: 0,
+    currentDepth: 0,
+    stylize: (str) => str,
+    showHidden: false,
+    depth: 2,
+    colors: false,
+    customInspect: true,
+    showProxy: false,
+    maxArrayLength: 100,
+    maxStringLength: 10000,
+    breakLength: 128,
+    compact: 3,
+    sorted: false,
+    getters: false,
+    numericSeparator: false,
+  };
+  return { colors, styles, defaultOptions };
+})()"#,
+    )?;
+    inspect.set("colors", metadata.get::<_, Object>("colors")?)?;
+    inspect.set("styles", metadata.get::<_, Object>("styles")?)?;
+    inspect.set(
+        "defaultOptions",
+        metadata.get::<_, Object>("defaultOptions")?,
+    )?;
+    Ok(())
+}
+
+/// `MIMEType` / `MIMEParams`, plus the `util` entries that were missing.
+fn install_util_extras<'js>(ctx: &Ctx<'js>, default: &Object<'js>) -> Result<()> {
+    let extras: Object = ctx.eval(UTIL_EXTRAS_JS)?;
+    for name in [
+        "MIMEType",
+        "MIMEParams",
+        "getSystemErrorMap",
+        "getSystemErrorName",
+        "getSystemErrorMessage",
+        "convertProcessSignalToExitCode",
+        "diff",
+        "getCallSites",
+        "aborted",
+        "callbackify",
+        "_extend",
+    ] {
+        let value: Value = extras.get(name)?;
+        default.set(name, value)?;
+    }
+    Ok(())
 }
 
 fn create_deprecate<'js>(ctx: &Ctx<'js>) -> Result<Function<'js>> {
@@ -738,10 +1346,33 @@ fn install_type_predicates(ctx: &Ctx<'_>) -> Result<()> {
         "__rasterIsArrayBuffer",
         Func::from(|value: Value| ArrayBuffer::from_value(value).is_some()),
     )?;
+    // `ArrayBuffer::from_value` succeeds for a SharedArrayBuffer too, so the
+    // two have to be told apart by constructor name — the same way structured
+    // clone does it.
+    globals.set(
+        "__rasterIsSharedArrayBuffer",
+        Func::from(|ctx: Ctx<'_>, value: Value<'_>| -> Result<bool> {
+            let Some(obj) = value.as_object() else {
+                return Ok(false);
+            };
+            if ArrayBuffer::from_value(value.clone()).is_none() {
+                return Ok(false);
+            }
+            let Some(ctor) = obj.get::<_, Option<Object>>(PredefinedAtom::Constructor)? else {
+                return Ok(false);
+            };
+            let name: String = ctor.get(PredefinedAtom::Name)?;
+            let _ = ctx;
+            Ok(name == "SharedArrayBuffer")
+        }),
+    )?;
     Ok(())
 }
 
 fn inspect_value<'js>(ctx: Ctx<'js>, value: Value<'js>) -> Result<String> {
+    // Compact form: short objects print on one line (`{ a: 1, b: 2 }`), which is
+    // what `util.inspect` does. `write_sep` handles the separators, so this no
+    // longer emits a carriage return either.
     format_plain(ctx, false, rquickjs::prelude::Rest(vec![value]))
 }
 
@@ -791,6 +1422,17 @@ impl ModuleDef for UtilModule {
         declare.declare("promisify")?;
         declare.declare("inspect")?;
         declare.declare("formatWithOptions")?;
+        declare.declare("MIMEType")?;
+        declare.declare("MIMEParams")?;
+        declare.declare("getSystemErrorMap")?;
+        declare.declare("getSystemErrorName")?;
+        declare.declare("getSystemErrorMessage")?;
+        declare.declare("convertProcessSignalToExitCode")?;
+        declare.declare("diff")?;
+        declare.declare("getCallSites")?;
+        declare.declare("aborted")?;
+        declare.declare("callbackify")?;
+        declare.declare("_extend")?;
         declare.declare("debuglog")?;
         declare.declare("debug")?;
         declare.declare("toUSVString")?;
@@ -824,7 +1466,11 @@ impl ModuleDef for UtilModule {
             default.set("inherits", Func::from(inherits))?;
             default.set("promisify", promisify)?;
             default.set("inspect", Func::from(inspect_value))?;
+            // Node attaches these to the `inspect` function itself; callers read
+            // `util.inspect.colors.red[0]` and `inspect.defaultOptions.depth`.
+            attach_inspect_metadata(ctx, default)?;
             default.set("formatWithOptions", Func::from(format_with_options))?;
+            install_util_extras(ctx, default)?;
             default.set("debuglog", debuglog.clone())?;
             default.set("debug", debuglog)?;
             default.set("toUSVString", to_usv_string)?;
@@ -867,8 +1513,42 @@ impl ModuleDef for UtilTypesModule {
         declare.declare("isSharedArrayBuffer")?;
         declare.declare("isTypedArray")?;
         declare.declare("isDataView")?;
+        declare.declare("isArrayBufferView")?;
         declare.declare("isUint8Array")?;
+        declare.declare("isUint8ClampedArray")?;
+        declare.declare("isUint16Array")?;
+        declare.declare("isUint32Array")?;
+        declare.declare("isInt8Array")?;
+        declare.declare("isInt16Array")?;
+        declare.declare("isInt32Array")?;
+        declare.declare("isFloat16Array")?;
+        declare.declare("isFloat32Array")?;
+        declare.declare("isFloat64Array")?;
+        declare.declare("isBigInt64Array")?;
+        declare.declare("isBigUint64Array")?;
         declare.declare("isDate")?;
+        declare.declare("isRegExp")?;
+        declare.declare("isMap")?;
+        declare.declare("isSet")?;
+        declare.declare("isWeakMap")?;
+        declare.declare("isWeakSet")?;
+        declare.declare("isMapIterator")?;
+        declare.declare("isSetIterator")?;
+        declare.declare("isArgumentsObject")?;
+        declare.declare("isNativeError")?;
+        declare.declare("isStringObject")?;
+        declare.declare("isNumberObject")?;
+        declare.declare("isBooleanObject")?;
+        declare.declare("isBigIntObject")?;
+        declare.declare("isSymbolObject")?;
+        declare.declare("isBoxedPrimitive")?;
+        declare.declare("isAsyncFunction")?;
+        declare.declare("isGeneratorFunction")?;
+        declare.declare("isGeneratorObject")?;
+        declare.declare("isExternal")?;
+        declare.declare("isKeyObject")?;
+        declare.declare("isCryptoKey")?;
+        declare.declare("isModuleNamespaceObject")?;
         declare.declare("default")?;
         Ok(())
     }

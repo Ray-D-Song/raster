@@ -485,11 +485,9 @@ fn format_raw_inner<'js>(
 
                 if let Ok(stack) = stack {
                     for line in stack.trim().split('\n') {
-                        result.push(if options.newline {
-                            NEWLINE
-                        } else {
-                            CARRIAGE_RETURN
-                        });
+                        // A stack is always laid out one frame per line, whatever
+                        // the surrounding separator mode is.
+                        result.push(NEWLINE);
                         push_indentation(result, depth + 1);
                         result.push_str(line);
                     }
@@ -566,16 +564,40 @@ fn format_raw_inner<'js>(
 
                 let is_array = is_typed_array || obj.is_array();
 
-                if let Ok(obj) = &obj.get::<_, Object>(options.custom_inspect_symbol.as_atom()) {
-                    return write_object(
-                        result,
-                        obj,
-                        options,
-                        visited,
-                        depth,
-                        color_enabled,
-                        is_array,
-                    );
+                // `util.inspect.custom` may be either a function on the object
+                // (the usual Node protocol) or a getter that already returns the
+                // value to print (`Headers` uses the latter). Handle both:
+                // call a function, otherwise inspect whatever was returned.
+                if let Ok(inspector) = &obj.get::<_, Value>(options.custom_inspect_symbol.as_atom())
+                {
+                    let inspected = match inspector.as_function() {
+                        Some(f) => {
+                            let custom_options = Object::new(obj.ctx().clone())?;
+                            f.call::<_, Value>((obj.clone(), depth, custom_options))
+                                .ok()
+                        },
+                        None if !inspector.is_undefined() && !inspector.is_null() => {
+                            Some(inspector.clone())
+                        },
+                        None => None,
+                    };
+                    if let Some(inspected) = inspected {
+                        if let Some(text) = inspected.as_string() {
+                            result.push_str(&text.to_string()?);
+                            return Ok(());
+                        }
+                        if let Some(custom_obj) = inspected.as_object() {
+                            return write_object(
+                                result,
+                                custom_obj,
+                                options,
+                                visited,
+                                depth,
+                                color_enabled,
+                                custom_obj.is_array(),
+                            );
+                        }
+                    }
                 }
 
                 write_object(
@@ -674,7 +696,7 @@ fn write_object<'js>(
             .and_then(|f| f.call::<_, Vec<String>>((obj.clone(),)).ok());
         if let Some(pk) = proxy_keys {
             if !pk.is_empty() {
-                let apply_indentation = depth < 2;
+                let apply_indentation = depth < 2 && options.newline;
                 let mut first = false;
                 let length = pk.len();
                 for (i, key) in pk.iter().enumerate() {
@@ -710,11 +732,7 @@ fn write_object<'js>(
                 }
                 if first {
                     if apply_indentation {
-                        result.push(if options.newline {
-                            NEWLINE
-                        } else {
-                            CARRIAGE_RETURN
-                        });
+                        result.push(NEWLINE);
                         push_indentation(result, depth);
                     } else {
                         result.push(SPACING);
@@ -731,7 +749,9 @@ fn write_object<'js>(
             }
         }
     }
-    let apply_indentation = !is_array && depth < 2;
+    // Compact form (`util.inspect` of a short object) prints on one line, so
+    // indentation only applies when the caller asked for the multi-line layout.
+    let apply_indentation = !is_array && depth < 2 && options.newline;
 
     let mut first = false;
     let mut numeric_key;
@@ -771,11 +791,7 @@ fn write_object<'js>(
     }
     if first {
         if apply_indentation {
-            result.push(if options.newline {
-                NEWLINE
-            } else {
-                CARRIAGE_RETURN
-            });
+            result.push(NEWLINE);
             push_indentation(result, depth);
         } else {
             result.push(SPACING);
@@ -793,13 +809,12 @@ fn write_sep(result: &mut String, add_comma: bool, has_indentation: bool, newlin
         result.push(',');
     }
 
-    if has_indentation {
-        if newline {
-            result.push('\n');
-        } else {
-            result.push('\r')
-        }
+    if has_indentation && newline {
+        result.push('\n');
     } else {
+        // Compact form (`util.inspect` of a short object) is a single line,
+        // entries separated by a space. `\r` used to be emitted here, which put
+        // a carriage return in every inspected string.
         result.push(' ');
     }
 }
