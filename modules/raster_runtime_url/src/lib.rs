@@ -12,7 +12,7 @@ use rquickjs::{
     function::{Constructor, Func},
     module::{Declarations, Exports, ModuleDef},
     prelude::Opt,
-    Class, Coerced, Ctx, Exception, Result, Value,
+    Class, Coerced, Ctx, Exception, Function, Result, Value,
 };
 use url::{quirks, Url};
 
@@ -187,6 +187,9 @@ pub fn init(ctx: &Ctx<'_>) -> Result<()> {
 
     Class::<URLSearchParams>::define(&globals)?;
     Class::<URL>::define(&globals)?;
+
+    let install: Function = ctx.eval(include_str!("object_url.js"))?;
+    install.call::<_, ()>((globals.get::<_, Value>(stringify!(URL))?,))?;
 
     Ok(())
 }
