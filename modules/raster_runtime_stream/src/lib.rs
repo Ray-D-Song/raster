@@ -18,7 +18,11 @@ pub fn set_destroyed_and_error<'js>(
 ) {
     *is_destroyed = true;
     if let Ok(error) = error {
-        *error_value = error
+        // `stream.destroy()` with no argument broadcasts `Some(undefined)`.
+        // Treating that as an error makes the read/write loops do
+        // `ctx.throw(undefined)`, which reaches JS as a bare `undefined` (no
+        // `message`, no `stack`) instead of a clean close.
+        *error_value = error.filter(|v| !v.is_undefined() && !v.is_null());
     }
 }
 const DEFAULT_BUFFER_SIZE: usize = 1024 * 16;
