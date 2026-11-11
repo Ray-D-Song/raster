@@ -32,6 +32,9 @@ struct ParsedRequest<'js> {
     method: Method,
     headers: Vec<(String, String)>,
     callback: Option<rquickjs::Function<'js>>,
+    /// Client to dispatch on. Built per request when TLS options were given,
+    /// otherwise the shared pooled one.
+    client: HyperClient,
 }
 
 fn hyper_client(ctx: &Ctx<'_>) -> Result<HyperClient> {
@@ -45,7 +48,7 @@ pub fn http_request<'js>(
     ctx: Ctx<'js>,
     args: Rest<Value<'js>>,
 ) -> Result<Class<'js, ClientRequest<'js>>> {
-    let parsed = parse_request_args(&ctx, &args, None)?;
+    let parsed = parse_request_args(&ctx, &args, None, "http:")?;
     ClientRequest::start(&ctx, parsed, false)
 }
 
@@ -53,7 +56,28 @@ pub fn http_get<'js>(
     ctx: Ctx<'js>,
     args: Rest<Value<'js>>,
 ) -> Result<Class<'js, ClientRequest<'js>>> {
-    let parsed = parse_request_args(&ctx, &args, Some("GET"))?;
+    let parsed = parse_request_args(&ctx, &args, Some("GET"), "http:")?;
+    ClientRequest::start(&ctx, parsed, true)
+}
+
+/// `https.get` / `https.request`.
+///
+/// Node's `https` client defaults to TLS, so an options object without an
+/// explicit `protocol` must still produce an `https:` URI. The plain `http`
+/// entry points keep their `http:` default.
+pub fn https_request<'js>(
+    ctx: Ctx<'js>,
+    args: Rest<Value<'js>>,
+) -> Result<Class<'js, ClientRequest<'js>>> {
+    let parsed = parse_request_args(&ctx, &args, None, "https:")?;
+    ClientRequest::start(&ctx, parsed, false)
+}
+
+pub fn https_get<'js>(
+    ctx: Ctx<'js>,
+    args: Rest<Value<'js>>,
+) -> Result<Class<'js, ClientRequest<'js>>> {
+    let parsed = parse_request_args(&ctx, &args, Some("GET"), "https:")?;
     ClientRequest::start(&ctx, parsed, true)
 }
 
@@ -61,6 +85,7 @@ fn parse_request_args<'js>(
     ctx: &Ctx<'js>,
     args: &Rest<Value<'js>>,
     force_method: Option<&str>,
+    default_protocol: &str,
 ) -> Result<ParsedRequest<'js>> {
     let mut url: Option<String> = None;
     let mut options: Option<Object<'js>> = None;
@@ -110,7 +135,16 @@ fn parse_request_args<'js>(
         url.parse::<Uri>()
             .map_err(|_| Exception::throw_type(ctx, "Invalid URL"))?
     } else {
-        build_uri_from_options(ctx, options.as_ref())?
+        build_uri_from_options(ctx, options.as_ref(), default_protocol)?
+    };
+
+    // TLS options are per request (`https.get({ ca })`, `rejectUnauthorized`),
+    // exactly as in Node. A request that supplies either needs its own client;
+    // everything else shares the pooled one built from `TLS_CONFIG`.
+    let tls = parse_request_tls_options(ctx, options.as_ref())?;
+    let client = match tls {
+        Some(tls) => crate::build_client_for_request(ctx, tls)?,
+        None => hyper_client(ctx)?,
     };
 
     Ok(ParsedRequest {
@@ -118,14 +152,66 @@ fn parse_request_args<'js>(
         method,
         headers,
         callback,
+        client,
     })
 }
 
-fn build_uri_from_options<'js>(ctx: &Ctx<'js>, options: Option<&Object<'js>>) -> Result<Uri> {
+pub struct RequestTlsOptions {
+    pub reject_unauthorized: Option<bool>,
+    pub ca: Option<Vec<Vec<u8>>>,
+}
+
+fn parse_request_tls_options<'js>(
+    ctx: &Ctx<'js>,
+    options: Option<&Object<'js>>,
+) -> Result<Option<RequestTlsOptions>> {
+    let Some(options) = options else {
+        return Ok(None);
+    };
+    let reject_unauthorized: Option<bool> = options.get_optional("rejectUnauthorized")?;
+    let ca = match options.get_optional::<_, Value>("ca")? {
+        Some(value) => Some(pem_list_from_value(ctx, value)?),
+        None => None,
+    };
+    if reject_unauthorized.is_none() && ca.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(RequestTlsOptions {
+        reject_unauthorized,
+        ca,
+    }))
+}
+
+/// Accept the forms Node accepts for `ca`: a string, a Buffer, or an array of
+/// either.
+fn pem_list_from_value<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> Result<Vec<Vec<u8>>> {
+    if value.is_array() {
+        let array = value.as_array().expect("array");
+        let mut out = Vec::with_capacity(array.len());
+        for item in array.iter::<Value>() {
+            out.push(pem_bytes_from_value(ctx, item?)?);
+        }
+        return Ok(out);
+    }
+    Ok(vec![pem_bytes_from_value(ctx, value)?])
+}
+
+fn pem_bytes_from_value<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> Result<Vec<u8>> {
+    if let Some(string) = value.as_string() {
+        return Ok(string.to_string()?.into_bytes());
+    }
+    raster_runtime_utils::bytes::ObjectBytes::from(ctx, &value)?.into_bytes(ctx)
+}
+
+fn build_uri_from_options<'js>(
+    ctx: &Ctx<'js>,
+    options: Option<&Object<'js>>,
+    default_protocol: &str,
+) -> Result<Uri> {
     let options = options.ok_or_else(|| Exception::throw_type(ctx, "URL or options required"))?;
     let protocol: String = options
         .get_optional("protocol")?
-        .unwrap_or_else(|| "http:".into());
+        .unwrap_or_else(|| default_protocol.into());
     let default_port = if protocol == "https:" { 443 } else { 80 };
     let port: u16 = options.get_optional("port")?.unwrap_or(default_port);
     let hostname: String = options
@@ -176,7 +262,7 @@ impl<'js> ClientRequest<'js> {
         parsed: ParsedRequest<'js>,
         auto_end: bool,
     ) -> Result<Class<'js, Self>> {
-        let client = hyper_client(ctx)?;
+        let client = parsed.client.clone();
         let rt_ptr = unsafe { rquickjs::qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
         let rt_key =
             raster_runtime_utils::event_loop::rt_key_from_ptr(rt_ptr as *mut std::ffi::c_void);
@@ -270,7 +356,24 @@ impl<'js> ClientRequest<'js> {
                 .or_throw(&ctx)?
         };
 
-        let response = client.request(request).await.or_throw(&ctx)?;
+        // Node reports transport failures through `request.emit("error")`.
+        // Throwing here instead would escape as an uncaught exception before
+        // any `error` listener could see it, and would bypass the usual
+        // `req.on("error")` handling.
+        let response = match client.request(request).await {
+            Ok(response) => response,
+            Err(err) => {
+                let error = Exception::from_message(ctx.clone(), &err.to_string())?;
+                ClientRequest::emit_str(
+                    this.clone(),
+                    &ctx,
+                    "error",
+                    vec![error.into_value()],
+                    false,
+                )?;
+                return Ok(());
+            },
+        };
         let status = response.status();
         let (parts, incoming_body) = response.into_parts();
 
