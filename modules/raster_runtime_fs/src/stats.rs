@@ -504,4 +504,3 @@ fn to_msec_f64(time: SystemTime) -> f64 {
 fn ms_from_parts(secs: i64, nsec: i64) -> f64 {
     secs as f64 * 1000.0 + nsec as f64 / 1_000_000.0
 }
-
