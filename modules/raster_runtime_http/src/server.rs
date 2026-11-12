@@ -866,7 +866,14 @@ impl<'js> Server<'js> {
 
         let callback = callback.0;
         if let Some(callback) = callback.as_ref() {
-            Self::add_event_listener_str(this.0.clone(), &ctx, "close", callback.clone(), true, true)?;
+            Self::add_event_listener_str(
+                this.0.clone(),
+                &ctx,
+                "close",
+                callback.clone(),
+                true,
+                true,
+            )?;
         }
 
         let mut server = this.borrow_mut();

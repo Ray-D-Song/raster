@@ -550,7 +550,7 @@ fn teardown<'js>(
                 object.set("code", code)?;
             }
             value
-        }
+        },
     };
     ClientRequest::emit_str(this.clone(), ctx, "error", vec![error_value], false)?;
     ClientRequest::emit_str(this.clone(), ctx, "close", vec![], false)?;
