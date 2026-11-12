@@ -77,7 +77,10 @@ describe("Stats timestamps", () => {
     // `ctime_nsec` is only the sub-second remainder; using it alone landed in 1970.
     expect(stats.ctime.getUTCFullYear()).toBeGreaterThan(2020);
     expect(stats.ctimeMs).toBeGreaterThan(1_600_000_000_000);
-    expect(stats.ctimeMs).toBeCloseTo(stats.ctime.getTime(), 3);
+    // The `Date` truncates, so the remainder is always in [0, 1) — not "close to
+    // zero", which would be a much tighter claim than the two can satisfy.
+    expect(stats.ctimeMs - stats.ctime.getTime()).toBeGreaterThanOrEqual(0);
+    expect(stats.ctimeMs - stats.ctime.getTime()).toBeLessThan(1);
     cleanup();
   });
 
@@ -85,7 +88,8 @@ describe("Stats timestamps", () => {
     const { file, cleanup } = tmp();
     const stats = fs.statSync(file);
     expect(stats.birthtime.getUTCFullYear()).toBeGreaterThan(2020);
-    expect(stats.birthtimeMs).toBeCloseTo(stats.birthtime.getTime(), 3);
+    expect(stats.birthtimeMs - stats.birthtime.getTime()).toBeGreaterThanOrEqual(0);
+    expect(stats.birthtimeMs - stats.birthtime.getTime()).toBeLessThan(1);
     cleanup();
   });
 
