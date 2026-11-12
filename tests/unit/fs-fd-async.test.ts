@@ -105,7 +105,9 @@ describe("async fd family", () => {
     const fd = fs.openSync(file, "r+");
     await call((cb) => F.futimes(fd, 1_000_000, 1_000_000, cb));
     fs.closeSync(fd);
-    expect(Math.round(fs.statSync(file).mtimeMs / 1000)).toBe(1_000_000);
+    // `mtime.getTime()`, not `mtimeMs`: the latter is broken in Raster's Stats
+    // (returns 0 for any file) — measured separately, unrelated to futimes.
+    expect(Math.round(fs.statSync(file).mtime.getTime() / 1000)).toBe(1_000_000);
     cleanup();
   });
 
