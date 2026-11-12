@@ -188,9 +188,11 @@ pub fn readv_callback<'js>(ctx: Ctx<'js>, fd: i32, mut args: Rest<Value<'js>>) -
     for mut view in views {
         let len = view.len();
         let mut chunk = vec![0u8; len];
-        // Only the first read honours `position`; the rest follow the shared
-        // offset, which the previous read advanced.
-        let this_pos = if total == 0 { pos } else { None };
+        // `read_at(Some(_))` is a pread: it restores the file offset afterwards,
+        // so the shared cursor never advances. Every buffer therefore needs an
+        // explicit position of its own, `pos + total`. With `position: null` the
+        // reads simply follow the shared cursor, which each read advances.
+        let this_pos = pos.map(|p| p + total as i64);
         let read = match crate::fd_sync::with_fd(&ctx, fd, "read", |entry| {
             read_at(&mut entry.file, &mut chunk, this_pos)
         }) {
@@ -369,11 +371,50 @@ pub fn futimes_callback<'js>(
     let atime = filetime_from_secs(atime);
     let mtime = filetime_from_secs(mtime);
     let result = crate::fd_sync::with_fd(&ctx, fd, "futimes", |entry| {
-        entry.file.set_times(
-            std::fs::FileTimes::new()
-                .set_accessed(atime)
-                .set_modified(mtime),
-        )
+        // `std::fs::File::set_times` goes through a handle duplicated for the
+        // fs table; on some kernels the update does not reach the inode that
+        // way. `futimens` on the descriptor is what Node's `futimes` maps to,
+        // so call it directly.
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            let raw = entry.file.as_raw_fd();
+            let times = [
+                libc::timespec {
+                    tv_sec: atime
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as libc::time_t)
+                        .unwrap_or(0),
+                    tv_nsec: atime
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.subsec_nanos() as i64)
+                        .unwrap_or(0),
+                },
+                libc::timespec {
+                    tv_sec: mtime
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as libc::time_t)
+                        .unwrap_or(0),
+                    tv_nsec: mtime
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.subsec_nanos() as i64)
+                        .unwrap_or(0),
+                },
+            ];
+            let rc = unsafe { libc::futimens(raw, times.as_ptr()) };
+            if rc != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        {
+            entry.file.set_times(
+                std::fs::FileTimes::new()
+                    .set_accessed(atime)
+                    .set_modified(mtime),
+            )
+        }
     });
     report(&ctx, callback, result.and_then(|v| into_cb_value(&ctx, v)))
 }
