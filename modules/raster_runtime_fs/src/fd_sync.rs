@@ -150,14 +150,12 @@ fn parse_position<'js>(ctx: &Ctx<'js>, value: &Option<Value<'js>>) -> Result<Opt
 /// behave like "use the current offset" (`writeSync` walks the file forward for
 /// each). Only `readSync` rejects those with `ERR_INVALID_ARG_TYPE`, so the two
 /// get different parsers rather than one shared stricter one.
-fn parse_position_lenient<'js>(ctx: &Ctx<'js>, value: &Option<Value<'js>>) -> Option<i64> {
+fn parse_position_lenient<'js>(_ctx: &Ctx<'js>, value: &Option<Value<'js>>) -> Option<i64> {
     let value = value.as_ref()?;
     if value.is_null() || value.is_undefined() {
         return None;
     }
-    let Some(n) = value.as_number() else {
-        return None;
-    };
+    let n = value.as_number()?;
     if !n.is_finite() || n.fract() != 0.0 || n < 0.0 {
         return None;
     }
@@ -272,7 +270,7 @@ pub fn open_sync<'js>(
         // The caller owns this descriptor now; the table keeps the `dup`.
         // Leaking the original keeps the number valid for the process lifetime,
         // which is what Node's contract implies: only `closeSync` releases it.
-        std::mem::forget(file.into_raw_fd());
+        let _ = file.into_raw_fd();
         raw
     };
     #[cfg(windows)]
@@ -280,7 +278,7 @@ pub fn open_sync<'js>(
         use std::os::windows::io::{AsRawHandle, IntoRawHandle};
         let raw = file.as_raw_handle() as usize as i32;
         register(raw, shared, path_buf);
-        std::mem::forget(file.into_raw_handle());
+        let _ = file.into_raw_handle();
         raw
     };
     #[cfg(not(any(unix, windows)))]
