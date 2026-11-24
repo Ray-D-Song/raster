@@ -209,10 +209,9 @@ pub(super) fn transform_stream_error_writable_and_unblock_write<'js>(
     // in-flight write request. Skipping this leaves a pending write promise
     // that never settles, so a piped consumer waits on it forever.
     if let Some(writable_class) = writable_class {
-        let objects = WritableStreamObjects::from_stream(OwnedBorrowMut::from_class(
-            writable_class,
-        ))
-        .refresh_writer();
+        let objects =
+            WritableStreamObjects::from_stream(OwnedBorrowMut::from_class(writable_class))
+                .refresh_writer();
         WritableStreamDefaultController::writable_stream_default_controller_error_if_needed(
             ctx, objects, e,
         )?;
