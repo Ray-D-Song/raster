@@ -11,7 +11,10 @@ use crate::codec::{decoded_to_js, string_units, throw_coded};
 fn view<'js>(ctx: &Ctx<'js>, value: &Value<'js>) -> Result<(*mut u8, usize)> {
     let bytes = ObjectBytes::from(ctx, value)?;
     let Some((array_buffer, len, offset)) = bytes.get_array_buffer()? else {
-        return Err(Exception::throw_type(ctx, "argument must be an ArrayBufferView"));
+        return Err(Exception::throw_type(
+            ctx,
+            "argument must be an ArrayBufferView",
+        ));
     };
     let raw = array_buffer
         .as_raw()
@@ -125,12 +128,22 @@ fn search(hay: &[u8], needle: &[u8], start: usize, forward: bool, unit: usize) -
     if forward {
         (start..=diff).find(|&i| matches(i)).map(|i| i * unit)
     } else {
-        (0..=start.min(diff)).rev().find(|&i| matches(i)).map(|i| i * unit)
+        (0..=start.min(diff))
+            .rev()
+            .find(|&i| matches(i))
+            .map(|i| i * unit)
     }
 }
 
 /// Shared tail of `IndexOfString` / `IndexOfBuffer`.
-fn index_of_bytes(hay: &[u8], needle: &[u8], offset: i64, forward: bool, ucs2: bool, hay_len: usize) -> f64 {
+fn index_of_bytes(
+    hay: &[u8],
+    needle: &[u8],
+    offset: i64,
+    forward: bool,
+    ucs2: bool,
+    hay_len: usize,
+) -> f64 {
     let needle_len = needle.len();
     let opt_offset = index_of_offset(hay_len, offset, needle_len, forward);
     if needle_len == 0 {
@@ -194,7 +207,14 @@ fn index_of_buffer<'js>(
     let hay = bytes(&ctx, &buf)?;
     let needle = bytes(&ctx, &needle)?;
     let ucs2 = NodeEncoding::parse(&encoding) == Some(NodeEncoding::Utf16le);
-    Ok(index_of_bytes(hay, needle, offset as i64, forward, ucs2, hay.len()))
+    Ok(index_of_bytes(
+        hay,
+        needle,
+        offset as i64,
+        forward,
+        ucs2,
+        hay.len(),
+    ))
 }
 
 fn index_of_number<'js>(
@@ -212,7 +232,10 @@ fn index_of_number<'js>(
     }
     let offset = opt_offset as usize;
     let found = if forward {
-        hay[offset..].iter().position(|&b| b == needle).map(|p| p + offset)
+        hay[offset..]
+            .iter()
+            .position(|&b| b == needle)
+            .map(|p| p + offset)
     } else {
         hay[..=offset].iter().rposition(|&b| b == needle)
     };
