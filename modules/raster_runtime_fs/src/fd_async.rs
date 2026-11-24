@@ -20,14 +20,10 @@
 use std::io::{Read, Seek, SeekFrom, Write};
 
 use raster_runtime_buffer::ArrayBufferView;
-use raster_runtime_context::CtxExtension;
-use raster_runtime_utils::bytes::ObjectBytes;
 use rquickjs::{prelude::Rest, Ctx, Exception, FromJs, Function, IntoJs, Result, Value};
 
-use crate::errors::{defer_fs_callback, throw_fs_error};
-use crate::fd_sync::{
-    parse_position_lenient, throw_ebadf, throw_einval, throw_invalid_arg_type, throw_out_of_range,
-};
+use crate::errors::defer_fs_callback;
+use crate::fd_sync::{parse_position_lenient, throw_einval, throw_invalid_arg_type};
 
 /// Turn a completed operation's payload into the single value the callback gets.
 trait IntoCbValue<'js> {
@@ -76,37 +72,6 @@ fn report<'js>(ctx: &Ctx<'js>, callback: Function<'js>, result: Result<Value<'js
             let _ = err;
             defer_fs_callback(ctx, callback, Some(exception), None)
         },
-    }
-}
-
-/// What a completed fd operation reports to its callback.
-trait IntoCallbackArgs<'js> {
-    fn into_args(self, ctx: &Ctx<'js>) -> Result<Vec<Value<'js>>>;
-}
-
-impl<'js> IntoCallbackArgs<'js> for () {
-    fn into_args(self, _ctx: &Ctx<'js>) -> Result<Vec<Value<'js>>> {
-        Ok(Vec::new())
-    }
-}
-
-impl<'js> IntoCallbackArgs<'js> for usize {
-    fn into_args(self, ctx: &Ctx<'js>) -> Result<Vec<Value<'js>>> {
-        Ok(vec![Value::new_int(ctx.clone(), self as i32)])
-    }
-}
-
-/// A read reports `(err, bytesRead, buffer)`.
-impl<'js> IntoCallbackArgs<'js> for (usize, Value<'js>) {
-    fn into_args(self, ctx: &Ctx<'js>) -> Result<Vec<Value<'js>>> {
-        Ok(vec![Value::new_int(ctx.clone(), self.0 as i32), self.1])
-    }
-}
-
-impl<'js> IntoCallbackArgs<'js> for crate::stats::Stats {
-    fn into_args(self, ctx: &Ctx<'js>) -> Result<Vec<Value<'js>>> {
-        let class = rquickjs::Class::instance(ctx.clone(), self)?;
-        Ok(vec![class.into_value()])
     }
 }
 
